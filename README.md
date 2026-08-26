@@ -56,14 +56,14 @@ subprocess echoes it — the only backend with that protection.
 ## Install
 
 ```bash
-npm install -g unblock          # daemon, MCP server, CLI
+npm install -g unblockd         # daemon, MCP server, CLI (binary: unblock)
 unblock daemon start
 ```
 
 Then point an agent at it. For Claude Code:
 
 ```bash
-claude mcp add unblock -- npx unblock mcp
+claude mcp add unblock -- npx unblockd mcp
 ```
 
 And install the skill so agents know when to park:

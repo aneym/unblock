@@ -285,7 +285,7 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
       {!detected && <div className="mt-1 flex flex-wrap items-center gap-2.5 border-t border-[var(--rule)] pt-4">
         <Button disabled={missing.length > 0 || isBusy} onClick={() => void submit()}>{isDecision ? changedCount === 0 ? 'Accept' : 'Submit' : ask.gating ? 'Answer & wake' : 'Answer'}</Button>
         {isDecision && ask.fields.length > 1 && <Button variant="secondary" className="h-[39px]" disabled={missing.some((label) => ask.fields.some((field) => field.label === label && field.must_decide)) || isBusy} onClick={acceptAll}>Accept all</Button>}
-        <Button variant="ghost" className="h-[39px]" disabled={reply.trim() === '' || isBusy} title={reply.trim() === '' ? "Say what's wrong with it first" : 'Send this ask back unanswered'} onClick={() => void sendBack()}>Send back</Button>
+        <Button variant="ghost" className="h-[39px]" disabled={reply.trim() === '' || isBusy} title={reply.trim() === '' ? "Say what's wrong with it first" : 'Send this ask back unanswered'} onClick={() => void sendBack()}>Send back unanswered</Button>
         <span className={cn('font-mono text-[11px] leading-4 tracking-[.04em] text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{changeSummary || message || (missing.length ? `still needs: ${missing.join(', ')}` : '')}</span>
       </div>}
     </Card>
