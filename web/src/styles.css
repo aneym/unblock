@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface2: #f4f4f2;
+  --ink: #1a1a19;
+  --dim: #6b6b67;
+  --faint: #96968f;
+  --rule: #e4e4e1;
+  --input-border: #dcdcd8;
+  --accent: #ff4d00;
+  --accent-fg: #ffffff;
+  --accent-soft: #fff1eb;
+  --danger: #b42318;
+  --ok: #1a7f4b;
+  --radius: 2px;
+  color-scheme: light;
+  font-family: var(--font-sans);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131312; --surface: #1b1b1a; --surface2: #211f1e; --ink: #ededeb;
+    --dim: #a0a09b; --faint: #76736e; --rule: #ffffff1f; --input-border: #ffffff26;
+    --accent: #ff6a1f; --accent-fg: #0a0a0a; --accent-soft: #2a1a11;
+    --danger: #e5614f; --ok: #4fbf8a; color-scheme: dark;
+  }
+}
+
+.dark {
+  --bg: #131312; --surface: #1b1b1a; --surface2: #211f1e; --ink: #ededeb;
+  --dim: #a0a09b; --faint: #76736e; --rule: #ffffff1f; --input-border: #ffffff26;
+  --accent: #ff6a1f; --accent-fg: #0a0a0a; --accent-soft: #2a1a11;
+  --danger: #e5614f; --ok: #4fbf8a; color-scheme: dark;
+}
+
+* { box-sizing: border-box; box-shadow: none !important; }
+
+/*
+ * Near-square corners are the house style, but this has to sit in @layer base
+ * so a utility can still win. Unlayered rules beat every layered one whatever
+ * their specificity, so a bare `*` here silently squared off the radio dots —
+ * and a square radio reads as "pick several", which is the wrong affordance.
+ */
+@layer base {
+  *:not(svg, svg *) { border-radius: min(var(--radius), 2px); }
+}
+html { -webkit-text-size-adjust: 100%; background: var(--bg); }
+body { margin: 0; min-width: 320px; background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-variant-numeric: tabular-nums; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+button, input, textarea { font: inherit; }
+button { touch-action: manipulation; }
+.font-mono { font-family: var(--font-mono); }
+::selection { background: var(--accent-soft); }

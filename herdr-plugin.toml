@@ -1,0 +1,50 @@
+id = "unblock"
+name = "Unblock"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "One queue for everything your agents need from you. Answer it all in one pass."
+platforms = ["macos", "linux"]
+
+# No dependencies. The build step only verifies the runtime is new enough for
+# node:sqlite, so a broken install fails loudly at install time rather than the
+# first time an agent parks.
+[[build]]
+command = ["node", "plugin/check.js"]
+
+# Keeps the daemon alive for the life of the herdr session, so an agent that
+# parks never has to cold-start it mid-turn.
+[[startup]]
+command = ["node", "plugin/startup.js"]
+
+[[actions]]
+id = "open"
+title = "Unblock queue"
+description = "Answer everything the agents are waiting on"
+contexts = ["global"]
+command = ["node", "plugin/open.js"]
+
+[[actions]]
+id = "link"
+title = "Unblock link for my phone"
+description = "Mint an ephemeral link to the queue and copy it"
+contexts = ["global"]
+command = ["node", "plugin/link.js"]
+
+# Unblock mode takes the screen. The point is answering without the surrounding
+# chat in view, which a split would defeat.
+[[panes]]
+id = "queue"
+title = "Unblock"
+description = "The ask queue"
+placement = "zoomed"
+command = ["node", "plugin/tui.js"]
+
+# Herdr detects a Blocked agent on its own. That is the second tier: an agent
+# stalled without declaring an ask still shows up, just below the declared ones.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "plugin/on-status.js"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "plugin/on-status.js"]
