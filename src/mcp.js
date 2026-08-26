@@ -29,6 +29,37 @@ function configuredPort() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * Where to send the human for one ask.
+ *
+ * ONE link per install, not one per ask. When the daemon has a canonical
+ * origin — a tailnet host where a trusted proxy already identifies the viewer —
+ * every park points at that same stable URL with the ticket in the fragment.
+ * It is bookmarkable, it survives restarts, and a person who has answered once
+ * already has it open.
+ *
+ * Minting a fresh token per park was the old behaviour and it was wrong: a new
+ * unguessable URL every time is useless as a bookmark, and it trains the human
+ * to click whatever link an agent hands them. Tokens still exist, but as a
+ * SHARING mechanism (send one ask to someone off the tailnet), not the front
+ * door — and they are the fallback when no canonical origin is configured.
+ */
+async function answerLink(ticket) {
+  try {
+    const health = await daemonFetch('/health')
+    if (health?.public_origin) {
+      return { url: `${health.public_origin.replace(/\/$/, '')}/#ask=${ticket}`, canonical: true }
+    }
+  } catch {
+    /* fall through to a token */
+  }
+  const link = await daemonFetch('/links', {
+    method: 'POST',
+    body: JSON.stringify({ ticket, ttl_seconds: 900 }),
+  })
+  return { url: link.url, canonical: false }
+}
+
 /** The daemon's local secret, re-read each call so a restart is picked up. */
 function daemonAuth() {
   if (process.env.UNBLOCK_AUTH) return process.env.UNBLOCK_AUTH
@@ -89,6 +120,12 @@ function origin() {
 }
 
 const askProperties = {
+  // Blocker = the human must DO something only they can do (supply a key,
+  // click a console button, confirm an act). No recommendation is possible.
+  // Decision = the human must DECIDE; the agent has a view and every field
+  // MUST carry recommend {value, why}. The daemon rejects a mismatch, so this
+  // is a real contract, not a hint.
+  purpose: { type: 'string', enum: ['blocker', 'decision'], default: 'blocker' },
   title: { type: 'string', maxLength: 90 },
   why: { type: 'string', maxLength: 1200 },
   fields: {
@@ -102,6 +139,16 @@ const askProperties = {
         type: { type: 'string', enum: ['text', 'secret', 'choice', 'confirm', 'paste'] },
         label: { type: 'string' },
         required: { type: 'boolean' },
+        // Required on every field when purpose is "decision"; rejected on a
+        // blocker. `why` is the reason in one line, not a restatement.
+        recommend: {
+          type: 'object',
+          properties: { value: {}, why: { type: 'string', maxLength: 200 } },
+          required: ['value', 'why'],
+        },
+        // Renders empty and is excluded from accept-all, so the human has to
+        // engage with it. At most 3 per ask.
+        must_decide: { type: 'boolean' },
         help: { type: 'string' },
         url: { type: 'string' },
         choices: { type: 'array' },
@@ -161,6 +208,9 @@ function textResult(text, data) {
 }
 
 function answerText(ask) {
+  if (ask.status === 'bounced') {
+    return `${ask.ticket} was SENT BACK: ${ask.reply ?? '(no note)'}`
+  }
   const lines = [`${ask.ticket}: ${ask.title}`]
   for (const field of ask.fields) {
     if (!(field.name in ask.answers)) continue
@@ -173,6 +223,7 @@ function answerText(ask) {
       lines.push(`${field.name}: ${JSON.stringify(value)}`)
     }
   }
+  if (ask.reply) lines.push(`they also said: ${ask.reply}`)
   return lines.join('\n')
 }
 
@@ -234,10 +285,7 @@ export class McpConnection {
 
     if (name === 'unblock_park') {
       const ask = await createAsk('park', args)
-      const link = await daemonFetch('/links', {
-        method: 'POST',
-        body: JSON.stringify({ ticket: ask.ticket, ttl_seconds: args.ttl_seconds || 900 }),
-      })
+      const link = await answerLink(ask.ticket)
       if (this.clientCapabilities.elicitation) {
         try {
           await this.request('elicitation/create', {
@@ -260,6 +308,25 @@ export class McpConnection {
             body: '{}',
           })
           return textResult(answerText(collected.ask), { ask: collected.ask })
+        }
+        if (current.status === 'bounced') {
+          // Not an error and not an answer. The human read the ask, decided it
+          // was the wrong question, and sent it back with a note. Resume, take
+          // the note seriously, and ask again properly — do not re-park with
+          // the same question.
+          await daemonFetch(`/asks/${encodeURIComponent(ask.ticket)}/collect`, {
+            method: 'POST',
+            body: '{}',
+          }).catch(() => {})
+          return textResult(
+            [
+              `${current.ticket} was SENT BACK, not answered.`,
+              `They said: ${current.reply ?? '(no note)'}`,
+              '',
+              'Rewrite the ask to address that and park again. Do not repeat the same question.',
+            ].join('\n'),
+            { ask: current, bounced: true },
+          )
         }
         if (['cancelled', 'expired', 'orphaned'].includes(current.status)) {
           throw new Error(`ask ${current.ticket} is ${current.status}`)

@@ -237,6 +237,28 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
       setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send answer')
     }
   }
+  /**
+   * The third exit. Answering was the only way to release an agent, so a badly
+   * formed ask could only be satisfied or abandoned — and abandoning it leaves
+   * the agent parked forever. Sending it back is a real response: it carries
+   * the note, releases the agent, and tells it to ask again properly.
+   *
+   * It is deliberately enabled exactly when the primary action is NOT: the
+   * whole point is disagreeing with the question rather than answering it.
+   */
+  const sendBack = async () => {
+    setState('sending'); setMessage('sending back…')
+    try {
+      await api('/api/answer', { ticket: ask.ticket, reply, bounce: true })
+      setChangeSummary('')
+      setState('done')
+      setMessage('sent back — the agent will rework it')
+      window.setTimeout(onFinished, 1400)
+    } catch (error) {
+      if (error instanceof FinishedError) return onFinished()
+      setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
+    }
+  }
   const acceptAll = () => {
     const accepted = { ...values }
     for (const field of recommendationFields) accepted[field.name] = field.recommend!.value
@@ -257,12 +279,13 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
       {!!ask.links?.length && <div className="my-4 grid gap-1.5">{ask.links.map((link) => <a key={link.url} className="break-all text-[14.5px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={link.url} target="_blank" rel="noreferrer noopener">{link.label}</a>)}</div>}
       <div className="mt-4">{unanswered.map((field) => <FieldControl key={field.name} field={field} ticket={ask.ticket} value={values[field.name]} onChange={onChange} disabled={isBusy} />)}</div>
       <div className="border-t border-[var(--rule)] py-4">
-        <label htmlFor={`reply_${ask.ticket}`} className="mb-2 block font-mono text-[11px] uppercase leading-none tracking-[.12em] text-[var(--dim)]">Anything else <span className="normal-case tracking-[.04em] text-[var(--faint)]">(optional)</span></label>
-        <Textarea id={`reply_${ask.ticket}`} value={reply} placeholder="Add context the fields don't cover" disabled={isBusy} className="min-h-20 font-sans text-[14.5px]" onChange={(event) => setReply(event.target.value)} />
+        <label htmlFor={`reply_${ask.ticket}`} className="mb-2 block font-mono text-[11px] uppercase leading-none tracking-[.12em] text-[var(--dim)]">Anything else <span className="normal-case tracking-[.04em] text-[var(--faint)]">— or why you're sending it back</span></label>
+        <Textarea id={`reply_${ask.ticket}`} value={reply} placeholder="Add context the fields don't cover, or say what's wrong with this ask" disabled={isBusy} className="min-h-20 font-sans text-[14.5px]" onChange={(event) => setReply(event.target.value)} />
       </div>
       {!detected && <div className="mt-1 flex flex-wrap items-center gap-2.5 border-t border-[var(--rule)] pt-4">
         <Button disabled={missing.length > 0 || isBusy} onClick={() => void submit()}>{isDecision ? changedCount === 0 ? 'Accept' : 'Submit' : ask.gating ? 'Answer & wake' : 'Answer'}</Button>
         {isDecision && ask.fields.length > 1 && <Button variant="secondary" className="h-[39px]" disabled={missing.some((label) => ask.fields.some((field) => field.label === label && field.must_decide)) || isBusy} onClick={acceptAll}>Accept all</Button>}
+        <Button variant="ghost" className="h-[39px]" disabled={reply.trim() === '' || isBusy} title={reply.trim() === '' ? "Say what's wrong with it first" : 'Send this ask back unanswered'} onClick={() => void sendBack()}>Send back</Button>
         <span className={cn('font-mono text-[11px] leading-4 tracking-[.04em] text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{changeSummary || message || (missing.length ? `still needs: ${missing.join(', ')}` : '')}</span>
       </div>}
     </Card>

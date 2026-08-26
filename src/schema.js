@@ -35,13 +35,24 @@ export const ASK_PURPOSES = ['blocker', 'decision']
 
 /**
  * open      registered, unanswered
+ * bounced   the human sent it back instead of answering — the question was
+ *           wrong, or missing options. Carries their note. A parked agent
+ *           resumes on this and must re-ask better, not retry the same thing.
  * answered  every required field filled; a parked agent is wakeable
  * collected the agent has received the answers
  * orphaned  answered (or not) but the agent that asked is gone
  * expired   nobody answered before expires_at
  * cancelled the agent withdrew it (it solved the problem itself)
  */
-export const ASK_STATUSES = ['open', 'answered', 'collected', 'orphaned', 'expired', 'cancelled']
+export const ASK_STATUSES = [
+  'open',
+  'bounced',
+  'answered',
+  'collected',
+  'orphaned',
+  'expired',
+  'cancelled',
+]
 
 const NAME_RE = /^[a-z][a-z0-9_]{0,47}$/
 const MAX_TITLE = 90

@@ -244,7 +244,7 @@ export class Store {
    * The queue view. `profile` filters using herdr's own visibility rule;
    * pass '*' for everything. Gating asks always sort first.
    */
-  list({ profile = '*', status = ['open', 'answered'], agentKey: key, includeClosed = false } = {}) {
+  list({ profile = '*', status = ['open', 'answered', 'bounced'], agentKey: key, includeClosed = false } = {}) {
     const statuses = includeClosed ? null : status
     const rows = this.#db.prepare('SELECT * FROM asks ORDER BY created_at ASC').all()
     const asks = rows
@@ -355,6 +355,25 @@ export class Store {
     return this.get(ask.id)
   }
 
+  /**
+   * Send it back unanswered.
+   *
+   * Answering was the only exit before this, so a badly-formed ask could only
+   * be satisfied or ignored — and ignoring it leaves an agent parked forever.
+   * A bounce is a real response: it carries the human's note, releases the
+   * agent, and tells it to ask again properly.
+   */
+  bounce(idOrTicket, reply) {
+    const ask = this.get(idOrTicket)
+    if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
+    if (ask.status !== 'open') throw new Error(`ask ${ask.ticket} is ${ask.status}`)
+    const at = nowMs()
+    this.#db
+      .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
+      .run(at, reply || null, ask.id)
+    return this.get(ask.id)
+  }
+
   /** The agent picked up its answers. */
   collect(idOrTicket) {
     const ask = this.get(idOrTicket)
@@ -367,7 +386,7 @@ export class Store {
 
   /** Everything this agent can be told right now: its answered asks, filed or parked. */
   pending(origin) {
-    return this.list({ agentKey: agentKey(origin), status: ['answered'] })
+    return this.list({ agentKey: agentKey(origin), status: ['answered', 'bounced'] })
   }
 
   cancel(idOrTicket, note) {
@@ -389,9 +408,34 @@ export class Store {
     return this.get(ask.id)
   }
 
-  /** Expire anything past its TTL. Returns the asks that just expired. */
-  sweep() {
+  /**
+   * Expire anything past its TTL, and orphan answers nobody ever collected.
+   *
+   * The second half exists because a human answered an ask, the agent that
+   * parked on it had already died, and the answer then sat in `answered`
+   * forever with nothing alive to receive it. Marking it orphaned keeps the
+   * answer claimable by ticket and stops the queue quietly lying about what is
+   * still in flight.
+   */
+  sweep({ orphanAfterMs = 10 * 60 * 1000 } = {}) {
     const at = nowMs()
+    // ONLY parked asks can be orphaned. A park means an agent is definitionally
+    // sitting in a tool call waiting, so uncollected-for-ten-minutes really does
+    // mean it died. A FILED ask has no waiting agent — it is collected whenever
+    // that agent next checks in, which may be hours later or never. Sweeping
+    // those marked real, answered decisions as abandoned.
+    const stranded = this.#db
+      .prepare(
+        `SELECT id FROM asks
+          WHERE status = 'answered' AND kind = 'park'
+            AND answered_at IS NOT NULL AND answered_at < ?`,
+      )
+      .all(at - orphanAfterMs)
+    for (const { id } of stranded) {
+      this.#db
+        .prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ?`)
+        .run('answered, but the agent that asked never collected it', id)
+    }
     const stale = this.#db
       .prepare(`SELECT id FROM asks WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at < ?`)
       .all(at)
@@ -399,7 +443,7 @@ export class Store {
       this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ?`).run(at, id)
     }
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
-    return stale.map(({ id }) => this.get(id))
+    return [...stale, ...stranded].map(({ id }) => this.get(id))
   }
 
   // --------------------------------------------------------------- links

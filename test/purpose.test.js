@@ -172,3 +172,43 @@ test('purpose and the free-text reply survive a round trip', () => {
 
   store.close()
 })
+
+test('only a parked ask can be orphaned', () => {
+  // A park means an agent is sitting in a tool call, so uncollected really does
+  // mean it died. A FILED ask has no waiting agent — it gets collected whenever
+  // that agent next checks in, which may be hours later. Sweeping those marked
+  // real, answered decisions as abandoned.
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'unblock-orphan-')), 'queue.db'))
+  const mk = (kind, session) =>
+    store.create(
+      validateAsk(ask({ kind, purpose: 'blocker', fields: [{ name: 'done', type: 'confirm' }] })),
+      normalizeOrigin({ agent: 'claude', session_id: session }),
+    )
+
+  const filed = mk('file', 'a')
+  const parked = mk('park', 'b')
+  store.answer(filed.ticket, { done: true })
+  store.answer(parked.ticket, { done: true })
+
+  // Sweep with a zero grace period: everything answered is instantly "stale".
+  store.sweep({ orphanAfterMs: -1 })
+
+  assert.equal(store.get(filed.ticket).status, 'answered', 'a filed ask must survive the sweep')
+  assert.equal(store.get(parked.ticket).status, 'orphaned', 'a dead parked agent must be orphaned')
+  store.close()
+})
+
+test('an ask can be sent back instead of answered', () => {
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'unblock-bounce-')), 'queue.db'))
+  const created = store.create(
+    validateAsk(ask({ purpose: 'blocker', fields: [{ name: 'key', type: 'secret' }] })),
+    normalizeOrigin({ agent: 'claude', session_id: 's1' }),
+  )
+  const bounced = store.bounce(created.ticket, 'give me some options')
+  assert.equal(bounced.status, 'bounced')
+  assert.equal(bounced.reply, 'give me some options')
+  // The agent must be told, so a bounce counts as pending work for it.
+  const pending = store.pending(normalizeOrigin({ agent: 'claude', session_id: 's1' }))
+  assert.equal(pending.some((a) => a.ticket === created.ticket), true)
+  store.close()
+})

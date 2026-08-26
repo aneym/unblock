@@ -304,7 +304,17 @@ const store = new Store()
     for (const client of clients) client.write(message)
   }
 
-  async function answerAsk(ticket, values, reply) {
+  async function bounceAsk(ticket, reply) {
+  const note = optionalScrub(reply, 1000)
+  if (!note) {
+    const err = new Error('sending an ask back needs a note saying what is wrong with it')
+    err.status = 400
+    throw err
+  }
+  return { ask: store.bounce(ticket, note), complete: true, bounced: true }
+}
+
+async function answerAsk(ticket, values, reply) {
     const ask = store.get(ticket)
     if (!ask) return null
     const records = []
@@ -400,7 +410,9 @@ const store = new Store()
         emitQueue()
         return sendJson(res, 200, { ask: updated })
       }
-      const result = await answerAsk(ticket, body.values || {}, body.reply)
+      const result = body.bounce
+        ? await bounceAsk(ticket, body.reply)
+        : await answerAsk(ticket, body.values || {}, body.reply)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
@@ -423,7 +435,14 @@ const store = new Store()
     const pathname = url.pathname
 
     if (req.method === 'GET' && pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, version: VERSION, backend: await secretStore.backend() })
+      return sendJson(res, 200, {
+        ok: true,
+        version: VERSION,
+        backend: await secretStore.backend(),
+        // Clients use this to build ONE stable answer URL instead of minting a
+        // throwaway token for every ask.
+        public_origin: process.env.UNBLOCK_PUBLIC_ORIGIN ?? null,
+      })
     }
 
     // Everything under /api needs the daemon secret. /u/:token routes carry
@@ -564,7 +583,9 @@ const store = new Store()
     if (pathname === '/api/answer' && req.method === 'POST') {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
-      const result = await answerAsk(body.ticket, body.values || {}, body.reply)
+      const result = body.bounce
+        ? await bounceAsk(body.ticket, body.reply)
+        : await answerAsk(body.ticket, body.values || {}, body.reply)
       emitQueue()
       return sendJson(res, 200, result)
     }
