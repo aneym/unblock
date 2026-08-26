@@ -109,6 +109,17 @@ export class Store {
         PRIMARY KEY (ask_id, field_name)
       );
 
+      -- Per-field free text from the human: context that belongs to ONE
+      -- question rather than the whole ask. Unlike a draft it survives the
+      -- answer, so the agent reads it back next to the value it annotates.
+      CREATE TABLE IF NOT EXISTS field_notes (
+        ask_id      TEXT NOT NULL REFERENCES asks(id) ON DELETE CASCADE,
+        field_name  TEXT NOT NULL,
+        note        TEXT NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        PRIMARY KEY (ask_id, field_name)
+      );
+
       CREATE TABLE IF NOT EXISTS links (
         token       TEXT PRIMARY KEY,
         ask_id      TEXT REFERENCES asks(id) ON DELETE CASCADE,
@@ -204,6 +215,12 @@ export class Store {
       .all(row.id)) {
       draft[d.field_name] = JSON.parse(d.value_json)
     }
+    const fieldContext = {}
+    for (const n of this.#db
+      .prepare('SELECT field_name, note FROM field_notes WHERE ask_id = ?')
+      .all(row.id)) {
+      fieldContext[n.field_name] = n.note
+    }
 
     const ask = {
       id: row.id,
@@ -223,6 +240,7 @@ export class Store {
       answers,
       answer_is_ref: refs,
       draft,
+      field_context: fieldContext,
       created_at: row.created_at,
       answered_at: row.answered_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
@@ -276,7 +294,27 @@ export class Store {
    * reference by the secret store — pass `{ [field]: {ref, store} }` with
    * isRef true. Raw secret values never reach this table.
    */
-  answer(idOrTicket, values, { refs = {}, reply } = {}) {
+  /**
+   * Upsert the human's per-field notes. An empty or non-string note is a
+   * deliberate erase; an unknown field name is dropped. Callers scrub the
+   * text before it gets here (it arrives outside validateAsk).
+   */
+  #saveFieldContext(askId, known, fieldContext, at) {
+    if (!fieldContext || typeof fieldContext !== 'object') return
+    const upsert = this.#db.prepare(
+      `INSERT INTO field_notes (ask_id, field_name, note, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(ask_id, field_name) DO UPDATE SET note       = excluded.note,
+                                                     updated_at = excluded.updated_at`,
+    )
+    const remove = this.#db.prepare('DELETE FROM field_notes WHERE ask_id = ? AND field_name = ?')
+    for (const [name, note] of Object.entries(fieldContext)) {
+      if (!known.has(name)) continue
+      if (typeof note !== 'string' || note.trim() === '') remove.run(askId, name)
+      else upsert.run(askId, name, note, at)
+    }
+  }
+
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext } = {}) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (['collected', 'cancelled', 'expired'].includes(ask.status)) {
@@ -320,6 +358,7 @@ export class Store {
       if (!known.has(name)) continue
       stmt.run(ask.id, name, JSON.stringify(value), refs[name] ? 1 : 0, at)
     }
+    this.#saveFieldContext(ask.id, known, fieldContext, at)
     if (reply !== undefined) {
       // Free text on every ask, always optional. This is where "yes but also
       // check X" goes — the part a typed field cannot hold.
@@ -335,11 +374,12 @@ export class Store {
     return { ask: updated, complete: false }
   }
 
-  saveDraft(idOrTicket, values) {
+  saveDraft(idOrTicket, values, fieldContext) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     const known = new Set(ask.fields.map((f) => f.name))
     const at = nowMs()
+    this.#saveFieldContext(ask.id, known, fieldContext, at)
     const stmt = this.#db.prepare(
       `INSERT INTO drafts (ask_id, field_name, value_json, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT(ask_id, field_name) DO UPDATE SET value_json = excluded.value_json,

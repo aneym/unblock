@@ -78,6 +78,21 @@ npx skills add aneym/unblock --skill unblock -g
 herdr plugin install aneym/unblock --yes
 ```
 
+### herdr:// deeplinks (macOS)
+
+Each ask card links its origin pane (`pane w4D:p8`) as a `herdr://` URL, so a
+click in the browser jumps straight to the pane that asked. Install the scheme
+handler once:
+
+```bash
+bin/herdr-deeplink-install.sh
+```
+
+That builds `~/Applications/Herdr Link.app` (registered for `herdr://`) and
+installs `~/.local/bin/herdr-deeplink`, which runs `herdr agent focus` on the
+pane — falling back to the tab, then the workspace, when the pane is gone —
+and brings the Herdr terminal forward.
+
 `alt+p u` opens unblock mode: a zoomed pane with the whole queue, scoped to the
 active profile, answerable in place. Answers wake the agent in its pane.
 

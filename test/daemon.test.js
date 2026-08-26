@@ -162,6 +162,25 @@ test('daemon API contract', async (t) => {
     assert.match(await expired.text(), /this link has expired/)
   })
 
+  await t.test('per-field context flows through answer, scrubbed, and hydrates back', async () => {
+    const created = await json(base, '/api/asks', {
+      method: 'POST',
+      body: JSON.stringify({
+        ask: ask('file', 'Context request', [textField('host')]),
+        origin: { session_id: 'context-session' },
+      }),
+    })
+    const answered = await json(base, `/api/asks/${created.body.ticket}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({
+        values: { host: 'db-1' },
+        field_context: { host: 'only until Friday' },
+      }),
+    })
+    assert.equal(answered.body.complete, true)
+    assert.equal(answered.body.ask.field_context.host, 'only until Friday')
+  })
+
   await daemon.close()
   const dbBytes = readFileSync(join(stateDir, 'queue.db'))
   assert.equal(dbBytes.includes(Buffer.from(secretNeedle)), false)

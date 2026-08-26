@@ -209,11 +209,21 @@ function textResult(text, data) {
 
 function answerText(ask) {
   if (ask.status === 'bounced') {
-    return `${ask.ticket} was SENT BACK: ${ask.reply ?? '(no note)'}`
+    const lines = [`${ask.ticket} was SENT BACK: ${ask.reply ?? '(no note)'}`]
+    // Notes typed against individual fields before the bounce still carry
+    // signal — often they ARE the reason it came back.
+    for (const [name, note] of Object.entries(ask.field_context || {})) {
+      lines.push(`${name} (their context): ${note}`)
+    }
+    return lines.join('\n')
   }
   const lines = [`${ask.ticket}: ${ask.title}`]
   for (const field of ask.fields) {
-    if (!(field.name in ask.answers)) continue
+    const note = ask.field_context?.[field.name]
+    if (!(field.name in ask.answers)) {
+      if (note) lines.push(`${field.name} (unanswered, their context): ${note}`)
+      continue
+    }
     const value = ask.answers[field.name]
     if (ask.answer_is_ref?.[field.name]) {
       lines.push(`${field.name}: ${value.store} reference ${value.ref}`)
@@ -222,6 +232,7 @@ function answerText(ask) {
     } else {
       lines.push(`${field.name}: ${JSON.stringify(value)}`)
     }
+    if (note) lines.push(`  their context: ${note}`)
   }
   if (ask.reply) lines.push(`they also said: ${ask.reply}`)
   return lines.join('\n')

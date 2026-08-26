@@ -314,7 +314,22 @@ const store = new Store()
   return { ask: store.bounce(ticket, note), complete: true, bounced: true }
 }
 
-async function answerAsk(ticket, values, reply) {
+/**
+ * Per-field context typed by the human. It arrives outside validateAsk, so it
+ * is scrubbed here. An empty string survives as '' on purpose: it is the
+ * erase signal the store acts on.
+ */
+function scrubFieldContext(raw) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const out = {}
+  for (const [name, note] of Object.entries(raw)) {
+    if (typeof note !== 'string') continue
+    out[name] = optionalScrub(note, 600) ?? ''
+  }
+  return out
+}
+
+async function answerAsk(ticket, values, reply, fieldContext) {
     const ask = store.get(ticket)
     if (!ask) return null
     const records = []
@@ -343,7 +358,11 @@ async function answerAsk(ticket, values, reply) {
       }
     }
     const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
-    return store.answer(ticket, safe, { refs, reply: optionalScrub(reply, 1000) })
+    return store.answer(ticket, safe, {
+      refs,
+      reply: optionalScrub(reply, 1000),
+      fieldContext: scrubFieldContext(fieldContext),
+    })
   }
 
   /**
@@ -406,13 +425,13 @@ async function answerAsk(ticket, values, reply) {
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        const updated = store.saveDraft(ticket, body.values || {})
+        const updated = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context))
         emitQueue()
         return sendJson(res, 200, { ask: updated })
       }
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
-        : await answerAsk(ticket, body.values || {}, body.reply)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
@@ -499,7 +518,7 @@ async function answerAsk(ticket, values, reply) {
     ticket = routeTicket(pathname, '/answer')
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
-      const result = await answerAsk(ticket, body.values || {}, body.reply)
+      const result = await answerAsk(ticket, body.values || {}, body.reply, body.field_context)
       if (!result) return notFound(res)
       emitQueue()
       return sendJson(res, 200, result)
@@ -509,7 +528,7 @@ async function answerAsk(ticket, values, reply) {
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
       const body = await readJson(req)
-      const ask = store.saveDraft(ticket, body.values || {})
+      const ask = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context))
       emitQueue()
       return sendJson(res, 200, { ask })
     }
@@ -585,14 +604,14 @@ async function answerAsk(ticket, values, reply) {
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
         ? await bounceAsk(body.ticket, body.reply)
-        : await answerAsk(body.ticket, body.values || {}, body.reply)
+        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context)
       emitQueue()
       return sendJson(res, 200, result)
     }
     if (pathname === '/api/draft' && req.method === 'POST') {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
-      const ask = store.saveDraft(body.ticket, body.values || {})
+      const ask = store.saveDraft(body.ticket, body.values || {}, scrubFieldContext(body.field_context))
       return sendJson(res, 200, { ask })
     }
 

@@ -73,7 +73,9 @@ human is not reading your transcript.
 `steps` — the shortest path to done. Console paths as `Product → Page → Field`.
 `links` — bare action URLs only. Never a link to a repo file; inline that instead.
 
-Every ask also gets a free-text reply box automatically. You do not declare it.
+Every field gets its own optional context box, and the whole ask gets a
+free-text reply box. You declare neither. Expect per-field notes back in the
+answer (`their context: …`) and treat them as part of that field's answer.
 
 ## Recommendations (decisions only)
 
@@ -88,8 +90,12 @@ Every ask also gets a free-text reply box automatically. You do not declare it.
 restatement of the option. A recommendation you cannot justify in one line means
 you have not finished thinking.
 
-Set `must_decide: true` on a field the human must actually engage with. It renders
-empty, is excluded from accept-all, and blocks submit until touched. Use it
+Nothing is pre-selected: the human clicks every answer themselves, and your
+recommendation shows as a badge on the option it names (plus your one-line
+why). Accept-all stays an explicit button.
+
+Set `must_decide: true` on a field the human must actually engage with. Its
+recommendation is hidden entirely and it is excluded from accept-all. Use it
 sparingly — at most 3 per ask, and the schema rejects more. It is the only thing
 standing between a twelve-question round and a rubber stamp.
 

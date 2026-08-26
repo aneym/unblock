@@ -198,6 +198,38 @@ test('only a parked ask can be orphaned', () => {
   store.close()
 })
 
+test('per-field context survives draft and answer, drops unknowns, erases on empty', () => {
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'unblock-context-')), 'queue.db'))
+  const created = store.create(
+    validateAsk(
+      ask({
+        purpose: 'decision',
+        fields: [
+          { name: 'p', type: 'choice', choices: ['a', 'b'], recommend: { value: 'a', why: 'r' } },
+          { name: 'q', type: 'text', recommend: { value: 'x', why: 'r' } },
+        ],
+      }),
+    ),
+    normalizeOrigin({ agent: 'claude', session_id: 'ctx' }),
+  )
+
+  // A half-written note lands with the draft, so it survives a page reload
+  // and shows up in the herdr pane.
+  store.saveDraft(created.ticket, { p: 'b' }, { p: 'b because of latency' })
+  assert.equal(store.get(created.ticket).field_context.p, 'b because of latency')
+
+  const { complete, ask: answered } = store.answer(
+    created.ticket,
+    { p: 'b', q: 'y' },
+    { fieldContext: { p: 'still latency', unknown: 'dropped', q: '' } },
+  )
+  assert.equal(complete, true)
+  assert.equal(answered.field_context.p, 'still latency')
+  assert.equal('unknown' in answered.field_context, false, 'unknown fields are dropped')
+  assert.equal('q' in answered.field_context, false, 'an empty note erases')
+  store.close()
+})
+
 test('an ask can be sent back instead of answered', () => {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'unblock-bounce-')), 'queue.db'))
   const created = store.create(

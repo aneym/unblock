@@ -45,9 +45,10 @@ interface Ask {
   fields: Field[]
   steps?: string[]
   links?: { label: string; url: string }[]
-  origin: { agent?: string; workspace_name?: string; pane_id?: string; detected?: boolean }
+  origin: { agent?: string; workspace_name?: string; pane_id?: string; tab_id?: string; workspace_id?: string; detected?: boolean }
   answers?: Record<string, unknown>
   draft?: Values
+  field_context?: Record<string, string>
   missing?: string[]
   created_at: number
 }
@@ -102,13 +103,13 @@ function valuesEqual(left: FieldValue | undefined, right: FieldValue | undefined
   return left === right
 }
 
+/**
+ * Nothing is pre-selected. A recommendation renders as a badge on the option
+ * it names; the human clicks every answer themselves. Only their own saved
+ * draft seeds the form.
+ */
 function initialValues(ask: Ask): Values {
-  const recommendations = Object.fromEntries(
-    ask.fields
-      .filter((field) => field.recommend && !field.must_decide)
-      .map((field) => [field.name, field.recommend!.value]),
-  )
-  return { ...recommendations, ...(ask.draft || {}) }
+  return { ...(ask.draft || {}) }
 }
 
 function isMissing(value: FieldValue | undefined) {
@@ -140,17 +141,33 @@ function CopyBlock({ text }: { text: string }) {
   )
 }
 
+function RecommendedBadge() {
+  return (
+    <span className="ml-2 inline-block rounded-sm border border-[var(--accent)] px-1 py-[1px] align-[2px] font-mono text-[9.5px] font-semibold uppercase leading-none tracking-[.08em] text-[var(--accent)]">
+      recommended
+    </span>
+  )
+}
+
 interface FieldControlProps {
   field: Field
   ticket: string
   value: FieldValue | undefined
+  note: string | undefined
   onChange: (name: string, value: FieldValue, isSecret?: boolean) => void
+  onNoteChange: (name: string, note: string) => void
   disabled: boolean
 }
 
-function FieldControl({ field, ticket, value, onChange, disabled }: FieldControlProps) {
+function FieldControl({ field, ticket, value, note, onChange, onNoteChange, disabled }: FieldControlProps) {
   const id = `f_${ticket}_${field.name}`
   const [isVisible, setIsVisible] = useState(false)
+  const [showNote, setShowNote] = useState(Boolean(note))
+  const isRecommendedChoice = (choiceValue: string) => {
+    if (!field.recommend || field.must_decide) return false
+    const target = field.recommend.value
+    return Array.isArray(target) ? target.includes(choiceValue) : target === choiceValue
+  }
   const label = (
     <label htmlFor={id} className="mb-2 block font-mono text-[11px] uppercase leading-none tracking-[.12em] text-[var(--dim)]">
       {field.label}
@@ -169,10 +186,10 @@ function FieldControl({ field, ticket, value, onChange, disabled }: FieldControl
     const selected = Array.isArray(value) ? value : []
     control = <div className="grid gap-1.5">{(field.choices || []).map((choice) => {
       const checked = selected.includes(choice.value)
-      return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value))} /><span>{choice.label}</span></label>
+      return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value))} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
     })}</div>
   } else if (field.type === 'choice') {
-    control = <RadioGroup value={typeof value === 'string' ? value : ''} onValueChange={(next) => onChange(field.name, next)} disabled={disabled}>{(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span>{choice.label}</span></label>)}</RadioGroup>
+    control = <RadioGroup value={typeof value === 'string' ? value : ''} onValueChange={(next) => onChange(field.name, next)} disabled={disabled}>{(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}</RadioGroup>
   } else if (field.type === 'confirm') {
     control = <label className="flex cursor-pointer items-start gap-2.5 text-[14.5px]"><Checkbox id={id} checked={value === true} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true)} /><span>{field.help || 'Done'}</span></label>
   } else if (field.type === 'paste') {
@@ -188,15 +205,19 @@ function FieldControl({ field, ticket, value, onChange, disabled }: FieldControl
       {field.url && <a className="mt-2 block break-all text-[14px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={field.url} target="_blank" rel="noreferrer noopener">{field.url}</a>}
       {field.help && field.type !== 'confirm' && <p className="mt-2 text-[13.5px] text-[var(--faint)]">{field.help}</p>}
       {field.type === 'secret' && <p className="mt-2 text-[13.5px] text-[var(--faint)]">Stored on your machine. The agent receives a reference, never the value.</p>}
-      {field.recommend && !field.must_decide && <p className="mt-2 text-[13px] text-[var(--faint)]"><span className="font-mono uppercase tracking-[.08em]">Recommended</span> · {field.recommend.why}</p>}
+      {field.recommend && !field.must_decide && <p className="mt-2 text-[13px] text-[var(--faint)]"><span className="font-mono uppercase tracking-[.08em]">Recommended</span>{field.type !== 'choice' && <>: {String(field.recommend.value)}</>} · {field.recommend.why}</p>}
       {field.must_decide && <p className="mt-2 text-[13px] text-[var(--faint)]">This one needs your decision.</p>}
+      {showNote
+        ? <Textarea id={`${id}_ctx`} value={note ?? ''} placeholder="Context for this answer" spellCheck={false} disabled={disabled} className="mt-2 min-h-14 text-[13.5px]" onChange={(event) => onNoteChange(field.name, event.target.value)} />
+        : <button type="button" className="mt-2 block font-mono text-[11px] uppercase leading-none tracking-[.08em] text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => setShowNote(true)}>+ context</button>}
     </div>
   )
 }
 
 function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
-  const recommendedValues = useMemo(() => initialValues(ask), [ask])
-  const [values, setValues] = useState<Values>(recommendedValues)
+  const seededValues = useMemo(() => initialValues(ask), [ask])
+  const [values, setValues] = useState<Values>(seededValues)
+  const [notes, setNotes] = useState<Record<string, string>>(ask.field_context || {})
   const [reply, setReply] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [message, setMessage] = useState('')
@@ -207,26 +228,35 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
   const missing = unanswered.filter((field) => field.required && isMissing(values[field.name])).map((field) => field.label)
   const detected = ask.origin.detected === true
   const recommendationFields = unanswered.filter((field) => field.recommend && !field.must_decide)
-  const changedCount = recommendationFields.filter((field) => !valuesEqual(values[field.name], field.recommend?.value)).length
   const isDecision = ask.purpose === 'decision'
   useEffect(() => () => window.clearTimeout(draftTimer.current), [])
 
+  const scheduleDraft = (nextValues: Values, nextNotes: Record<string, string>) => {
+    window.clearTimeout(draftTimer.current)
+    draftTimer.current = window.setTimeout(() => {
+      const safe = Object.fromEntries(Object.entries(nextValues).filter(([key]) => !secretNames.has(key)))
+      api('/api/draft', { ticket: ask.ticket, values: safe, field_context: nextNotes }).catch(() => undefined)
+    }, 700)
+  }
   const onChange = (name: string, value: FieldValue, isSecret = false) => {
     const next = { ...values, [name]: value }
     setValues(next)
     setState('idle')
     setMessage('')
     if (isSecret) return
-    window.clearTimeout(draftTimer.current)
-    draftTimer.current = window.setTimeout(() => {
-      const safe = Object.fromEntries(Object.entries(next).filter(([key]) => !secretNames.has(key)))
-      api('/api/draft', { ticket: ask.ticket, values: safe }).catch(() => undefined)
-    }, 700)
+    scheduleDraft(next, notes)
+  }
+  const onNoteChange = (name: string, noteText: string) => {
+    const next = { ...notes, [name]: noteText }
+    setNotes(next)
+    setState('idle')
+    setMessage('')
+    scheduleDraft(values, next)
   }
   const submit = async (submittedValues = values) => {
     setState('sending'); setMessage('sending…')
     try {
-      const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values: submittedValues, reply })
+      const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values: submittedValues, reply, field_context: notes })
       const submittedChanges = recommendationFields.filter((field) => !valuesEqual(submittedValues[field.name], field.recommend?.value)).length
       setChangeSummary(isDecision && submittedChanges > 0 ? `changed ${submittedChanges} of ${recommendationFields.length}` : '')
       setState('done')
@@ -265,25 +295,32 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
     setValues(accepted)
     void submit(accepted)
   }
-  const meta = [ask.origin.agent || 'agent', ask.origin.workspace_name, ask.origin.pane_id ? `pane ${ask.origin.pane_id}` : undefined, ago(ask.created_at)].filter(Boolean)
+  const herdrHref = ask.origin.pane_id
+    ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
+      (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
+      (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
+    : undefined
   const isBusy = state === 'sending' || state === 'done'
   return (
     <Card className={cn('p-4 sm:p-[18px]', ask.gating && 'border-[var(--accent)]', detected && 'bg-[var(--surface2)] opacity-80', state === 'done' && 'opacity-50')}>
       <div className="mb-2.5 flex flex-wrap gap-x-2.5 gap-y-1 font-mono text-[11px] uppercase leading-4 tracking-[.1em] text-[var(--faint)]">
         {ask.gating ? <span className="text-[var(--accent)]">● gating</span> : detected ? <span>detected</span> : <span>filed</span>}
-        {meta.map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
+        <span>{ask.origin.agent || 'agent'}</span>
+        {ask.origin.workspace_name && <span>{ask.origin.workspace_name}</span>}
+        {ask.origin.pane_id && herdrHref && <a href={herdrHref} title="Jump to this pane in Herdr" className="underline decoration-[var(--rule)] underline-offset-2 hover:text-[var(--accent)] hover:decoration-[var(--accent)]">pane {ask.origin.pane_id}</a>}
+        <span>{ago(ask.created_at)}</span>
       </div>
       <h2 className="text-balance text-[17.5px] font-semibold leading-[1.3] tracking-[-.01em]">{ask.title}</h2>
       <p className="mt-1.5 text-pretty text-[14.5px] text-[var(--dim)]">{ask.why}</p>
       {!!ask.steps?.length && <ol className="my-4 list-decimal space-y-1 pl-5 text-[14.5px] text-[var(--dim)] marker:text-[var(--faint)]">{ask.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>}
       {!!ask.links?.length && <div className="my-4 grid gap-1.5">{ask.links.map((link) => <a key={link.url} className="break-all text-[14.5px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={link.url} target="_blank" rel="noreferrer noopener">{link.label}</a>)}</div>}
-      <div className="mt-4">{unanswered.map((field) => <FieldControl key={field.name} field={field} ticket={ask.ticket} value={values[field.name]} onChange={onChange} disabled={isBusy} />)}</div>
+      <div className="mt-4">{unanswered.map((field) => <FieldControl key={field.name} field={field} ticket={ask.ticket} value={values[field.name]} note={notes[field.name]} onChange={onChange} onNoteChange={onNoteChange} disabled={isBusy} />)}</div>
       <div className="border-t border-[var(--rule)] py-4">
         <label htmlFor={`reply_${ask.ticket}`} className="mb-2 block font-mono text-[11px] uppercase leading-none tracking-[.12em] text-[var(--dim)]">Anything else <span className="normal-case tracking-[.04em] text-[var(--faint)]">— or why you're sending it back</span></label>
         <Textarea id={`reply_${ask.ticket}`} value={reply} placeholder="Add context the fields don't cover, or say what's wrong with this ask" disabled={isBusy} className="min-h-20 font-sans text-[14.5px]" onChange={(event) => setReply(event.target.value)} />
       </div>
       {!detected && <div className="mt-1 flex flex-wrap items-center gap-2.5 border-t border-[var(--rule)] pt-4">
-        <Button disabled={missing.length > 0 || isBusy} onClick={() => void submit()}>{isDecision ? changedCount === 0 ? 'Accept' : 'Submit' : ask.gating ? 'Answer & wake' : 'Answer'}</Button>
+        <Button disabled={missing.length > 0 || isBusy} onClick={() => void submit()}>{isDecision ? 'Submit' : ask.gating ? 'Answer & wake' : 'Answer'}</Button>
         {isDecision && ask.fields.length > 1 && <Button variant="secondary" className="h-[39px]" disabled={missing.some((label) => ask.fields.some((field) => field.label === label && field.must_decide)) || isBusy} onClick={acceptAll}>Accept all</Button>}
         <Button variant="ghost" className="h-[39px]" disabled={reply.trim() === '' || isBusy} title={reply.trim() === '' ? "Say what's wrong with it first" : 'Send this ask back unanswered'} onClick={() => void sendBack()}>Send back unanswered</Button>
         <span className={cn('font-mono text-[11px] leading-4 tracking-[.04em] text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{changeSummary || message || (missing.length ? `still needs: ${missing.join(', ')}` : '')}</span>
