@@ -15,7 +15,8 @@ declare global {
 }
 
 type Scalar = string | boolean
-type FieldValue = Scalar | string[]
+/** null is an explicit "no answer" — a real response, distinct from untouched. */
+type FieldValue = Scalar | string[] | null
 type Values = Record<string, FieldValue>
 
 interface Choice { value: string; label: string }
@@ -96,13 +97,6 @@ function ago(createdAt: number) {
   return `${Math.round(seconds / 86400)}d`
 }
 
-function valuesEqual(left: FieldValue | undefined, right: FieldValue | undefined) {
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => item === right[index])
-  }
-  return left === right
-}
-
 /**
  * Nothing is pre-selected. A recommendation renders as a badge on the option
  * it names; the human clicks every answer themselves. Only their own saved
@@ -113,7 +107,8 @@ function initialValues(ask: Ask): Values {
 }
 
 function isMissing(value: FieldValue | undefined) {
-  if (value === undefined || value === null) return true
+  if (value === undefined) return true
+  if (value === null) return false // explicitly skipped — answered
   if (typeof value === 'string') return value.trim() === ''
   if (Array.isArray(value)) return value.length === 0
   return value === false
@@ -184,12 +179,40 @@ function FieldControl({ field, ticket, value, note, onChange, onNoteChange, disa
     )
   } else if (field.type === 'choice' && field.multi) {
     const selected = Array.isArray(value) ? value : []
-    control = <div className="grid gap-1.5">{(field.choices || []).map((choice) => {
-      const checked = selected.includes(choice.value)
-      return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value))} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
-    })}</div>
+    const declared = new Set((field.choices || []).map((choice) => choice.value))
+    const otherValue = selected.find((item) => !declared.has(item)) ?? ''
+    const withOther = (next: string[], other: string) => {
+      const kept = next.filter((item) => declared.has(item))
+      return other.trim() ? [...kept, other] : kept
+    }
+    control = <div className="grid gap-1.5">
+      {(field.choices || []).map((choice) => {
+        const checked = selected.includes(choice.value)
+        return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, withOther(next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value), otherValue))} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
+      })}
+      <div className={cn('flex items-center gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2 text-[14.5px]', otherValue && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
+        <span className="text-[var(--dim)]">Other:</span>
+        <Input value={otherValue} placeholder="your own answer" disabled={disabled} className="h-7 min-w-0 flex-1 border-0 bg-transparent px-1 text-[14px]" onChange={(event) => onChange(field.name, withOther(selected, event.target.value))} />
+      </div>
+    </div>
   } else if (field.type === 'choice') {
-    control = <RadioGroup value={typeof value === 'string' ? value : ''} onValueChange={(next) => onChange(field.name, next)} disabled={disabled}>{(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}</RadioGroup>
+    const declared = new Set((field.choices || []).map((choice) => choice.value))
+    const isOther = typeof value === 'string' && value !== '' && !declared.has(value)
+    const radioValue = value === null ? '__skip__' : isOther ? '__other__' : typeof value === 'string' ? value : ''
+    control = <div className="grid gap-1.5">
+      <RadioGroup value={radioValue} onValueChange={(next) => onChange(field.name, next === '__skip__' ? null : next === '__other__' ? (isOther ? value : '') : next)} disabled={disabled}>
+        {(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2.5 text-[14.5px]', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}
+        <label className={cn('flex cursor-pointer items-center gap-2.5 rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--bg)] px-3 py-2 text-[14.5px]', isOther && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
+          <RadioGroupItem value="__other__" />
+          <span className="text-[var(--dim)]">Other:</span>
+          <Input value={isOther ? value : ''} placeholder="your own answer" disabled={disabled} className="h-7 min-w-0 flex-1 border-0 bg-transparent px-1 text-[14px]" onFocus={() => { if (!isOther) onChange(field.name, '') }} onChange={(event) => onChange(field.name, event.target.value)} />
+        </label>
+        <label className={cn('flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-dashed border-[var(--rule)] bg-[var(--bg)] px-3 py-2 text-[13.5px] text-[var(--dim)]', value === null && 'border-solid border-[var(--accent)] bg-[var(--accent-soft)]')}>
+          <RadioGroupItem value="__skip__" />
+          <span>Skip — no answer{field.recommend ? ' (the agent proceeds on its recommendation)' : ''}</span>
+        </label>
+      </RadioGroup>
+    </div>
   } else if (field.type === 'confirm') {
     control = <label className="flex cursor-pointer items-start gap-2.5 text-[14.5px]"><Checkbox id={id} checked={value === true} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true)} /><span>{field.help || 'Done'}</span></label>
   } else if (field.type === 'paste') {
@@ -221,13 +244,11 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
   const [reply, setReply] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [message, setMessage] = useState('')
-  const [changeSummary, setChangeSummary] = useState('')
   const draftTimer = useRef<number | undefined>(undefined)
   const secretNames = useMemo(() => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)), [ask.fields])
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
   const missing = unanswered.filter((field) => field.required && isMissing(values[field.name])).map((field) => field.label)
   const detected = ask.origin.detected === true
-  const recommendationFields = unanswered.filter((field) => field.recommend && !field.must_decide)
   const isDecision = ask.purpose === 'decision'
   useEffect(() => () => window.clearTimeout(draftTimer.current), [])
 
@@ -253,12 +274,10 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
     setMessage('')
     scheduleDraft(values, next)
   }
-  const submit = async (submittedValues = values) => {
+  const submit = async () => {
     setState('sending'); setMessage('sending…')
     try {
-      const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values: submittedValues, reply, field_context: notes })
-      const submittedChanges = recommendationFields.filter((field) => !valuesEqual(submittedValues[field.name], field.recommend?.value)).length
-      setChangeSummary(isDecision && submittedChanges > 0 ? `changed ${submittedChanges} of ${recommendationFields.length}` : '')
+      const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values, reply, field_context: notes })
       setState('done')
       setMessage(output.complete ? ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent' : 'saved, still incomplete')
       if (output.complete) window.setTimeout(onFinished, 1200)
@@ -280,7 +299,6 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
     setState('sending'); setMessage('sending back…')
     try {
       await api('/api/answer', { ticket: ask.ticket, reply, bounce: true })
-      setChangeSummary('')
       setState('done')
       setMessage('sent back — the agent will rework it')
       window.setTimeout(onFinished, 1400)
@@ -288,12 +306,6 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
       if (error instanceof FinishedError) return onFinished()
       setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
     }
-  }
-  const acceptAll = () => {
-    const accepted = { ...values }
-    for (const field of recommendationFields) accepted[field.name] = field.recommend!.value
-    setValues(accepted)
-    void submit(accepted)
   }
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
@@ -321,9 +333,8 @@ function AskCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
       </div>
       {!detected && <div className="mt-1 flex flex-wrap items-center gap-2.5 border-t border-[var(--rule)] pt-4">
         <Button disabled={missing.length > 0 || isBusy} onClick={() => void submit()}>{isDecision ? 'Submit' : ask.gating ? 'Answer & wake' : 'Answer'}</Button>
-        {isDecision && ask.fields.length > 1 && <Button variant="secondary" className="h-[39px]" disabled={missing.some((label) => ask.fields.some((field) => field.label === label && field.must_decide)) || isBusy} onClick={acceptAll}>Accept all</Button>}
         <Button variant="ghost" className="h-[39px]" disabled={reply.trim() === '' || isBusy} title={reply.trim() === '' ? "Say what's wrong with it first" : 'Send this ask back unanswered'} onClick={() => void sendBack()}>Send back unanswered</Button>
-        <span className={cn('font-mono text-[11px] leading-4 tracking-[.04em] text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{changeSummary || message || (missing.length ? `still needs: ${missing.join(', ')}` : '')}</span>
+        <span className={cn('font-mono text-[11px] leading-4 tracking-[.04em] text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{message || (missing.length ? `still needs: ${missing.join(', ')}` : '')}</span>
       </div>}
     </Card>
   )

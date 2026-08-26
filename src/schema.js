@@ -365,7 +365,10 @@ export function missingRequired(ask, answers = {}) {
     .filter((f) => f.required)
     .filter((f) => {
       const v = answers[f.name]
-      if (v === undefined || v === null) return true
+      // undefined = never answered. null = the human explicitly chose not to
+      // answer this one — a real response, so it does not hold the ask open.
+      if (v === undefined) return true
+      if (v === null) return false
       if (typeof v === 'string') return v.trim() === ''
       if (Array.isArray(v)) return v.length === 0
       return false

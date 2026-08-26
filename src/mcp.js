@@ -229,6 +229,10 @@ function answerText(ask) {
       lines.push(`${field.name}: ${value.store} reference ${value.ref}`)
       if (value.hint) lines.push(`  ${value.hint}`)
       if (value.resolve) lines.push(`  Resolve without printing: ${value.resolve}`)
+    } else if (value === null) {
+      // An explicit skip is a real response: they saw the question and chose
+      // not to answer it. Do not re-ask; proceed without this value.
+      lines.push(`${field.name}: (skipped — they chose not to answer)`)
     } else {
       lines.push(`${field.name}: ${JSON.stringify(value)}`)
     }
