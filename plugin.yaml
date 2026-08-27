@@ -1,0 +1,10 @@
+name: unblock
+label: Unblock
+version: 0.1.0
+description: Native Hermes client for the standalone Unblock human-ask service
+kind: standalone
+provides_tools:
+  - unblock_file
+  - unblock_park
+  - unblock_check
+  - unblock_cancel

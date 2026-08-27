@@ -21,6 +21,18 @@ must never go.
 unblock is the three together: local-first, secrets that stay out of the model's
 context, and one queue across every agent on the machine.
 
+## Product boundary
+
+Unblock is a standalone local service. It owns one daemon, HTTP API, SQLite
+database, and answer UI. Agent integrations are clients of that service:
+
+- Hermes registers native `unblock_file`, `unblock_park`, `unblock_check`, and
+  `unblock_cancel` tools plus the Unblock skill.
+- The Herdr plugin is only a launcher and pane adapter for the same UI. Herdr is
+  not a queue owner or synchronization peer.
+- Every client reaches the same database at
+  `~/.local/state/unblock/queue.db` unless `UNBLOCK_STATE_DIR` is set.
+
 ## How it works
 
 Two calls, and only one of them stops the agent.
@@ -78,6 +90,24 @@ npx skills add aneym/unblock --skill unblock -g
 herdr plugin install aneym/unblock --yes
 ```
 
+### Hermes
+
+From a canonical checkout, install the live source into one Hermes profile:
+
+```bash
+HERMES_HOME=~/.hermes/profiles/bot bin/hermes-install.sh
+```
+
+The installer symlinks both the native plugin and skill to this checkout, so a
+pull in the canonical Unblock repo updates Hermes without creating a second
+source tree. It then enables the plugin and runs Hermes' real plugin doctor.
+Restart the active Hermes CLI/TUI/gateway process, or start a fresh session, to
+load newly registered tools.
+
+For a normal cloned plugin install instead of a live checkout, use
+`hermes plugins install aneym/unblock --enable`; synchronize it explicitly with
+`hermes plugins update unblock`.
+
 ### herdr:// deeplinks (macOS)
 
 Each ask card links its origin pane (`pane w4D:p8`) as a `herdr://` URL, so a
@@ -119,7 +149,9 @@ src/secrets.js   1Password -> keychain -> env file
 src/daemon.js    HTTP API, the answer page, SSE
 src/mcp.js       MCP server: file / park / check / cancel
 web/             the answer page
-plugin/          herdr plugin
+plugin/          thin herdr launcher / pane adapter
+hermes.py        native Hermes client for the standalone API
+plugin.yaml      Hermes plugin manifest
 skills/unblock/  the discipline agents follow before parking
 ```
 

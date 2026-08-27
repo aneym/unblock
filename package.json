@@ -21,6 +21,9 @@
     "bin/",
     "web/dist/",
     "plugin/",
+    "plugin.yaml",
+    "__init__.py",
+    "hermes.py",
     "skills/",
     "herdr-plugin.toml",
     "README.md"
