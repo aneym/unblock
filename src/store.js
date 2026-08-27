@@ -131,6 +131,7 @@ export class Store {
     `)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
+    this.#addColumn('asks', 'project', 'TEXT')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -176,15 +177,16 @@ export class Store {
 
     this.#db
       .prepare(
-        `INSERT INTO asks (id, ticket, kind, purpose, status, title, why, fields_json, steps_json,
+        `INSERT INTO asks (id, ticket, kind, purpose, project, status, title, why, fields_json, steps_json,
                            links_json, origin_json, agent_key, created_at, expires_at)
-         VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         ticket,
         body.kind,
         body.purpose ?? 'blocker',
+        body.project ?? null,
         body.title,
         body.why,
         JSON.stringify(body.fields),
@@ -233,6 +235,7 @@ export class Store {
       ticket: row.ticket,
       kind: row.kind,
       purpose: row.purpose ?? 'blocker',
+      project: row.project ?? undefined,
       status: row.status,
       gating: row.kind === 'park' && row.status === 'open',
       title: row.title,
@@ -272,13 +275,14 @@ export class Store {
    * The queue view. `profile` filters using herdr's own visibility rule;
    * pass '*' for everything. Gating asks always sort first.
    */
-  list({ profile = '*', status = ['open', 'answered', 'bounced'], agentKey: key, includeClosed = false } = {}) {
+  list({ profile = '*', status = ['open', 'answered', 'bounced'], agentKey: key, includeClosed = false, project } = {}) {
     const statuses = includeClosed ? null : status
     const rows = this.#db.prepare('SELECT * FROM asks ORDER BY created_at ASC').all()
     const asks = rows
       .map((r) => this.#hydrate(r))
       .filter((a) => (statuses ? statuses.includes(a.status) : true))
       .filter((a) => (key ? a.origin && agentKey(a.origin) === key : true))
+      .filter((a) => (project ? a.project === project : true))
       .filter((a) => matchesProfile(a.origin, profile))
 
     return asks.sort((a, b) => {

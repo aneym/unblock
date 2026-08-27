@@ -60,6 +60,11 @@ decision ("Migration strategy for the user table"). Under 90 characters.
 payoff, not the history. Never "as discussed above" — there is no above. The
 human is not reading your transcript.
 
+`project` — the workstream this ask files under. One short name, reused on
+every ask from the same project ("homebase", "night-vision"), so the queue
+page can group and filter by it. Set it on every ask. Without it the queue
+falls back to guessing from workspace or repo.
+
 `fields` — one per thing you need:
 
 | type | for | blocker | decision |

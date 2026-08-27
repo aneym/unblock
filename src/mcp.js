@@ -126,6 +126,10 @@ const askProperties = {
   // MUST carry recommend {value, why}. The daemon rejects a mismatch, so this
   // is a real contract, not a hint.
   purpose: { type: 'string', enum: ['blocker', 'decision'], default: 'blocker' },
+  // The project this ask files under — the queue page groups and filters by
+  // it. One short name per workstream, reused across asks. Defaults to
+  // $UNBLOCK_PROJECT when unset.
+  project: { type: 'string', maxLength: 64 },
   title: { type: 'string', maxLength: 90 },
   why: { type: 'string', maxLength: 1200 },
   fields: {
@@ -250,9 +254,10 @@ function answerText(ask) {
 }
 
 async function createAsk(kind, args) {
+  const project = process.env.UNBLOCK_PROJECT || undefined
   return daemonFetch('/asks', {
     method: 'POST',
-    body: JSON.stringify({ ask: { ...args, kind }, origin: origin() }),
+    body: JSON.stringify({ ask: { project, ...args, kind }, origin: origin() }),
   })
 }
 

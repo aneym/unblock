@@ -6,6 +6,7 @@ ASK_SCHEMA = {
     "type": "object",
     "properties": {
         "purpose": {"type": "string", "enum": ["blocker", "decision"]},
+        "project": {"type": "string", "maxLength": 64},
         "title": {"type": "string", "maxLength": 90},
         "why": {"type": "string", "maxLength": 1200},
         "fields": {

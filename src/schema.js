@@ -242,6 +242,11 @@ export function validateAsk(raw) {
   const title = str(raw.title, 'title', { max: MAX_TITLE })
   const why = str(raw.why, 'why', { max: 1200 })
 
+  // The project this ask belongs to, declared by the agent. The queue page
+  // groups and filters on it. Optional: an ask without one falls back to its
+  // origin (workspace, repo, cwd) for grouping, so old clients keep working.
+  const project = optionalStr(raw.project, 'project', { max: 64 })
+
   if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
     throw new ValidationError('an ask needs at least one field — say what you need', 'fields')
   }
@@ -287,6 +292,7 @@ export function validateAsk(raw) {
   return {
     kind,
     purpose,
+    project,
     title,
     why,
     fields,

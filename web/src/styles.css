@@ -3,40 +3,34 @@
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
-  --bg: #fafafa;
-  --surface: #ffffff;
-  --surface2: #f4f4f2;
-  --ink: #1a1a19;
-  --dim: #5c5c58;
-  --faint: #82827b;
-  --rule: #e4e4e1;
-  --input-border: #d4d4d0;
-  --accent: #1d5bd8;
+  --font-display: ui-serif, 'New York', 'Iowan Old Style', Charter, Georgia, serif;
+  --bg: #f7f2ea;
+  --surface: #fffdf9;
+  --surface2: #f1eadc;
+  --ink: #2b2620;
+  --dim: #6b5f4c;
+  --faint: #a5987f;
+  --rule: #e8e0d1;
+  --input-border: #d9cfba;
+  --accent: #b4530a;
   --accent-fg: #ffffff;
-  --accent-soft: #e9f0fd;
-  --danger: #b42318;
-  --ok: #1a7f4b;
-  --radius-sm: 7px;
-  --radius: 10px;
-  --radius-lg: 14px;
+  --accent-soft: #f6e7d7;
+  --danger: #a3341f;
+  --ok: #3f7d54;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
   color-scheme: light;
   font-family: var(--font-sans);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131312; --surface: #1b1b1a; --surface2: #211f1e; --ink: #ededeb;
-    --dim: #a8a8a3; --faint: #7d7a75; --rule: #ffffff1f; --input-border: #ffffff2b;
-    --accent: #6ea1ff; --accent-fg: #0a0a0a; --accent-soft: #16233d;
-    --danger: #e5614f; --ok: #4fbf8a; color-scheme: dark;
+    --bg: #1c1916; --surface: #26221c; --surface2: #2e2921; --ink: #ece5d6;
+    --dim: #b5a88f; --faint: #84775f; --rule: #ffffff1e; --input-border: #ffffff30;
+    --accent: #e0813f; --accent-fg: #1c1916; --accent-soft: #3a2c1c;
+    --danger: #e0644c; --ok: #63b183; color-scheme: dark;
   }
-}
-
-.dark {
-  --bg: #131312; --surface: #1b1b1a; --surface2: #211f1e; --ink: #ededeb;
-  --dim: #a8a8a3; --faint: #7d7a75; --rule: #ffffff1f; --input-border: #ffffff2b;
-  --accent: #ff6a1f; --accent-fg: #0a0a0a; --accent-soft: #2a1a11;
-  --danger: #e5614f; --ok: #4fbf8a; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -56,6 +50,7 @@ body {
 button, input, textarea { font: inherit; }
 button { touch-action: manipulation; }
 .font-mono { font-family: var(--font-mono); }
+.font-display { font-family: var(--font-display); }
 ::selection { background: var(--accent-soft); }
 
 @media (prefers-reduced-motion: reduce) {

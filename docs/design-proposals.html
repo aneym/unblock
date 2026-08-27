@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>unblock · three design systems</title>
+<style>
+  :root {
+    --doc-bg: #fbfaf8; --doc-ink: #1a1a1a; --doc-dim: #5f5c56; --doc-rule: #e5e1da;
+    --doc-accent: #b4530a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--doc-bg); color: var(--doc-ink); font: 16px/1.6 -apple-system, "SF Pro Text", Inter, sans-serif; padding: 48px 20px 120px; }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 32px; letter-spacing: -.02em; line-height: 1.15; }
+  .lede { margin-top: 10px; max-width: 62ch; color: var(--doc-dim); }
+  .sys { margin-top: 72px; border-top: 1px solid var(--doc-rule); padding-top: 32px; }
+  .sys-kicker { font: 600 12px/1 ui-monospace, "SF Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--doc-accent); }
+  .sys h2 { margin-top: 8px; font-size: 26px; letter-spacing: -.015em; }
+  .thesis { margin-top: 8px; max-width: 66ch; }
+  .thesis strong { font-weight: 600; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 40px; margin-top: 18px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .cols h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--doc-dim); font-weight: 600; }
+  .cols ul { margin: 6px 0 0; padding-left: 18px; font-size: 15px; }
+  .cols li { margin-top: 4px; }
+  .tokens { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: center; }
+  .sw { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--doc-rule); border-radius: 999px; padding: 4px 12px 4px 5px; font: 500 12px/1 ui-monospace, monospace; background: #fff; }
+  .sw i { width: 18px; height: 18px; border-radius: 999px; display: inline-block; border: 1px solid rgba(0,0,0,.12); }
+  .type-note { font-size: 13px; color: var(--doc-dim); margin-top: 10px; }
+  .mock { margin-top: 24px; border: 1px solid var(--doc-rule); border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 12px 32px -18px rgba(0,0,0,.25); }
+  .mock-cap { font-size: 13px; color: var(--doc-dim); margin-top: 10px; }
+
+  /* ============ 1 · LEDGER ============ */
+  .s1 { background: #14161a; color: #d8dce3; font: 13px/1.5 -apple-system, Inter, sans-serif; display: grid; grid-template-columns: 190px 1fr; min-height: 430px; }
+  .s1 * { font-family: inherit; }
+  .s1 .rail { border-right: 1px solid #23262d; padding: 16px 10px; background: #101216; }
+  .s1 .rail h4 { font: 600 10px/1 ui-monospace, monospace; letter-spacing: .14em; color: #5b6270; padding: 0 8px 10px; text-transform: uppercase; }
+  .s1 .proj { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; color: #9aa2b1; cursor: default; }
+  .s1 .proj.on { background: #1d2530; color: #e8ecf3; }
+  .s1 .proj .n { flex: 1; }
+  .s1 .proj .c { font: 500 11px/1 ui-monospace, monospace; color: #5b6270; }
+  .s1 .proj .dot { width: 6px; height: 6px; border-radius: 99px; background: #e8a13a; }
+  .s1 .proj .dot.none { background: transparent; }
+  .s1 .main { padding: 0; }
+  .s1 .bar { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid #23262d; color: #7d8595; }
+  .s1 .bar b { color: #e8ecf3; font-weight: 600; }
+  .s1 .bar .k { margin-left: auto; font: 11px/1 ui-monospace, monospace; color: #5b6270; }
+  .s1 .bar .k kbd { border: 1px solid #2c313b; border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; margin: 0 2px; color: #9aa2b1; }
+  .s1 .row { display: grid; grid-template-columns: 14px 1fr auto auto auto; gap: 12px; align-items: baseline; padding: 11px 18px; border-bottom: 1px solid #1c1f25; }
+  .s1 .row .st { align-self: center; width: 7px; height: 7px; border-radius: 99px; }
+  .s1 .st.wait { background: #e8a13a; box-shadow: 0 0 0 3px rgba(232,161,58,.15); }
+  .s1 .st.filed { background: #3d4451; }
+  .s1 .row .t { color: #d8dce3; }
+  .s1 .row .meta, .s1 .row .age { font: 11px/1.5 ui-monospace, monospace; color: #5b6270; }
+  .s1 .badge { font: 600 10px/1 ui-monospace, monospace; letter-spacing: .06em; padding: 3px 7px; border-radius: 5px; }
+  .s1 .badge.blk { color: #e8a13a; background: rgba(232,161,58,.1); }
+  .s1 .badge.dec { color: #9d8cff; background: rgba(157,140,255,.1); }
+  .s1 .row.sel { background: #181c22; border-left: 2px solid #e8a13a; padding-left: 16px; }
+  .s1 .open { padding: 14px 18px 18px 44px; border-bottom: 1px solid #1c1f25; background: #181c22; }
+  .s1 .open p { color: #9aa2b1; max-width: 58ch; }
+  .s1 .open .fld { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  .s1 .open .fld label { color: #7d8595; width: 120px; }
+  .s1 .open .fld input { background: #101216; border: 1px solid #2c313b; border-radius: 6px; color: #e8ecf3; padding: 6px 10px; width: 260px; font: 12px ui-monospace, monospace; }
+  .s1 .open .go { margin-top: 14px; display: inline-block; background: #e8a13a; color: #14161a; font-weight: 600; border-radius: 6px; padding: 7px 14px; }
+
+  /* ============ 2 · DECK ============ */
+  .s2 { background: #f7f2ea; color: #2b2620; font: 14px/1.55 -apple-system, Inter, sans-serif; padding: 26px 0 0; min-height: 430px; position: relative; }
+  .s2 .top { display: flex; align-items: center; max-width: 560px; margin: 0 auto; padding: 0 8px; }
+  .s2 .pick { display: inline-flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #e2d9cb; border-radius: 999px; padding: 8px 16px; font-weight: 600; box-shadow: 0 1px 2px rgba(60,45,20,.06); }
+  .s2 .pick .chev { color: #a5987f; font-size: 11px; }
+  .s2 .prog { margin-left: auto; font: 500 13px/1 ui-monospace, monospace; color: #8a7d63; }
+  .s2 .meter { max-width: 560px; margin: 14px auto 0; padding: 0 8px; display: flex; gap: 5px; }
+  .s2 .meter i { height: 3px; flex: 1; border-radius: 99px; background: #e2d9cb; }
+  .s2 .meter i.done { background: #2b2620; }
+  .s2 .card { max-width: 560px; margin: 22px auto 0; background: #fffdf9; border: 1px solid #e8e0d1; border-radius: 18px 18px 0 0; padding: 34px 38px 30px; box-shadow: 0 -1px 0 #fff inset, 0 18px 40px -24px rgba(60,45,20,.35); }
+  .s2 .who { font: 500 12px/1 ui-monospace, monospace; color: #a5987f; display: flex; gap: 10px; }
+  .s2 .who .wait { color: #b4530a; font-weight: 600; }
+  .s2 h5 { font: 600 25px/1.25 "New York", Charter, Georgia, serif; letter-spacing: -.01em; margin-top: 14px; }
+  .s2 .why { margin-top: 10px; color: #6b5f4c; }
+  .s2 .choice { margin-top: 20px; display: grid; gap: 8px; }
+  .s2 .opt { border: 1.5px solid #e2d9cb; background: #fff; border-radius: 12px; padding: 13px 16px; display: flex; gap: 10px; align-items: baseline; }
+  .s2 .opt.rec { border-color: #2b2620; }
+  .s2 .opt .r { width: 14px; height: 14px; border: 1.5px solid #c9bda6; border-radius: 99px; align-self: center; }
+  .s2 .opt .tag { margin-left: auto; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #b4530a; }
+  .s2 .actions { margin-top: 24px; display: flex; align-items: center; gap: 14px; }
+  .s2 .primary { background: #2b2620; color: #f7f2ea; border-radius: 999px; padding: 11px 24px; font-weight: 600; }
+  .s2 .ghost { color: #8a7d63; font-weight: 500; }
+  .s2 .peek { max-width: 520px; margin: 0 auto; height: 14px; background: #efe8db; border: 1px solid #e2d9cb; border-bottom: 0; border-radius: 14px 14px 0 0; }
+  .s2 .peek2 { max-width: 480px; margin: 0 auto; height: 10px; background: #e9e1d2; border: 1px solid #ddd3c2; border-bottom: 0; border-radius: 12px 12px 0 0; }
+
+  /* ============ 3 · BOARD ============ */
+  .s3 { background: #eef1f5; color: #1c2333; font: 13px/1.5 -apple-system, Inter, sans-serif; padding: 20px; min-height: 430px; }
+  .s3 .hd { display: flex; align-items: baseline; gap: 16px; padding: 0 4px 16px; }
+  .s3 .hd b { font-size: 15px; letter-spacing: -.01em; }
+  .s3 .hd .sum { color: #66708a; font-size: 12.5px; }
+  .s3 .hd .view { margin-left: auto; font: 600 11px/1 ui-monospace, monospace; color: #66708a; }
+  .s3 .lanes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
+  .s3 .lane { background: #e4e8ee; border-radius: 12px; padding: 10px; }
+  .s3 .lane-hd { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; }
+  .s3 .lane-hd .nm { font-weight: 600; }
+  .s3 .lane-hd .ct { font: 600 11px/1 ui-monospace, monospace; background: #fff; border-radius: 99px; padding: 3px 8px; color: #66708a; }
+  .s3 .lane-hd .warn { margin-left: auto; font-size: 11px; font-weight: 600; color: #b45309; }
+  .s3 .card3 { background: #fff; border-radius: 9px; padding: 11px 12px 11px 15px; margin-top: 8px; position: relative; box-shadow: 0 1px 2px rgba(28,35,51,.08); }
+  .s3 .card3::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 9px 0 0 9px; }
+  .s3 .card3.blk::before { background: #f59e0b; }
+  .s3 .card3.dec::before { background: #7c6cf0; }
+  .s3 .card3 .t3 { font-weight: 550; line-height: 1.35; }
+  .s3 .card3 .m3 { margin-top: 5px; font: 11px/1 ui-monospace, monospace; color: #8b93a7; display: flex; gap: 8px; }
+  .s3 .card3 .quick { margin-top: 9px; display: flex; gap: 6px; }
+  .s3 .quick span { font-size: 11.5px; font-weight: 600; border-radius: 6px; padding: 4px 9px; background: #eef1f5; color: #454f66; }
+  .s3 .quick .yes { background: #1c2333; color: #fff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>unblock: three design systems</h1>
+  <p class="lede">The current page is a single 580px column of stacked article-style cards. It reads fine at three asks and turns into scrolling homework at ten. Each system below reorganizes the queue around a different answer to "how should a human process this pile", now that every ask carries an explicit <code>project</code>. Each is a full swap: tokens, type, and layout.</p>
+
+  <!-- ================= LEDGER ================= -->
+  <section class="sys">
+    <div class="sys-kicker">System 1</div>
+    <h2>Ledger — the ops console</h2>
+    <p class="thesis"><strong>Thesis: the queue is a manifest, not an essay.</strong> Show every ask as one dense row, projects as a persistent left rail, and expand exactly one row in place. You triage with your eyes before touching anything, and j/k/enter does the rest.</p>
+    <div class="tokens">
+      <span class="sw"><i style="background:#14161a"></i>#14161A bg</span>
+      <span class="sw"><i style="background:#101216"></i>#101216 rail</span>
+      <span class="sw"><i style="background:#d8dce3"></i>#D8DCE3 ink</span>
+      <span class="sw"><i style="background:#e8a13a"></i>#E8A13A waiting</span>
+      <span class="sw"><i style="background:#9d8cff"></i>#9D8CFF decision</span>
+    </div>
+    <p class="type-note">Type: system sans at 13px for content, SF Mono for every piece of metadata. Radius 6–7px. Spacing on a 4px grid, rows 40px tall. Dark by default; the amber dot is the only thing allowed to glow.</p>
+
+    <div class="mock"><div class="s1">
+      <div class="rail">
+        <h4>Projects</h4>
+        <div class="proj on"><span class="dot"></span><span class="n">All</span><span class="c">4</span></div>
+        <div class="proj"><span class="dot"></span><span class="n">homebase</span><span class="c">2</span></div>
+        <div class="proj"><span class="dot none"></span><span class="n">night-vision</span><span class="c">1</span></div>
+        <div class="proj"><span class="dot none"></span><span class="n">tempo</span><span class="c">1</span></div>
+      </div>
+      <div class="main">
+        <div class="bar"><b>4 open</b><span>1 waiting</span><span class="k"><kbd>j</kbd><kbd>k</kbd> move · <kbd>⏎</kbd> open · <kbd>a</kbd> answer</span></div>
+        <div class="row sel"><span class="st wait"></span><span class="t">Add the ProtonVPN credentials to the media stack</span><span class="badge blk">BLOCKER</span><span class="meta">homebase · claude</span><span class="age">4m</span></div>
+        <div class="open">
+          <p>qBittorrent will not start until the VPN container authenticates. Everything downstream is queued on this.</p>
+          <div class="fld"><label>OpenVPN user</label><input placeholder="paste it here"></div>
+          <div class="fld"><label>OpenVPN pass</label><input type="password" placeholder="stored as a reference"></div>
+          <span class="go">Answer &amp; wake</span>
+        </div>
+        <div class="row"><span class="st filed"></span><span class="t">Confirm the Jellyfin port stays on 8096</span><span class="badge blk">BLOCKER</span><span class="meta">homebase · claude</span><span class="age">22m</span></div>
+        <div class="row"><span class="st filed"></span><span class="t">Wind-down schedule for weekend nights</span><span class="badge dec">DECISION</span><span class="meta">night-vision · claude</span><span class="age">1h</span></div>
+        <div class="row"><span class="st filed"></span><span class="t">Telegram bot name for the div split</span><span class="badge dec">DECISION</span><span class="meta">tempo · hermes</span><span class="age">3h</span></div>
+      </div>
+    </div></div>
+    <p class="mock-cap">Rail = the project picker, always visible, waiting-dot per project. One row expanded; the other three stay one line each.</p>
+
+    <div class="cols">
+      <div><h3>Wins when</h3><ul>
+        <li>The queue regularly holds 8+ asks across 3+ projects.</li>
+        <li>You answer at a desk with a keyboard, herdr-adjacent.</li>
+        <li>You want the Unblock/Grill tabs gone: purpose becomes a badge, not a page split.</li>
+      </ul></div>
+      <div><h3>Tradeoffs</h3><ul>
+        <li>Worst of the three on a phone; the rail must collapse to a sheet.</li>
+        <li>Dense rows make long titles fight for space.</li>
+        <li>Dark chrome around secret inputs needs care to keep paste targets obvious.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ================= DECK ================= -->
+  <section class="sys">
+    <div class="sys-kicker">System 2</div>
+    <h2>Deck — one ask at a time</h2>
+    <p class="thesis"><strong>Thesis: stop making the human do the sequencing.</strong> The queue already knows what matters: gating first, then oldest. So show exactly one ask, full-width and calm, with the rest stacked underneath. Answer, and the next one slides up. The project picker is a pill in the header; the segmented meter shows how deep the deck is.</p>
+    <div class="tokens">
+      <span class="sw"><i style="background:#f7f2ea"></i>#F7F2EA paper</span>
+      <span class="sw"><i style="background:#fffdf9"></i>#FFFDF9 card</span>
+      <span class="sw"><i style="background:#2b2620"></i>#2B2620 ink</span>
+      <span class="sw"><i style="background:#b4530a"></i>#B4530A accent</span>
+      <span class="sw"><i style="background:#e2d9cb"></i>#E2D9CB rule</span>
+    </div>
+    <p class="type-note">Type: serif display (New York / Charter) for ask titles, sans for everything else, mono only for the progress counter. Radius 12–18px. Warm paper palette; feels like correspondence, not a dashboard. Phone-first.</p>
+
+    <div class="mock"><div class="s2">
+      <div class="top">
+        <span class="pick">homebase <span class="chev">▾</span></span>
+        <span class="prog">2 of 4</span>
+      </div>
+      <div class="meter"><i class="done"></i><i class="done"></i><i></i><i></i></div>
+      <div class="card">
+        <div class="who"><span class="wait">● waiting</span><span>claude · homebase · 4m</span></div>
+        <h5>Which storage pool should the media library land on?</h5>
+        <p class="why">The rebuild can point Jellyfin at either pool. This decides where 4TB of media lives, so it should be yours.</p>
+        <div class="choice">
+          <div class="opt rec"><span class="r"></span>StudioExt — fast, already mounted<span class="tag">RECOMMENDED</span></div>
+          <div class="opt"><span class="r"></span>NAS share — slower, survives the studio</div>
+        </div>
+        <div class="actions"><span class="primary">Answer &amp; next</span><span class="ghost">Send back</span><span class="ghost">Skip</span></div>
+      </div>
+      <div class="peek"></div>
+      <div class="peek2"></div>
+    </div></div>
+    <p class="mock-cap">One card owns the screen. The stacked edges below are the rest of the deck; the meter and "2 of 4" keep the end in sight.</p>
+
+    <div class="cols">
+      <div><h3>Wins when</h3><ul>
+        <li>Most answering happens on the phone from the tailnet URL.</li>
+        <li>Asks deserve real attention: grills, secrets, anything with steps.</li>
+        <li>You want finishing the queue to feel like inbox-zero, with a real end state.</li>
+      </ul></div>
+      <div><h3>Tradeoffs</h3><ul>
+        <li>No scanning: you cannot see ask 4 while answering ask 1.</li>
+        <li>Trusts the sort order completely; a bad ordering is felt immediately.</li>
+        <li>Batch actions (accept-all across asks) do not fit the model.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ================= BOARD ================= -->
+  <section class="sys">
+    <div class="sys-kicker">System 3</div>
+    <h2>Board — the control room</h2>
+    <p class="thesis"><strong>Thesis: the projects are the page.</strong> One lane per project, compact cards inside, the whole machine visible at once. You do not pick a project; you look at all of them and answer where the pile is deepest. Cheap decisions get one-tap quick answers right on the card; anything heavier expands in place.</p>
+    <div class="tokens">
+      <span class="sw"><i style="background:#eef1f5"></i>#EEF1F5 bg</span>
+      <span class="sw"><i style="background:#e4e8ee"></i>#E4E8EE lane</span>
+      <span class="sw"><i style="background:#1c2333"></i>#1C2333 ink</span>
+      <span class="sw"><i style="background:#f59e0b"></i>#F59E0B blocker</span>
+      <span class="sw"><i style="background:#7c6cf0"></i>#7C6CF0 decision</span>
+    </div>
+    <p class="type-note">Type: one sans throughout at 13px, mono for counts and ages. Radius 9–12px. Cool neutral field so the two status hues carry all the meaning. Lanes stack vertically on narrow screens, which quietly becomes a grouped list.</p>
+
+    <div class="mock"><div class="s3">
+      <div class="hd"><b>unblock</b><span class="sum">4 open across 3 projects · 1 waiting</span><span class="view">BY PROJECT ▾</span></div>
+      <div class="lanes">
+        <div class="lane">
+          <div class="lane-hd"><span class="nm">homebase</span><span class="ct">2</span><span class="warn">1 waiting</span></div>
+          <div class="card3 blk"><div class="t3">Add the ProtonVPN credentials to the media stack</div><div class="m3"><span>claude</span><span>4m</span></div><div class="quick"><span class="yes">Answer…</span></div></div>
+          <div class="card3 blk"><div class="t3">Confirm the Jellyfin port stays on 8096</div><div class="m3"><span>claude</span><span>22m</span></div><div class="quick"><span class="yes">Done ✓</span><span>Not yet</span></div></div>
+        </div>
+        <div class="lane">
+          <div class="lane-hd"><span class="nm">night-vision</span><span class="ct">1</span></div>
+          <div class="card3 dec"><div class="t3">Wind-down schedule for weekend nights</div><div class="m3"><span>claude</span><span>1h</span></div><div class="quick"><span class="yes">Accept 11pm</span><span>Change</span></div></div>
+        </div>
+        <div class="lane">
+          <div class="lane-hd"><span class="nm">tempo</span><span class="ct">1</span></div>
+          <div class="card3 dec"><div class="t3">Telegram bot name for the div split</div><div class="m3"><span>hermes</span><span>3h</span></div><div class="quick"><span class="yes">Accept @div_agent_bot</span><span>Change</span></div></div>
+        </div>
+      </div>
+    </div></div>
+    <p class="mock-cap">Every project at once. The amber/violet edge is the blocker/decision split; recommended answers become one-tap buttons.</p>
+
+    <div class="cols">
+      <div><h3>Wins when</h3><ul>
+        <li>Many agents run in parallel and the question is "where is the fleet stuck".</li>
+        <li>Most decisions are ratifications: accept the recommendation and move on.</li>
+        <li>The page doubles as a status wall you leave open on a monitor.</li>
+      </ul></div>
+      <div><h3>Tradeoffs</h3><ul>
+        <li>One-tap accept trades deliberation for speed; must_decide fields need to resist it visibly.</li>
+        <li>Lanes get cramped past 5 projects; needs lane collapse.</li>
+        <li>Deep asks (12 fields, secrets) still need a full expanded view, so it is two designs in one.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="sys">
+    <div class="sys-kicker">Picking</div>
+    <h2>How they differ, in one line each</h2>
+    <p class="thesis">Ledger optimizes for scanning, Deck for attention, Board for oversight. My read: Deck is the best match for how you actually answer (phone, a few at a time, gating first), with Ledger's project rail worth stealing for the desktop width. Say which one and I will build it into <code>web/</code>; the current tokens all live in <code>styles.css</code>, so a system swap is contained.</p>
+  </section>
+
+</div>
+</body>
+</html>

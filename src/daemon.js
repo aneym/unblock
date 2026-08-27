@@ -430,9 +430,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
 
     if (tail === '/api/queue' && req.method === 'GET') {
       const profile = url.searchParams.get('profile') || '*'
+      const project = url.searchParams.get('project') || undefined
       const asks = scopedAsk
         ? [scopedAsk]
-        : store.list({ profile, status: ['open', 'answered'] })
+        : store.list({ profile, project, status: ['open', 'answered'] })
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile), profile })
     }
 
@@ -522,6 +523,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const profile = url.searchParams.get('profile') || '*'
       const asks = store.list({
         profile,
+        project: url.searchParams.get('project') || undefined,
         status: parseStatuses(url.searchParams.get('status')),
         includeClosed: isTrue(url.searchParams.get('includeClosed')),
       })
@@ -615,7 +617,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     if (pathname === '/api/queue' && req.method === 'GET') {
       const profile = url.searchParams.get('profile') || '*'
       return sendJson(res, 200, {
-        asks: store.list({ profile }),
+        asks: store.list({ profile, project: url.searchParams.get('project') || undefined }),
         hidden: store.countHidden(profile),
         profile,
       })
