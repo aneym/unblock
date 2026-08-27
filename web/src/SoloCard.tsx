@@ -237,7 +237,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     ].filter(Boolean).join(' · ')
 
   return (
-    <article onKeyDown={onKeyDown} className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-5 py-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-9 sm:py-9', detected && 'opacity-75')}>
+    <article onKeyDown={onKeyDown} className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 py-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:py-8', detected && 'opacity-75')}>
       <AnimatePresence>{state === 'done' && <SuccessOverlay label={message} />}</AnimatePresence>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[12px] leading-5 text-[var(--faint)]">
         {ask.gating ? <span className="font-semibold text-[var(--accent)]">● waiting</span> : detected ? <span>detected</span> : <span>filed</span>}
@@ -259,12 +259,12 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
         <label htmlFor={`reply_${ask.ticket}`} className="mb-2 block text-[13.5px] font-semibold leading-5 text-[var(--ink)]">Anything else <span className="font-normal text-[var(--faint)]">· or why you're sending it back</span></label>
         <Textarea id={`reply_${ask.ticket}`} value={reply} placeholder="Add context the fields don't cover, or say what's wrong with this ask" disabled={isBusy} className="min-h-20" onChange={(event) => onReplyChange(event.target.value)} />
       </div>}
-      <div className="flex flex-wrap items-center gap-3 border-t border-[var(--rule)] pt-5">
+      <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-3 rounded-b-[var(--radius-lg)] border-t border-[var(--rule)] bg-[var(--surface)] px-4 py-4 sm:-mx-7 sm:px-7">
         {!detected && <>
           <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{ask.gating ? 'Answer & wake' : isDecision ? 'Submit & next' : 'Answer & next'}</Button>
           <Button variant="secondary" disabled={isBusy} title="Send the whole ask back unanswered — a note above goes with it" onClick={() => void sendBack()}>Send back</Button>
         </>}
-        {deferrable && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} onClick={onDefer}>Later</button>}
+        {deferrable && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} title="Skip for now — this card comes back at the end of the deck" onClick={onDefer}>Skip</button>}
         <span className={cn('min-w-0 text-[13px] leading-5 text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{statusHint}</span>
       </div>
     </article>

@@ -219,14 +219,14 @@ export default function App() {
 
   if (finished) {
     return (
-      <div className="mx-auto max-w-[600px] px-4 pt-16">
+      <div className="mx-auto max-w-[720px] px-4 pt-16">
         <BigState title="This link is finished" detail="Ask for a fresh one, or answer in the herdr pane." />
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-[600px] px-4 pb-24 pt-5 sm:px-5 sm:pt-8">
+    <div className="mx-auto max-w-[720px] px-4 pb-24 pt-5 sm:px-5 sm:pt-8">
       <header>
         <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] leading-none text-[var(--faint)]">
           <span className="text-[14px] font-semibold text-[var(--ink)]">unblock</span>
@@ -235,7 +235,7 @@ export default function App() {
           {VIEWER && <span className="ml-auto" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
         </div>
         <div className="flex items-center gap-3">
-          {(projects.length > 1 || activeProject) && (
+          {projects.length > 0 && (
             <ProjectPicker projects={projects} active={activeProject} openCount={open.length} onPick={setProjectPersist} />
           )}
           {total > 0 && remaining > 0 && (
@@ -280,10 +280,10 @@ export default function App() {
             <div aria-hidden className="flex flex-col items-center">
               <AnimatePresence>
                 {remaining > 1 && (
-                  <motion.div key="peek1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="h-3.5 w-[92%] rounded-b-[16px] border border-t-0 border-[var(--rule)] bg-[var(--surface2)]" />
+                  <motion.div key="peek1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="mt-1.5 h-4 w-[94%] rounded-t-[16px] border border-b-0 border-[var(--rule)] bg-[var(--surface)] shadow-[0_-1px_2px_rgba(60,45,20,.04)]" />
                 )}
                 {remaining > 2 && (
-                  <motion.div key="peek2" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="h-3 w-[84%] rounded-b-[14px] border border-t-0 border-[var(--rule)] bg-[var(--surface2)] opacity-70" />
+                  <motion.div key="peek2" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="h-3.5 w-[86%] rounded-t-[14px] border border-b-0 border-[var(--rule)] bg-[var(--surface2)]" />
                 )}
               </AnimatePresence>
             </div>
