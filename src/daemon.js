@@ -305,13 +305,11 @@ const store = new Store()
   }
 
   async function bounceAsk(ticket, reply) {
-  const note = optionalScrub(reply, 1000)
-  if (!note) {
-    const err = new Error('sending an ask back needs a note saying what is wrong with it')
-    err.status = 400
-    throw err
-  }
-  return { ask: store.bounce(ticket, note), complete: true, bounced: true }
+  // The note is optional. Requiring one greyed out the send-back button until
+  // the human wrote an essay, which made rejecting a bad ask harder than
+  // rubber-stamping it. A bounce with no note still tells the agent the ask
+  // itself was wrong.
+  return { ask: store.bounce(ticket, optionalScrub(reply, 1000)), complete: true, bounced: true }
 }
 
 /**
@@ -329,7 +327,21 @@ function scrubFieldContext(raw) {
   return out
 }
 
-async function answerAsk(ticket, values, reply, fieldContext) {
+/**
+ * Per-field send-backs typed by the human. Same trust boundary as field
+ * context: scrubbed here because it arrives outside validateAsk. An empty
+ * note survives as '' (the store turns it into a bare `true`).
+ */
+function scrubFieldBounce(raw) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const out = {}
+  for (const [name, note] of Object.entries(raw)) {
+    out[name] = typeof note === 'string' ? (optionalScrub(note, 600) ?? '') : ''
+  }
+  return out
+}
+
+async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     const ask = store.get(ticket)
     if (!ask) return null
     const records = []
@@ -362,7 +374,14 @@ async function answerAsk(ticket, values, reply, fieldContext) {
       refs,
       reply: optionalScrub(reply, 1000),
       fieldContext: scrubFieldContext(fieldContext),
+      fieldBounce: scrubFieldBounce(fieldBounce),
     })
+  }
+
+  /** The reply drafts alongside the fields; '' erases, undefined leaves it. */
+  function draftReply(body) {
+    if (typeof body.reply !== 'string') return undefined
+    return optionalScrub(body.reply, 1000) ?? ''
   }
 
   /**
@@ -425,13 +444,13 @@ async function answerAsk(ticket, values, reply, fieldContext) {
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        const updated = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context))
+        const updated = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
         emitQueue()
         return sendJson(res, 200, { ask: updated })
       }
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
@@ -518,7 +537,9 @@ async function answerAsk(ticket, values, reply, fieldContext) {
     ticket = routeTicket(pathname, '/answer')
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
-      const result = await answerAsk(ticket, body.values || {}, body.reply, body.field_context)
+      const result = body.bounce
+        ? await bounceAsk(ticket, body.reply)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       if (!result) return notFound(res)
       emitQueue()
       return sendJson(res, 200, result)
@@ -528,7 +549,7 @@ async function answerAsk(ticket, values, reply, fieldContext) {
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
       const body = await readJson(req)
-      const ask = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context))
+      const ask = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
       emitQueue()
       return sendJson(res, 200, { ask })
     }
@@ -604,14 +625,14 @@ async function answerAsk(ticket, values, reply, fieldContext) {
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
         ? await bounceAsk(body.ticket, body.reply)
-        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context)
+        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       emitQueue()
       return sendJson(res, 200, result)
     }
     if (pathname === '/api/draft' && req.method === 'POST') {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
-      const ask = store.saveDraft(body.ticket, body.values || {}, scrubFieldContext(body.field_context))
+      const ask = store.saveDraft(body.ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
       return sendJson(res, 200, { ask })
     }
 
@@ -685,8 +706,61 @@ async function answerAsk(ticket, values, reply, fieldContext) {
   return { server, port: actualPort, close }
 }
 
+/**
+ * Start, tolerating a daemon that is already up.
+ *
+ * The failure this ends: launchd (KeepAlive) and ad-hoc spawns (MCP, CLI,
+ * plugin) both start this file. Whoever loses the port used to crash with
+ * EADDRINUSE — and under launchd that meant a respawn every ThrottleInterval,
+ * forever, 8600+ crashes in a day of log spam. Now:
+ *
+ *   - an ad-hoc start that finds a healthy daemon exits 0 and gets out of
+ *     the way;
+ *   - a SUPERVISED start (launchd sets UNBLOCK_SUPERVISED=1) evicts the
+ *     squatter instead, because the launchd copy is the one with the
+ *     canonical env (public origin, trusted proxy) and must own the port.
+ */
+async function startResilient() {
+  const port = Number(process.env.UNBLOCK_PORT || 4488)
+  try {
+    return await startDaemon({})
+  } catch (error) {
+    if (error?.code !== 'EADDRINUSE') throw error
+
+    const healthy = await fetch(`http://${HOST}:${port}/api/health`, {
+      signal: AbortSignal.timeout(1500),
+    })
+      .then((res) => res.ok)
+      .catch(() => false)
+
+    if (process.env.UNBLOCK_SUPERVISED !== '1') {
+      if (healthy) {
+        console.log(`unblock daemon already running on ${port}; this start is redundant`)
+        process.exit(0)
+      }
+      throw error // port squatted by something that is not a healthy daemon
+    }
+
+    try {
+      const { pid } = JSON.parse(readFileSync(join(stateDir(), 'daemon.json'), 'utf8'))
+      if (pid && pid !== process.pid) process.kill(pid, 'SIGTERM')
+    } catch {
+      /* no pid file or already gone; the retry loop decides */
+    }
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 200))
+      try {
+        return await startDaemon({})
+      } catch (retryError) {
+        if (retryError?.code !== 'EADDRINUSE') throw retryError
+      }
+    }
+    throw error
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const daemon = await startDaemon({})
+  const daemon = await startResilient()
   const shutdown = async () => {
     await daemon.close()
     process.exit(0)

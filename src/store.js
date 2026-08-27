@@ -210,10 +210,16 @@ export class Store {
       if (a.is_ref) refs[a.field_name] = true
     }
     const draft = {}
+    let draftReply
+    let draftAt = 0
     for (const d of this.#db
-      .prepare('SELECT field_name, value_json FROM drafts WHERE ask_id = ?')
+      .prepare('SELECT field_name, value_json, updated_at FROM drafts WHERE ask_id = ?')
       .all(row.id)) {
-      draft[d.field_name] = JSON.parse(d.value_json)
+      if (d.updated_at > draftAt) draftAt = d.updated_at
+      // '__reply__' is a reserved row: the whole-ask free-text drafted alongside
+      // the fields, so a half-written reply survives a reload too.
+      if (d.field_name === '__reply__') draftReply = JSON.parse(d.value_json)
+      else draft[d.field_name] = JSON.parse(d.value_json)
     }
     const fieldContext = {}
     for (const n of this.#db
@@ -240,6 +246,10 @@ export class Store {
       answers,
       answer_is_ref: refs,
       draft,
+      draft_reply: draftReply,
+      // Lets a client decide whether its own locally-kept copy is newer than
+      // what the daemon has, instead of guessing.
+      draft_updated_at: draftAt || undefined,
       field_context: fieldContext,
       created_at: row.created_at,
       answered_at: row.answered_at ?? undefined,
@@ -314,7 +324,7 @@ export class Store {
     }
   }
 
-  answer(idOrTicket, values, { refs = {}, reply, fieldContext } = {}) {
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce } = {}) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (['collected', 'cancelled', 'expired'].includes(ask.status)) {
@@ -323,6 +333,18 @@ export class Store {
 
     const known = new Set(ask.fields.map((f) => f.name))
     const secretFields = new Set(ask.fields.filter((f) => f.type === 'secret').map((f) => f.name))
+
+    // Per-field send-back: the human rejected THIS question rather than the
+    // whole ask. It records as an answer-shaped sentinel {$bounce: note|true}
+    // so the ask can complete with a mix of real answers, skips and bounces —
+    // one question being wrong no longer holds the other eight hostage.
+    const bounce = {}
+    if (fieldBounce && typeof fieldBounce === 'object' && !Array.isArray(fieldBounce)) {
+      for (const [name, note] of Object.entries(fieldBounce)) {
+        if (!known.has(name)) continue
+        bounce[name] = typeof note === 'string' && note.trim() !== '' ? note : true
+      }
+    }
 
     // The invariant lives HERE, not in the transport, because there is more
     // than one transport. The daemon swaps a secret for a reference only when
@@ -333,6 +355,7 @@ export class Store {
     // field declared `secret` is written only as a reference, whatever the
     // caller claims.
     for (const name of Object.keys(values)) {
+      if (name in bounce) continue // a bounced field stores its sentinel, never its value
       if (!secretFields.has(name)) continue
       const record = values[name]
       const isReference =
@@ -355,8 +378,11 @@ export class Store {
                                                      created_at = excluded.created_at`,
     )
     for (const [name, value] of Object.entries(values)) {
-      if (!known.has(name)) continue
+      if (!known.has(name) || name in bounce) continue
       stmt.run(ask.id, name, JSON.stringify(value), refs[name] ? 1 : 0, at)
+    }
+    for (const [name, note] of Object.entries(bounce)) {
+      stmt.run(ask.id, name, JSON.stringify({ $bounce: note }), 0, at)
     }
     this.#saveFieldContext(ask.id, known, fieldContext, at)
     if (reply !== undefined) {
@@ -374,7 +400,7 @@ export class Store {
     return { ask: updated, complete: false }
   }
 
-  saveDraft(idOrTicket, values, fieldContext) {
+  saveDraft(idOrTicket, values, fieldContext, reply) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     const known = new Set(ask.fields.map((f) => f.name))
@@ -391,6 +417,15 @@ export class Store {
       const field = ask.fields.find((f) => f.name === name)
       if (field.type === 'secret') continue
       stmt.run(ask.id, name, JSON.stringify(value), at)
+    }
+    // The whole-ask reply drafts too, under a reserved name no field can use
+    // (field names are validated snake_case). Empty string is the erase signal.
+    if (typeof reply === 'string') {
+      if (reply.trim() === '') {
+        this.#db.prepare(`DELETE FROM drafts WHERE ask_id = ? AND field_name = '__reply__'`).run(ask.id)
+      } else {
+        stmt.run(ask.id, '__reply__', JSON.stringify(reply), at)
+      }
     }
     return this.get(ask.id)
   }
@@ -483,6 +518,17 @@ export class Store {
       this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ?`).run(at, id)
     }
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
+    // Prune long-closed rows so the queue file cannot grow without bound.
+    // Everything closed keeps a 30-day window for `unblock_check` stragglers
+    // and post-mortems; after that it is noise the hydrate loop pays for.
+    const cutoff = at - 30 * 24 * 60 * 60 * 1000
+    this.#db
+      .prepare(
+        `DELETE FROM asks
+          WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
+            AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`,
+      )
+      .run(cutoff)
     return [...stale, ...stranded].map(({ id }) => this.get(id))
   }
 

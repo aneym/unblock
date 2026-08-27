@@ -233,6 +233,13 @@ function answerText(ask) {
       // An explicit skip is a real response: they saw the question and chose
       // not to answer it. Do not re-ask; proceed without this value.
       lines.push(`${field.name}: (skipped — they chose not to answer)`)
+    } else if (value && typeof value === 'object' && '$bounce' in value) {
+      // They rejected this one question rather than answering it. The rest of
+      // the ask still stands; rework only this question before asking again,
+      // and do not treat its recommendation as accepted.
+      const why = typeof value.$bounce === 'string' ? ` — they said: ${value.$bounce}` : ''
+      lines.push(`${field.name}: SENT BACK, not answered${why}`)
+      lines.push('  Rework this question (or drop it); its recommendation was NOT accepted.')
     } else {
       lines.push(`${field.name}: ${JSON.stringify(value)}`)
     }
