@@ -82,6 +82,16 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [message, setMessage] = useState('')
   const [draftState, setDraftState] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle')
+  // Sending the whole ask back discards every answer on the card and cannot be
+  // undone, and it sits next to the primary button. One click arms it, a
+  // second sends it. Nothing else on the card is destructive enough to need
+  // this, and nothing else gets it.
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const timer = window.setTimeout(() => setArmed(false), 4000)
+    return () => window.clearTimeout(timer)
+  }, [armed])
   const draftTimer = useRef<number | undefined>(undefined)
   const latest = useRef({ values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced })
   const secretNames = useMemo(() => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)), [ask.fields])
@@ -236,6 +246,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       ? `still needs ${hardMissing.length} decisions`
       : ''
   const statusHint = message
+    || (armed ? 'this throws away every answer on this card' : '')
     || stillNeeds
     || [
       missing.length ? `${missing.length} unanswered ${missing.length === 1 ? 'field goes' : 'fields go'} back as skipped` : '',
@@ -268,7 +279,15 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-3 rounded-b-[var(--radius-lg)] border-t border-[var(--rule)] bg-[var(--surface)] px-4 py-4 sm:-mx-7 sm:px-7">
         {!detected && <>
           <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{ask.gating ? 'Answer & wake' : isDecision ? 'Submit & next' : 'Answer & next'}</Button>
-          <Button variant="secondary" disabled={isBusy} title="Send the whole ask back unanswered — a note above goes with it" onClick={() => void sendBack()}>Send back</Button>
+          <Button
+            variant="secondary"
+            disabled={isBusy}
+            title="Send the whole ask back unanswered. Every answer on this card is discarded; your note goes with it."
+            className={cn(armed && 'border-[var(--danger)] text-[var(--danger)]')}
+            onClick={() => (armed ? void sendBack() : setArmed(true))}
+          >
+            {armed ? 'Discard all & send back?' : 'Send back'}
+          </Button>
         </>}
         {deferrable && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} title="Skip for now — this card comes back at the end of the deck" onClick={onDefer}>Skip</button>}
         <span className={cn('min-w-0 text-[13px] leading-5 text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{statusHint}</span>
