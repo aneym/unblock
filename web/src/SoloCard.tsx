@@ -331,17 +331,18 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
         {showAll ? (
           unanswered.map((field) => <FieldControl key={field.name} field={field} ticket={ask.ticket} value={values[field.name]} note={notes[field.name]} bounceNote={bounced[field.name]} onChange={onChange} onNoteChange={onNoteChange} onBounce={onBounce} disabled={isBusy} />)
         ) : stepField ? (
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={stepField.name}
-              initial={reduced ? { opacity: 0 } : { opacity: 0, x: 22 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={reduced ? { opacity: 0 } : { opacity: 0, x: -22 }}
-              transition={{ duration: 0.16, ease: 'easeOut' }}
-            >
-              <FieldControl field={stepField} ticket={ask.ticket} value={values[stepField.name]} note={notes[stepField.name]} bounceNote={bounced[stepField.name]} onChange={onChange} onNoteChange={onNoteChange} onBounce={onBounce} disabled={isBusy} />
-            </motion.div>
-          </AnimatePresence>
+          // No exit animation on purpose. Waiting for the old question to
+          // leave held its text on screen while the segment bar and counter
+          // had already moved on, so the card visibly disagreed with itself.
+          // The new question mounts at once and animates in.
+          <motion.div
+            key={stepField.name}
+            initial={reduced ? { opacity: 0 } : { opacity: 0, x: 18 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <FieldControl field={stepField} ticket={ask.ticket} value={values[stepField.name]} note={notes[stepField.name]} bounceNote={bounced[stepField.name]} onChange={onChange} onNoteChange={onNoteChange} onBounce={onBounce} disabled={isBusy} />
+          </motion.div>
         ) : null}
       </div>
       {paged && reviewing && (
