@@ -5,7 +5,7 @@ import { Input } from './components/ui/input'
 import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
 import { Textarea } from './components/ui/textarea'
 import { cn } from './lib/utils'
-import type { Field, FieldValue } from './deck'
+import { isMissing, type Field, type FieldValue } from './deck'
 
 export function CopyBlock({ text }: { text: string }) {
   const [label, setLabel] = useState('copy')
@@ -66,20 +66,10 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
     </label>
   )
 
-  // A field sent back stops being a question. The control disappears; what is
-  // left is a note box for saying why, and a way to change your mind.
-  if (isBounced) {
-    return (
-      <div className="border-t border-[var(--rule)] py-5 first:border-t">
-        {label}
-        <div className="rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
-          <p className="text-[13.5px] leading-5 text-[var(--danger)]">Going back to the agent unanswered — it will rework this question.</p>
-          <Textarea value={bounceNote} placeholder="What's wrong with this question? (optional)" spellCheck={false} disabled={disabled} className="mt-2 min-h-14" onChange={(event) => onBounce(field.name, event.target.value)} />
-          <button type="button" className="mt-2 block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => onBounce(field.name, null)}>Keep the question</button>
-        </div>
-      </div>
-    )
-  }
+  // Sending a question back does not have to mean refusing to answer it. When
+  // something is typed, that value rides along as a draft and the control
+  // stays editable — "this is right, but come back to me before you use it".
+  const hasValue = !isMissing(value)
 
   let control
   if (field.type === 'secret') {
@@ -136,6 +126,24 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
   } else {
     control = <Input id={id} type="text" value={typeof value === 'string' ? value : ''} placeholder={field.placeholder || ''} disabled={disabled} onChange={(event) => onChange(field.name, event.target.value)} />
   }
+  if (isBounced) {
+    return (
+      <div className="border-t border-[var(--rule)] py-5 first:border-t">
+        {label}
+        {hasValue && control}
+        <div className="mt-2 rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
+          <p className="text-[13.5px] leading-5 text-[var(--danger)]">
+            {hasValue
+              ? 'Your answer goes with it as a draft. The agent will come back to you on this question before acting on it.'
+              : 'Going back unanswered — the agent will rework this question.'}
+          </p>
+          <Textarea value={bounceNote} placeholder={hasValue ? 'What should change before it uses this? (optional)' : "What's wrong with this question? (optional)"} spellCheck={false} disabled={disabled} className="mt-2 min-h-14" onChange={(event) => onBounce(field.name, event.target.value)} />
+          <button type="button" className="mt-2 block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => onBounce(field.name, null)}>{hasValue ? 'Never mind — take my answer as final' : 'Keep the question'}</button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="border-t border-[var(--rule)] py-5 first:border-t">
       {label}{control}
@@ -146,7 +154,7 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
       {field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">This one needs your decision.</p>}
       <div className="mt-2 flex flex-wrap gap-x-4">
         {!showNote && <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => setShowNote(true)}>Add context</button>}
-        <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={disabled} title="Reject just this question; the rest of your answers still go through" onClick={() => onBounce(field.name, '')}>Send back this question</button>
+        <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={disabled} title={hasValue ? 'Your answer still goes through, flagged for the agent to come back on' : 'Reject just this question; the rest of your answers still go through'} onClick={() => onBounce(field.name, '')}>{hasValue ? 'Send back with my answer' : 'Send back this question'}</button>
       </div>
       {showNote && <Textarea id={`${id}_ctx`} value={note ?? ''} placeholder="Context for this answer" spellCheck={false} disabled={disabled} className="mt-2 min-h-14" onChange={(event) => onNoteChange(field.name, event.target.value)} />}
     </div>

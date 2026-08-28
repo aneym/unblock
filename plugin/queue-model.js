@@ -1,20 +1,11 @@
+// Ordering is shared with the browser panel so the TUI and the page can never
+// disagree about which ask is next.
+export { sortAsks } from '../src/queue-model.js'
+
 const isFilled = (value) => {
   if (value === undefined || value === null || value === false || value === '') return false
   if (Array.isArray(value)) return value.length > 0
   return true
-}
-
-export function sortAsks(asks) {
-  const rank = (ask) => {
-    if (ask.origin?.detected === true) return 2
-    return ask.gating ? 0 : 1
-  }
-
-  return [...asks].sort((a, b) => {
-    const group = rank(a) - rank(b)
-    if (group !== 0) return group
-    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  })
 }
 
 export function missingFor(ask, values = {}) {

@@ -176,10 +176,9 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
 
   const submit = async () => {
     setState('sending'); setMessage('sending…')
-    const payload: Values = {}
-    for (const [name, value] of Object.entries(values)) {
-      if (!(name in bounced)) payload[name] = value
-    }
+    // Bounced fields keep their typed value: the store stores it beside the
+    // bounce note as a draft, so "right, but ask me again" is expressible.
+    const payload: Values = { ...values }
     for (const field of unanswered) {
       if (field.name in bounced) continue
       if (field.required && !field.must_decide && isMissing(payload[field.name])) payload[field.name] = null
@@ -229,15 +228,22 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     : undefined
   const isBusy = state === 'sending' || state === 'done'
   const bounceCount = Object.keys(bounced).length
+  // Field labels can be whole sentences, so naming three of them buries the
+  // bar in prose. Name one, count the rest.
+  const stillNeeds = hardMissing.length === 1
+    ? `still needs: ${hardMissing[0]}`
+    : hardMissing.length > 1
+      ? `still needs ${hardMissing.length} decisions`
+      : ''
   const statusHint = message
-    || (hardMissing.length ? `still needs: ${hardMissing.join(', ')}` : '')
+    || stillNeeds
     || [
       missing.length ? `${missing.length} unanswered ${missing.length === 1 ? 'field goes' : 'fields go'} back as skipped` : '',
       bounceCount ? `${bounceCount} ${bounceCount === 1 ? 'question goes' : 'questions go'} back for rework` : '',
     ].filter(Boolean).join(' · ')
 
   return (
-    <article onKeyDown={onKeyDown} className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 py-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:py-8', detected && 'opacity-75')}>
+    <article onKeyDown={onKeyDown} className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 pt-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:pt-8', detected && 'opacity-75')}>
       <AnimatePresence>{state === 'done' && <SuccessOverlay label={message} />}</AnimatePresence>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[12px] leading-5 text-[var(--faint)]">
         {ask.gating ? <span className="font-semibold text-[var(--accent)]">● waiting</span> : detected ? <span>detected</span> : <span>filed</span>}

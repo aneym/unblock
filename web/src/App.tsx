@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { api, FinishedError, VIEWER } from './lib/api'
-import { buildDeck, groupOf, sortAsks, type DeckItem, type QueueData } from './deck'
+import { selectDeck, type DeckItem, type QueueData } from './deck'
 import { SoloCard } from './SoloCard'
 import { GroupCard } from './GroupCard'
 import { cn } from './lib/utils'
@@ -152,21 +152,30 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  const open = useMemo(
-    () => sortAsks((data?.asks || []).filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))),
-    [data, doneTickets],
+  // Every ordering rule lives in the shared model, so the picker, the deck and
+  // the counter can never disagree about what is on screen.
+  const { items, projects, activeProject, current, remaining } = useMemo(
+    () => selectDeck({
+      asks: data?.asks || [],
+      project,
+      pinnedTicket: pinned,
+      deferredKeys: deferred,
+      doneTickets,
+    }),
+    [data, project, pinned, deferred, doneTickets],
   )
 
-  const projects = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const ask of open) {
-      const key = groupOf(ask)
-      counts.set(key, (counts.get(key) || 0) + 1)
+  const clearPin = () => {
+    setPinned(null)
+    if (window.location.hash.startsWith('#ask=')) {
+      history.replaceState(null, '', window.location.pathname + window.location.search)
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  }, [open])
-  const activeProject = project && projects.some(([name]) => name === project) ? project : null
+  }
+  // Choosing a project is an explicit instruction, so it drops the deep link
+  // that was holding the deck to one ask. Without this the picker changed and
+  // the card did not, which is what made the filter look broken.
   const setProjectPersist = (next: string | null) => {
+    clearPin()
     setProject(next)
     try {
       if (next) localStorage.setItem('ub_group', next)
@@ -174,37 +183,11 @@ export default function App() {
     } catch { /* ignore */ }
   }
 
-  // A deep-linked ask beats the project filter: following a link must never
-  // land on a page that silently hides its target.
-  const filtered = useMemo(() => {
-    const scoped = activeProject ? open.filter((ask) => groupOf(ask) === activeProject) : open
-    if (pinned && !scoped.some((ask) => ask.ticket === pinned)) {
-      const target = open.find((ask) => ask.ticket === pinned)
-      if (target) return [target, ...scoped]
-    }
-    return scoped
-  }, [open, activeProject, pinned])
-
-  const ordered = useMemo(() => {
-    const deck = buildDeck(filtered)
-    const pinnedItem = pinned ? deck.find((item) => item.asks.some((ask) => ask.ticket === pinned)) : undefined
-    const rest = deck.filter((item) => item !== pinnedItem)
-    const fresh = rest.filter((item) => !deferred.includes(item.key))
-    const later = deferred.map((key) => rest.find((item) => item.key === key)).filter(Boolean) as DeckItem[]
-    return [...(pinnedItem ? [pinnedItem] : []), ...fresh, ...later]
-  }, [filtered, deferred, pinned])
-
-  const current: DeckItem | undefined = ordered[0]
-  const remaining = ordered.length
   const doneHere = activeProject ? doneLog.filter((entry) => entry.project === activeProject).length : doneLog.length
   const total = doneHere + remaining
-  const position = Math.min(doneHere + 1, Math.max(total, 1))
 
   const unpinIfCurrent = (item: DeckItem) => {
-    if (pinned && item.asks.some((ask) => ask.ticket === pinned)) {
-      setPinned(null)
-      if (window.location.hash.startsWith('#ask=')) history.replaceState(null, '', window.location.pathname + window.location.search)
-    }
+    if (pinned && item.asks.some((ask) => ask.ticket === pinned)) clearPin()
   }
   const advance = (item: DeckItem) => {
     setDoneTickets((previous) => new Set([...previous, ...item.asks.map((ask) => ask.ticket)]))
@@ -216,6 +199,15 @@ export default function App() {
     setDeferred((previous) => [...previous.filter((key) => key !== item.key), item.key])
     unpinIfCurrent(item)
   }
+
+  // A card answered elsewhere (the herdr pane, another tab) leaves the deck on
+  // the next poll; drop its skip record so the list cannot grow forever.
+  useEffect(() => {
+    setDeferred((previous) => {
+      const alive = previous.filter((key) => items.some((item) => item.key === key))
+      return alive.length === previous.length ? previous : alive
+    })
+  }, [items])
 
   if (finished) {
     return (
@@ -236,10 +228,18 @@ export default function App() {
         </div>
         <div className="flex items-center gap-3">
           {projects.length > 0 && (
-            <ProjectPicker projects={projects} active={activeProject} openCount={open.length} onPick={setProjectPersist} />
+            <ProjectPicker
+              projects={projects}
+              active={activeProject}
+              openCount={projects.reduce((sum, [, count]) => sum + count, 0)}
+              onPick={setProjectPersist}
+            />
           )}
-          {total > 0 && remaining > 0 && (
-            <span className="ml-auto font-mono text-[13px] font-medium text-[var(--dim)]">{position} of {total}</span>
+          {remaining > 0 && (
+            // Cards left, not "N of M". Skipping moves a card without
+            // finishing it, and a position counter that sits still while the
+            // card changes reads as a bug.
+            <span className="ml-auto font-mono text-[13px] font-medium text-[var(--dim)]">{remaining} left</span>
           )}
         </div>
         <Meter done={doneHere} total={total} />
@@ -251,11 +251,38 @@ export default function App() {
         ) : !data ? (
           <div className="px-5 py-20 text-center text-[15px] text-[var(--dim)]">Loading the queue…</div>
         ) : (
-          <>
+          /**
+           * The stack. Each undealt card is a real layer BEHIND the live one,
+           * inset and pushed down so only its bottom lip shows. Rendering them
+           * as siblings underneath (the first attempt) read as two stray trays
+           * floating below the card, because a lip needs the card on top of it
+           * to be a lip at all.
+           */
+          <div className="relative">
+            <AnimatePresence>
+              {[2, 1].filter((depth) => remaining > depth).map((depth) => (
+                <motion.div
+                  key={`peek${depth}`}
+                  aria-hidden
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+                  style={{
+                    top: depth * 9,
+                    bottom: depth * -9,
+                    left: depth * 13,
+                    right: depth * 13,
+                  }}
+                  className="pointer-events-none absolute rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] shadow-[0_10px_24px_-20px_rgba(60,45,20,.4)]"
+                />
+              ))}
+            </AnimatePresence>
             <AnimatePresence mode="popLayout" initial={false}>
               {current ? (
                 <motion.div
                   key={current.key}
+                  className="relative z-10"
                   initial={reduced ? { opacity: 0 } : { y: 26, scale: 0.97, opacity: 0 }}
                   animate={{ y: 0, scale: 1, opacity: 1 }}
                   exit={reduced ? { opacity: 0 } : { y: -34, opacity: 0, rotate: -1.2 }}
@@ -277,17 +304,7 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-            <div aria-hidden className="flex flex-col items-center">
-              <AnimatePresence>
-                {remaining > 1 && (
-                  <motion.div key="peek1" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="mt-1.5 h-4 w-[94%] rounded-t-[16px] border border-b-0 border-[var(--rule)] bg-[var(--surface)] shadow-[0_-1px_2px_rgba(60,45,20,.04)]" />
-                )}
-                {remaining > 2 && (
-                  <motion.div key="peek2" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="h-3.5 w-[86%] rounded-t-[14px] border border-b-0 border-[var(--rule)] bg-[var(--surface2)]" />
-                )}
-              </AnimatePresence>
-            </div>
-          </>
+          </div>
         )}
       </main>
 

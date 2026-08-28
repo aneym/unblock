@@ -136,3 +136,61 @@ test('sweep prunes closed asks older than 30 days but keeps recent ones', () => 
     cleanup()
   }
 })
+
+test('a send-back keeps the answer typed beside it, as a draft', () => {
+  // "This is right, but come back to me before you use it" is the common
+  // shape. Discarding the typed value made Send back mean only one thing.
+  const { store, cleanup } = freshStore()
+  try {
+    const ask = store.create(decisionAsk(), normalizeOrigin({ agent: 'test' }))
+    const result = store.answer(
+      ask.ticket,
+      { strategy: 'expand', name: 'Hiring Theory', scope: 'small' },
+      { fieldBounce: { name: 'let me edit the wording first' } },
+    )
+    assert.deepEqual(result.ask.answers.name, {
+      $bounce: 'let me edit the wording first',
+      value: 'Hiring Theory',
+    })
+    assert.equal(result.ask.answers.strategy, 'expand', 'the other fields are untouched')
+    assert.equal(result.complete, true, 'a bounce still completes the ask')
+  } finally {
+    cleanup()
+  }
+})
+
+test('an empty send-back stores the bare sentinel, not an empty value', () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const ask = store.create(decisionAsk(), normalizeOrigin({ agent: 'test' }))
+    const result = store.answer(
+      ask.ticket,
+      { name: '   ', strategy: 'expand', scope: 'small' },
+      { fieldBounce: { name: 'wrong question' } },
+    )
+    assert.deepEqual(result.ask.answers.name, { $bounce: 'wrong question' })
+  } finally {
+    cleanup()
+  }
+})
+
+test('a bounced secret never keeps its value, typed or not', () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const body = validateAsk({
+      kind: 'park',
+      title: 'Need the key',
+      why: 'Deploy is blocked without it.',
+      fields: [{ name: 'api_key', type: 'secret' }],
+    })
+    const ask = store.create(body, normalizeOrigin({ agent: 'test' }))
+    const result = store.answer(
+      ask.ticket,
+      { api_key: 'sk-live-should-never-land' },
+      { fieldBounce: { api_key: 'wrong ask' } },
+    )
+    assert.deepEqual(result.ask.answers.api_key, { $bounce: 'wrong ask' })
+  } finally {
+    cleanup()
+  }
+})

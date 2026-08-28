@@ -342,6 +342,11 @@ export class Store {
     // whole ask. It records as an answer-shaped sentinel {$bounce: note|true}
     // so the ask can complete with a mix of real answers, skips and bounces —
     // one question being wrong no longer holds the other eight hostage.
+    //
+    // A bounce does NOT have to mean "unanswered". "This is right, but let me
+    // revise it before you use it" is the common case, so when a value was
+    // typed it rides along as {$bounce, value} rather than being thrown away.
+    // Secrets are the exception: a rejected secret is never kept.
     const bounce = {}
     if (fieldBounce && typeof fieldBounce === 'object' && !Array.isArray(fieldBounce)) {
       for (const [name, note] of Object.entries(fieldBounce)) {
@@ -386,7 +391,15 @@ export class Store {
       stmt.run(ask.id, name, JSON.stringify(value), refs[name] ? 1 : 0, at)
     }
     for (const [name, note] of Object.entries(bounce)) {
-      stmt.run(ask.id, name, JSON.stringify({ $bounce: note }), 0, at)
+      const supplied = values[name]
+      const isEmpty =
+        supplied === undefined ||
+        supplied === null ||
+        (typeof supplied === 'string' && supplied.trim() === '') ||
+        (Array.isArray(supplied) && supplied.length === 0)
+      const record =
+        isEmpty || secretFields.has(name) ? { $bounce: note } : { $bounce: note, value: supplied }
+      stmt.run(ask.id, name, JSON.stringify(record), 0, at)
     }
     this.#saveFieldContext(ask.id, known, fieldContext, at)
     if (reply !== undefined) {

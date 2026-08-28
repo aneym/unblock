@@ -131,7 +131,19 @@ def _answer_text(ask: Mapping[str, Any]) -> str:
         elif value is None:
             lines.append("%s: (skipped — they chose not to answer)" % name)
         elif isinstance(value, dict) and "$bounce" in value:
-            lines.append("%s: SENT BACK, not answered — %s" % (name, value.get("$bounce") or "no note"))
+            note = value.get("$bounce") or "no note"
+            if "value" in value:
+                # A bounce that carries an answer: use it as a draft, then
+                # re-ask with their note addressed before acting on it.
+                lines.append(
+                    "%s: %s — SENT BACK for rework — %s"
+                    % (name, json.dumps(value["value"]), note)
+                )
+                lines.append(
+                    "  Their value stands as a draft. Re-ask this question before you act on it."
+                )
+            else:
+                lines.append("%s: SENT BACK, not answered — %s" % (name, note))
         else:
             lines.append("%s: %s" % (name, json.dumps(value)))
         if contexts.get(name):

@@ -179,14 +179,23 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
     try {
       await Promise.all(item.asks.map((ask) => {
         const row = rows[ask.ticket]
-        if (row?.bounce !== undefined) {
-          return api('/api/answer', { ticket: ask.ticket, bounce: true, reply: row.bounce || row.reply || undefined })
-        }
+        const open = unansweredFields(ask)
         const payload: Values = {}
-        for (const field of unansweredFields(ask)) {
+        for (const field of open) {
           const value = row?.values[field.name]
           if (!isMissing(value)) payload[field.name] = value as FieldValue
-          else if (field.required && !field.must_decide) payload[field.name] = null
+        }
+        if (row?.bounce !== undefined) {
+          // Sending back with something typed keeps that answer as a draft
+          // beside the note. Only an untouched send-back means "unanswered".
+          if (Object.keys(payload).length === 0) {
+            return api('/api/answer', { ticket: ask.ticket, bounce: true, reply: row.bounce || row.reply || undefined })
+          }
+          const fieldBounce = Object.fromEntries(open.map((field) => [field.name, row.bounce as string]))
+          return api('/api/answer', { ticket: ask.ticket, values: payload, field_bounce: fieldBounce, reply: row.reply || undefined })
+        }
+        for (const field of open) {
+          if (isMissing(row?.values[field.name]) && field.required && !field.must_decide) payload[field.name] = null
         }
         return api('/api/answer', { ticket: ask.ticket, values: payload, reply: row?.reply || undefined })
       }))
@@ -208,7 +217,7 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
   }
 
   return (
-    <article onKeyDown={onKeyDown} className="relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 py-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:py-8">
+    <article onKeyDown={onKeyDown} className="relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 pt-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:pt-8">
       <AnimatePresence>{state === 'done' && <SuccessOverlay label={message} />}</AnimatePresence>
       <div className="flex items-baseline gap-2 font-mono text-[12px] leading-5 text-[var(--faint)]">
         <span className="text-[var(--dim)]">{item.project}</span>
@@ -219,6 +228,7 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
         {item.asks.map((ask) => {
           const row = rows[ask.ticket] || { values: {}, reply: '' }
           const isBounced = row.bounce !== undefined
+          const hasAnswer = unansweredFields(ask).some((field) => !isMissing(row.values[field.name]))
           return (
             <motion.section
               key={ask.ticket}
@@ -230,14 +240,9 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
                 <span className="font-mono text-[11.5px] text-[var(--faint)]">{ask.origin.agent || 'agent'} · {ago(ask.created_at)}</span>
               </div>
               <p className="mt-1 text-pretty text-[14px] leading-relaxed text-[var(--dim)]">{ask.why}</p>
-              {isBounced ? (
-                <div className="mt-3 rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
-                  <p className="text-[13.5px] leading-5 text-[var(--danger)]">Going back to the agent unanswered — it will rework this ask.</p>
-                  <Textarea value={row.bounce} placeholder="What's wrong with it? (optional)" spellCheck={false} disabled={isBusy} className="mt-2 min-h-12" onChange={(event) => update(ask.ticket, { bounce: event.target.value })} />
-                  <button type="button" className="mt-2 block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={isBusy} onClick={() => update(ask.ticket, { bounce: undefined })}>Keep it</button>
-                </div>
-              ) : (
-                <div className="mt-3 grid gap-3">
+              {/* The controls stay put when an ask is sent back: a typed
+                  answer rides along as a draft, so hiding it was a lie. */}
+              <div className="mt-3 grid gap-3">
                   {unansweredFields(ask).map((field) => (
                     <div key={field.name}>
                       {(unansweredFields(ask).length > 1 || field.label !== ask.title) && (
@@ -259,13 +264,29 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
                       {field.help && field.type !== 'confirm' && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]">{field.help}</p>}
                     </div>
                   ))}
-                  <div className="flex flex-wrap gap-x-4">
-                    {!row.noteOpen && <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={isBusy} onClick={() => update(ask.ticket, { noteOpen: true })}>Add context</button>}
-                    <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={isBusy} onClick={() => update(ask.ticket, { bounce: '' })}>Send back</button>
-                  </div>
-                  {row.noteOpen && <Textarea value={row.reply} placeholder="Context for this answer" spellCheck={false} disabled={isBusy} className="min-h-12" onChange={(event) => update(ask.ticket, { reply: event.target.value })} />}
+                  {!isBounced && (
+                    <div className="flex flex-wrap gap-x-4">
+                      {!row.noteOpen && <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={isBusy} onClick={() => update(ask.ticket, { noteOpen: true })}>Add context</button>}
+                      <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={isBusy} onClick={() => update(ask.ticket, { bounce: '' })}>
+                        {hasAnswer ? 'Send back with my answer' : 'Send back'}
+                      </button>
+                    </div>
+                  )}
+                  {row.noteOpen && !isBounced && <Textarea value={row.reply} placeholder="Context for this answer" spellCheck={false} disabled={isBusy} className="min-h-12" onChange={(event) => update(ask.ticket, { reply: event.target.value })} />}
+                  {isBounced && (
+                    <div className="rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
+                      <p className="text-[13.5px] leading-5 text-[var(--danger)]">
+                        {hasAnswer
+                          ? 'Your answer goes with it as a draft. The agent comes back to you before acting on it.'
+                          : 'Going back unanswered — the agent will rework this ask.'}
+                      </p>
+                      <Textarea value={row.bounce} placeholder="What should change? (optional)" spellCheck={false} disabled={isBusy} className="mt-2 min-h-12" onChange={(event) => update(ask.ticket, { bounce: event.target.value })} />
+                      <button type="button" className="mt-2 block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={isBusy} onClick={() => update(ask.ticket, { bounce: undefined })}>
+                        {hasAnswer ? 'Never mind — take my answer as final' : 'Keep it'}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
             </motion.section>
           )
         })}
@@ -274,7 +295,10 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
         <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{item.asks.length === 1 ? 'Answer & next' : 'Answer all & next'}</Button>
         {deferrable && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} title="Skip for now — this card comes back at the end of the deck" onClick={onDefer}>Skip</button>}
         <span className={cn('min-w-0 text-[13px] leading-5 text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>
-          {message || (hardMissing.length ? `still needs: ${hardMissing.join(', ')}` : summary())}
+          {message
+            || (hardMissing.length === 1 ? `still needs: ${hardMissing[0]}` : '')
+            || (hardMissing.length > 1 ? `still needs ${hardMissing.length} decisions` : '')
+            || summary()}
         </span>
       </div>
     </article>

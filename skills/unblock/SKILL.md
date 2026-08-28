@@ -29,6 +29,11 @@ a decision with recommendations. A decision may not ask for a `secret` or a
 `paste`: deliberation never touches credentials, and running a command to find
 something out is your job.
 
+## Presenting to the User
+
+- **Do not echo the questions:** When linking or notifying the user about an unblocked ask in chat, do NOT reiterate the questions, fields, or choice options. 
+- **Be minimal:** Simply present the authenticated link directly (e.g., `http://127.0.0.1:4488/u/...`) along with the briefest label or title so they can click and interact with the UI directly.
+
 ## Gating: do you stop?
 
 Separate axis from purpose. Either kind can be either.
@@ -81,6 +86,21 @@ falls back to guessing from workspace or repo.
 Every field gets its own optional context box, and the whole ask gets a
 free-text reply box. You declare neither. Expect per-field notes back in the
 answer (`their context: …`) and treat them as part of that field's answer.
+
+## Reading what comes back
+
+Four shapes, and they mean different things:
+
+| you get | it means |
+| --- | --- |
+| a value | answered; act on it |
+| `(skipped — they chose not to answer)` | a real response. Proceed; do not re-ask |
+| `SENT BACK, not answered` | the question was wrong. Rework it, do not repeat it |
+| a value **plus** `SENT BACK for rework` | the value is a draft. Use it, then re-ask with their note addressed before you commit |
+
+That last one is the common case on writing and planning asks: "this is
+roughly right, but show me before you use it." Treat their value as your new
+starting point, not as approval.
 
 ## Recommendations (decisions only)
 

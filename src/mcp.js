@@ -238,12 +238,19 @@ function answerText(ask) {
       // not to answer it. Do not re-ask; proceed without this value.
       lines.push(`${field.name}: (skipped — they chose not to answer)`)
     } else if (value && typeof value === 'object' && '$bounce' in value) {
-      // They rejected this one question rather than answering it. The rest of
-      // the ask still stands; rework only this question before asking again,
-      // and do not treat its recommendation as accepted.
+      // They rejected this one question rather than accepting it as asked. The
+      // rest of the ask still stands; rework only this question, and do not
+      // treat its recommendation as accepted.
       const why = typeof value.$bounce === 'string' ? ` — they said: ${value.$bounce}` : ''
-      lines.push(`${field.name}: SENT BACK, not answered${why}`)
-      lines.push('  Rework this question (or drop it); its recommendation was NOT accepted.')
+      if ('value' in value) {
+        // A bounce WITH an answer: "this is roughly right, but come back to me
+        // before you use it." Use the value, then re-ask before committing.
+        lines.push(`${field.name}: ${JSON.stringify(value.value)} — SENT BACK for rework${why}`)
+        lines.push('  Their value stands as a draft. Re-ask this question with their note addressed before you act on it.')
+      } else {
+        lines.push(`${field.name}: SENT BACK, not answered${why}`)
+        lines.push('  Rework this question (or drop it); its recommendation was NOT accepted.')
+      }
     } else {
       lines.push(`${field.name}: ${JSON.stringify(value)}`)
     }
