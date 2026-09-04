@@ -1,7 +1,7 @@
 # Handoff: Unblock agent wakeback
 
 Branch `fix/agent-wakeback`, worktree `/Users/aneyman/.herdr/worktrees/unblock/fix-agent-wakeback`.
-Commit: `COMMIT_HASH` (filled in below under "Commit").
+Commit: `bf080bc` (the fix), followed by a docs-only commit that records this hash.
 
 ## Incident
 
