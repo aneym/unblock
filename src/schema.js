@@ -325,6 +325,11 @@ export function normalizeOrigin(raw = {}) {
   return {
     agent: optionalStr(raw.agent, 'origin.agent', { max: 40 }) ?? 'unknown',
     session_id: optionalStr(raw.session_id, 'origin.session_id', { max: 200 }),
+    // The host's routing key for the same session, when it differs from the
+    // durable id (Hermes keys live TUI sessions by session_key and records
+    // them in state.db by session_id). Carried so a wake can find the session
+    // by whichever name the host answers to; never part of the agent key.
+    session_key: optionalStr(raw.session_key, 'origin.session_key', { max: 200 }),
     pane_id: optionalStr(raw.pane_id, 'origin.pane_id', { max: 200 }),
     tab_id: optionalStr(raw.tab_id, 'origin.tab_id', { max: 200 }),
     workspace_id: optionalStr(raw.workspace_id, 'origin.workspace_id', { max: 200 }),

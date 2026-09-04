@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from .hermes import unblock_cancel, unblock_check, unblock_file, unblock_park
+from . import wake
+from .hermes import unblock_cancel, unblock_check, unblock_file, unblock_park, _watcher
 
 ASK_SCHEMA = {
     "type": "object",
@@ -96,3 +97,12 @@ def register(ctx):
     )
     skill = Path(__file__).resolve().parent / "skills" / "unblock" / "SKILL.md"
     ctx.register_skill("unblock", skill, "Use native Unblock for human asks.")
+
+    # The wake watcher starts with the plugin, not with the first tool call,
+    # so a Hermes restarted after the human answered still finds the owed
+    # wake for the session it resumes. UNBLOCK_HERMES_WAKE=0 keeps it off.
+    wake.set_context(ctx)
+    try:
+        _watcher()
+    except Exception:
+        pass

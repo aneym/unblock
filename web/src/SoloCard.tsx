@@ -199,7 +199,10 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     try {
       const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values: payload, reply, field_context: notes, field_bounce: bounced })
       setState('done')
-      setMessage(output.complete ? ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent' : 'saved, still incomplete')
+      // A filed Hermes ask is woken by the daemon too, just not synchronously:
+      // the daemon owes the session a wake and its host claims it.
+      const woken = ask.gating || ask.origin.agent === 'hermes'
+      setMessage(output.complete ? woken ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent' : 'saved, still incomplete')
       if (output.complete) {
         clearLocal(ask.ticket)
         window.setTimeout(onFinished, 950)

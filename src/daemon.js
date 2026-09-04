@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { normalizeOrigin, optionalScrub, validateAsk, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { Store } from './store.js'
+import { agentKey, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -304,6 +304,20 @@ const store = new Store()
     for (const client of clients) client.write(message)
   }
 
+  /**
+   * A complete answer changes two things: the queue count, and, for a filed
+   * ask, the fact that some agent is now owed a wake. The SSE `wake` event
+   * carries only WHO is owed, never the answer; a host that hears it claims
+   * the wake over the authenticated API like everybody else.
+   */
+  const settle = (result) => {
+    emitQueue()
+    if (!result?.complete || result.ask?.kind !== 'file') return
+    const payload = { ticket: result.ask.ticket, agent_key: agentKey(result.ask.origin), origin: { agent: result.ask.origin.agent, session_id: result.ask.origin.session_id } }
+    const message = `event: wake\ndata: ${JSON.stringify(payload)}\n\n`
+    for (const client of clients) client.write(message)
+  }
+
   async function bounceAsk(ticket, reply) {
   // The note is optional. Requiring one greyed out the send-back button until
   // the human wrote an essay, which made rejecting a bad ask harder than
@@ -456,7 +470,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
       if (result.complete) store.burnLink(token)
-      emitQueue()
+      settle(result)
       return sendJson(res, 200, result)
     }
 
@@ -543,7 +557,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
         ? await bounceAsk(ticket, body.reply)
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       if (!result) return notFound(res)
-      emitQueue()
+      settle(result)
       return sendJson(res, 200, result)
     }
 
@@ -581,6 +595,40 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     if (req.method === 'GET' && pathname === '/api/pending') {
       const origin = normalizeOrigin(Object.fromEntries(url.searchParams))
       return sendJson(res, 200, { asks: store.pending(origin) })
+    }
+
+    // Wakes: the daemon's durable promise to tell the agent that filed an
+    // ask once it is answered. A host lists (no answers), claims for the exact
+    // sessions it can reach (a lease, with the answer), then acks: delivered
+    // collects the ask; failed releases the lease so the next claim retries.
+    if (req.method === 'GET' && pathname === '/api/wakes') {
+      const params = Object.fromEntries(url.searchParams)
+      const scoped = params.session_id || params.pane_id || params.agent
+      const origin = scoped ? normalizeOrigin(params) : null
+      return sendJson(res, 200, { wakes: store.listWakes(origin ? { agentKey: agentKey(origin) } : {}) })
+    }
+
+    if (req.method === 'POST' && pathname === '/api/wakes/claim') {
+      const body = await readJson(req)
+      const origin = normalizeOrigin(body.origin)
+      if (!origin.session_id && !origin.pane_id) {
+        return sendJson(res, 400, { error: 'origin.session_id or origin.pane_id is required to claim a wake' })
+      }
+      const leaseSeconds = Math.min(Math.max(Number(body.lease_seconds) || 60, 5), 600)
+      return sendJson(res, 200, store.claimWakes(origin, { leaseMs: leaseSeconds * 1000 }))
+    }
+
+    const wakeTicket = pathname.match(/^\/api\/wakes\/([^/]+)\/ack$/)
+    if (wakeTicket && req.method === 'POST') {
+      const body = await readJson(req)
+      const result = store.ackWake(decodeURIComponent(wakeTicket[1]), {
+        claimToken: typeof body.claim_token === 'string' ? body.claim_token : undefined,
+        delivered: body.delivered === true,
+        error: typeof body.error === 'string' ? body.error : undefined,
+      })
+      if (!result) return notFound(res)
+      emitQueue()
+      return sendJson(res, 200, result)
     }
 
     if (req.method === 'POST' && pathname === '/api/links') {
@@ -628,7 +676,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const result = body.bounce
         ? await bounceAsk(body.ticket, body.reply)
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
-      emitQueue()
+      settle(result)
       return sendJson(res, 200, result)
     }
     if (pathname === '/api/draft' && req.method === 'POST') {

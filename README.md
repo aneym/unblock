@@ -47,6 +47,15 @@ ask never interrupts anything, so you can answer them in any order. Answering
 the parked one wakes the agent, and it collects every filed answer that landed
 while it was away.
 
+A filed ask is woken too, just not synchronously. When it completes, the
+daemon records a durable *wake* owed to the exact session that filed it. A
+host that can reach that session (today: the Hermes plugin, for TUI, CLI and
+gateway sessions) claims the wake as a lease, hands the answer to the session
+as a message, and acks; the ack collects the ask. A failed delivery releases
+the lease and the daemon retries, so a host restarted between "answered" and
+"delivered" still gets told. `unblock_check` collecting first voids the wake,
+so an answer is never delivered twice.
+
 An agent that needs three things declares one park with three fields. It does
 not park three times, because it can only be stopped in one place.
 
@@ -151,6 +160,7 @@ src/mcp.js       MCP server: file / park / check / cancel
 web/             the answer page
 plugin/          thin herdr launcher / pane adapter
 hermes.py        native Hermes client for the standalone API
+wake.py          Hermes wake watcher: claims owed wakes, delivers into the session
 plugin.yaml      Hermes plugin manifest
 skills/unblock/  the discipline agents follow before parking
 ```

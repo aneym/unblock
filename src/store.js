@@ -32,6 +32,9 @@ function newTicket() {
 
 const nowMs = () => Date.now()
 
+/** How long the daemon keeps trying to wake an agent about a filed answer. */
+const WAKE_TTL_MS = 24 * 60 * 60 * 1000
+
 /** Agents are identified for the one-park-at-a-time rule by the most specific id they gave us. */
 function agentKey(origin) {
   return origin.session_id || origin.pane_id || `${origin.agent}:${origin.cwd || 'unknown'}`
@@ -132,6 +135,32 @@ export class Store {
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
+
+    // A wake is the daemon's durable promise to tell the agent that asked.
+    // It exists because a FILED ask has nobody waiting on it: the agent moved
+    // on, and before this the only way it ever learned of the answer was to
+    // call unblock_check by itself, which it never did. One row per ask, so
+    // two hosts can never both hold a live lease on it; a claim is a lease,
+    // so a delivery that dies mid-flight is retried instead of lost. That is
+    // at-least-once: a host that dies between delivering and acking gets the
+    // same wake again when the lease lapses.
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS wakes (
+        ask_id        TEXT PRIMARY KEY REFERENCES asks(id) ON DELETE CASCADE,
+        agent_key     TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        created_at    INTEGER NOT NULL,
+        expires_at    INTEGER NOT NULL,
+        claimed_at    INTEGER,
+        lease_until   INTEGER,
+        claim_token   TEXT,
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        delivered_at  INTEGER,
+        last_error    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS wakes_agent_idx ON wakes(agent_key, status);
+    `)
+    this.#addColumn('wakes', 'lease_until', 'INTEGER')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -412,9 +441,29 @@ export class Store {
     const updated = this.get(ask.id)
     if (updated.missing.length === 0 && updated.status === 'open') {
       this.#db.prepare(`UPDATE asks SET status = 'answered', answered_at = ? WHERE id = ?`).run(at, ask.id)
+      this.#promiseWake(updated, at)
       return { ask: this.get(ask.id), complete: true }
     }
     return { ask: updated, complete: false }
+  }
+
+  /**
+   * Promise a wake for a completed FILED ask.
+   *
+   * Parked asks get none: the agent is sitting in the park call polling for
+   * exactly this, and a second delivery through a wake would hand it the same
+   * answer twice. Filed asks are the ones with nobody listening.
+   */
+  #promiseWake(ask, at) {
+    if (ask.kind !== 'file') return
+    const ttl = ask.expires_at && ask.expires_at > at ? ask.expires_at - at : WAKE_TTL_MS
+    this.#db
+      .prepare(
+        `INSERT INTO wakes (ask_id, agent_key, status, created_at, expires_at)
+         VALUES (?, ?, 'pending', ?, ?)
+         ON CONFLICT(ask_id) DO NOTHING`,
+      )
+      .run(ask.id, agentKey(ask.origin), at, at + Math.max(ttl, WAKE_TTL_MS))
   }
 
   saveDraft(idOrTicket, values, fieldContext, reply) {
@@ -463,7 +512,135 @@ export class Store {
     this.#db
       .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
       .run(at, reply || null, ask.id)
+    this.#promiseWake(ask, at)
     return this.get(ask.id)
+  }
+
+  // --------------------------------------------------------------- wakes
+
+  #hydrateWake(row) {
+    return {
+      ask_id: row.ask_id,
+      agent_key: row.agent_key,
+      status: row.status,
+      attempts: row.attempts,
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+      claimed_at: row.claimed_at ?? undefined,
+      lease_until: row.lease_until ?? undefined,
+      delivered_at: row.delivered_at ?? undefined,
+      last_error: row.last_error ?? undefined,
+    }
+  }
+
+  /**
+   * Wakes still owed, without their answers. `agentKey` narrows to one
+   * agent; omitted, every owed wake is listed, but only as (ticket, agent_key,
+   * title) so a host process can see WHICH of its sessions to claim for
+   * without reading answers that belong to another session or profile.
+   */
+  listWakes({ agentKey: key } = {}) {
+    const rows = key
+      ? this.#db
+          .prepare(`SELECT * FROM wakes WHERE status = 'pending' AND agent_key = ? ORDER BY created_at ASC`)
+          .all(key)
+      : this.#db.prepare(`SELECT * FROM wakes WHERE status = 'pending' ORDER BY created_at ASC`).all()
+    const out = []
+    for (const row of rows) {
+      const ask = this.get(row.ask_id)
+      if (!ask) continue
+      out.push({
+        ...this.#hydrateWake(row),
+        ticket: ask.ticket,
+        title: ask.title,
+        ask_status: ask.status,
+        origin: { agent: ask.origin.agent, session_id: ask.origin.session_id, session_key: ask.origin.session_key },
+      })
+    }
+    return out
+  }
+
+  /**
+   * Lease every deliverable wake owed to EXACTLY this agent.
+   *
+   * A lease, not a hand-off: the row stays pending with a claim token, and if
+   * nobody acks within `leaseMs` the next claim gets it again. Retrying is the
+   * whole point — the originating process may be mid-restart when the human
+   * answers. Two hosts racing for one session cannot both win a live lease.
+   */
+  claimWakes(origin, { leaseMs = 60_000 } = {}) {
+    const key = agentKey(origin)
+    const at = nowMs()
+    // The lease length is the HOLDER's, stored on the row, never the next
+    // claimant's: a 5-second claimant must not walk off with a live
+    // 600-second lease. The update is conditional on the same expiry so the
+    // claim is atomic even if two stores ever share one file.
+    const rows = this.#db
+      .prepare(
+        `SELECT w.* FROM wakes w JOIN asks a ON a.id = w.ask_id
+          WHERE w.agent_key = ? AND w.status = 'pending' AND w.expires_at > ?
+            AND (w.lease_until IS NULL OR w.lease_until < ?)
+            AND a.status IN ('answered', 'bounced')
+          ORDER BY w.created_at ASC`,
+      )
+      .all(key, at, at)
+    const lease = this.#db.prepare(
+      `UPDATE wakes SET claimed_at = ?, lease_until = ?, claim_token = ?, attempts = attempts + 1
+        WHERE ask_id = ? AND status = 'pending' AND (lease_until IS NULL OR lease_until < ?)`,
+    )
+    const claimed = []
+    for (const row of rows) {
+      const token = randomBytes(12).toString('base64url')
+      const until = at + leaseMs
+      if (lease.run(at, until, token, row.ask_id, at).changes !== 1) continue
+      claimed.push({
+        ...this.#hydrateWake({ ...row, claimed_at: at, lease_until: until, attempts: row.attempts + 1 }),
+        claim_token: token,
+        ask: this.get(row.ask_id),
+      })
+    }
+    return {
+      wakes: claimed,
+      // How many filed asks this agent still has open, so a watcher knows
+      // whether there is anything left to wait for.
+      outstanding: this.#db
+        .prepare(`SELECT COUNT(*) AS n FROM asks WHERE agent_key = ? AND kind = 'file' AND status = 'open'`)
+        .get(key).n,
+    }
+  }
+
+  /**
+   * Settle a lease. `delivered` marks the wake done AND collects the ask,
+   * because a delivered wake carried the answer. A failure releases the lease
+   * so the next claim retries, and keeps the reason for the post-mortem.
+   * A wrong or stale token changes nothing: the lease moved on without you.
+   */
+  ackWake(idOrTicket, { claimToken, delivered, error } = {}) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return null
+    const row = this.#db.prepare('SELECT * FROM wakes WHERE ask_id = ?').get(ask.id)
+    if (!row) return null
+    if (row.status !== 'pending') return { wake: this.#hydrateWake(row), ask }
+    if (!claimToken || row.claim_token !== claimToken) {
+      const err = new Error('wake lease is not yours')
+      err.code = 'WAKE_LEASE_MISMATCH'
+      err.status = 409
+      throw err
+    }
+    const at = nowMs()
+    if (delivered) {
+      this.#db
+        .prepare(`UPDATE wakes SET status = 'delivered', delivered_at = ?, last_error = NULL WHERE ask_id = ?`)
+        .run(at, ask.id)
+      const collected = ['answered', 'bounced'].includes(ask.status) ? this.collect(ask.id) : ask
+      return { wake: this.#hydrateWake(this.#db.prepare('SELECT * FROM wakes WHERE ask_id = ?').get(ask.id)), ask: collected }
+    }
+    this.#db
+      .prepare(
+        `UPDATE wakes SET claimed_at = NULL, lease_until = NULL, claim_token = NULL, last_error = ? WHERE ask_id = ?`,
+      )
+      .run(error ? String(error).slice(0, 600) : null, ask.id)
+    return { wake: this.#hydrateWake(this.#db.prepare('SELECT * FROM wakes WHERE ask_id = ?').get(ask.id)), ask }
   }
 
   /** The agent picked up its answers. */
@@ -473,7 +650,14 @@ export class Store {
     this.#db
       .prepare(`UPDATE asks SET status = 'collected', collected_at = ? WHERE id = ?`)
       .run(nowMs(), ask.id)
+    // The agent has the answer in hand, whichever door it came through. An
+    // unblock_check that beats the wake settles it: no second delivery.
+    this.#voidWake(ask.id)
     return this.get(ask.id)
+  }
+
+  #voidWake(askId) {
+    this.#db.prepare(`UPDATE wakes SET status = 'void' WHERE ask_id = ? AND status = 'pending'`).run(askId)
   }
 
   /** Everything this agent can be told right now: its answered asks, filed or parked. */
@@ -487,6 +671,7 @@ export class Store {
     this.#db
       .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
       .run(nowMs(), note ?? null, ask.id)
+    this.#voidWake(ask.id)
     return this.get(ask.id)
   }
 
@@ -535,6 +720,11 @@ export class Store {
       this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ?`).run(at, id)
     }
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
+    // A wake nobody could deliver in a day is stale, not owed. The answer
+    // itself stays on the ask, collectable by ticket like any other.
+    this.#db
+      .prepare(`UPDATE wakes SET status = 'expired' WHERE status = 'pending' AND expires_at < ?`)
+      .run(at)
     // Prune long-closed rows so the queue file cannot grow without bound.
     // Everything closed keeps a 30-day window for `unblock_check` stragglers
     // and post-mortems; after that it is noise the hydrate loop pays for.

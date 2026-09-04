@@ -17,6 +17,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+try:  # loaded by Hermes as the `unblock` package
+    from . import wake as _wake
+except ImportError:  # imported flat, as the tests do
+    import wake as _wake  # type: ignore[no-redef]
+
 HOST = "127.0.0.1"
 DEFAULT_PORT = 4488
 
@@ -64,10 +69,40 @@ def _origin() -> Dict[str, Any]:
         "session_id": _session_env("HERMES_SESSION_ID"),
         "cwd": os.getcwd(),
     }
+    # Hermes keys a live TUI session by session_key and records it in
+    # state.db by session_id. A wake needs whichever name the host answers
+    # to, so both travel; only session_id identifies the agent to the queue.
+    key = _session_env("HERMES_SESSION_KEY")
+    if key and key != origin["session_id"]:
+        origin["session_key"] = key
     profile = _session_env("HERMES_SESSION_PROFILE")
     if profile:
         origin["profiles"] = [profile]
     return {key: value for key, value in origin.items() if value not in (None, "", [])}
+
+
+def _result(payload: Mapping[str, Any]) -> str:
+    """Hermes accepts only a string from a tool handler.
+
+    The registry rejects a dict outright (`tool_result_contract`), which is
+    how `unblock_file` filed a ticket the agent never heard about. JSON keeps
+    the structure for the model while satisfying the contract.
+    """
+
+    return json.dumps(dict(payload), ensure_ascii=False)
+
+
+def _watcher() -> "_wake.WakeWatcher":
+    return _wake.watcher(_api, _answer_text)
+
+
+def _arm_current_session() -> None:
+    """Make sure the wake watcher is listening for this session's answers."""
+
+    try:
+        _watcher().arm(_origin())
+    except Exception:  # never let the watcher break a tool call
+        pass
 
 
 def _api(path: str, body: Optional[Mapping[str, Any]] = None, method: Optional[str] = None) -> Any:
@@ -92,7 +127,7 @@ def _api(path: str, body: Optional[Mapping[str, Any]] = None, method: Optional[s
             detail = None
         raise RuntimeError(detail or "Unblock API returned HTTP %s" % error.code) from error
     except OSError as error:
-        raise RuntimeError(
+        raise _wake.DaemonUnavailable(
             "Unblock daemon is unavailable. Start the standalone service with "
             "`node bin/unblock.js daemon start`."
         ) from error
@@ -153,15 +188,20 @@ def _answer_text(ask: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def unblock_file(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+def unblock_file(args: Mapping[str, Any], **_kwargs: Any) -> str:
     """File a nonblocking ask in the canonical Unblock queue."""
 
     result = _create("file", args)
-    result["message"] = "Filed %s. Keep working; call unblock_check later." % result["ticket"]
-    return result
+    _arm_current_session()
+    result["message"] = (
+        "Filed %s. Keep working. When it is answered the answer arrives in this "
+        "session as an [unblock] message; unblock_check also collects it."
+        % result["ticket"]
+    )
+    return _result(result)
 
 
-def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> str:
     """File a gating ask and wait until the user answers it in Unblock."""
 
     created = _create("park", args)
@@ -171,45 +211,54 @@ def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
     while time.monotonic() < deadline:
         current = _api("/asks/" + urllib.parse.quote(ticket))
         if current.get("status") in ("answered", "bounced"):
+            # Render before collecting: a collect that succeeds and a result
+            # that is then lost would strand the answer as "collected".
+            message = _answer_text(current)
             collected = _api(
                 "/asks/%s/collect" % urllib.parse.quote(ticket), {}, method="POST"
             )["ask"]
-            return {
-                "ticket": ticket,
-                "url": created["url"],
-                "ask": collected,
-                "message": _answer_text(collected),
-            }
+            _arm_current_session()
+            return _result(
+                {"ticket": ticket, "url": created["url"], "ask": collected, "message": message}
+            )
         if current.get("status") in ("cancelled", "expired", "orphaned"):
             raise RuntimeError("ask %s is %s" % (ticket, current["status"]))
         time.sleep(3)
     raise RuntimeError("timed out waiting for %s" % ticket)
 
 
-def unblock_check(_args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+def unblock_check(_args: Mapping[str, Any], **_kwargs: Any) -> str:
     """Collect answered filed asks owned by the current Hermes session."""
 
     query = urllib.parse.urlencode(_origin(), doseq=True)
     pending = _api("/pending?" + query).get("asks", [])
     collected: List[Dict[str, Any]] = []
+    messages: List[str] = []
     for ask in pending:
+        # Same order as park: the text exists before the daemon forgets the
+        # answer is uncollected. Collecting also voids the pending wake, so
+        # the answer is never delivered twice.
+        messages.append(_answer_text(ask))
         body = _api(
             "/asks/%s/collect" % urllib.parse.quote(ask["ticket"]), {}, method="POST"
         )
         collected.append(body["ask"])
-    return {
-        "asks": collected,
-        "message": "No answered requests are waiting."
-        if not collected
-        else "\n\n".join(_answer_text(ask) for ask in collected),
-    }
+    _arm_current_session()
+    return _result(
+        {
+            "asks": collected,
+            "message": "No answered requests are waiting."
+            if not collected
+            else "\n\n".join(messages),
+        }
+    )
 
 
-def unblock_cancel(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+def unblock_cancel(args: Mapping[str, Any], **_kwargs: Any) -> str:
     ticket = str(args["ticket"])
     body = _api(
         "/asks/%s/cancel" % urllib.parse.quote(ticket),
         {"note": args.get("note")},
         method="POST",
     )
-    return {"ask": body["ask"], "message": "Cancelled %s." % ticket}
+    return _result({"ask": body["ask"], "message": "Cancelled %s." % ticket})

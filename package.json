@@ -24,6 +24,7 @@
     "plugin.yaml",
     "__init__.py",
     "hermes.py",
+    "wake.py",
     "skills/",
     "herdr-plugin.toml",
     "README.md"
