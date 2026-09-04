@@ -1,7 +1,7 @@
 # Handoff: Unblock agent wakeback
 
 Branch `fix/agent-wakeback`, worktree `/Users/aneyman/.herdr/worktrees/unblock/fix-agent-wakeback`.
-Commit: `bf080bc` (the fix), followed by a docs-only commit that records this hash.
+Commits: `bf080bc` (the fix), `d980fe0` (handoff hash), and a third commit adding the upgrade backfill; `git log --oneline -3` on the branch lists them.
 
 ## Incident
 
@@ -58,7 +58,7 @@ Two, and each alone would have lost the answer.
 
 `src/store.js`
 
-- Table `wakes(ask_id PK → asks.id ON DELETE CASCADE, agent_key, status pending|delivered|void|expired, created_at, expires_at, claimed_at, lease_until, claim_token, attempts, delivered_at, last_error)`. Created with `CREATE TABLE IF NOT EXISTS`, so an existing `queue.db` migrates on open. The lease expiry is stored on the row (`lease_until`, the holder's lease), and the claim `UPDATE` is conditional on it, so a later claimant with a shorter lease cannot take a live lease and two stores on one file cannot both win.
+- Table `wakes(ask_id PK → asks.id ON DELETE CASCADE, agent_key, status pending|delivered|void|expired, created_at, expires_at, claimed_at, lease_until, claim_token, attempts, delivered_at, last_error)`. Created with `CREATE TABLE IF NOT EXISTS`, so an existing `queue.db` migrates on open, and the migration backfills a pending wake (fresh 24 h expiry) for every filed ask already sitting `answered` or `bounced`, which is the incident class; the insert is `ON CONFLICT DO NOTHING`, so every open may run it. The lease expiry is stored on the row (`lease_until`, the holder's lease), and the claim `UPDATE` is conditional on it, so a later claimant with a shorter lease cannot take a live lease and two stores on one file cannot both win.
 - `#promiseWake(ask, at)` from `answer()` (on completion) and `bounce()`; file kind only.
 - `listWakes({agentKey?})`, `claimWakes(origin, {leaseMs})` (returns wakes with the collected ask and `outstanding`, the count of still-open filed asks for that session), `ackWake(ticket, {claimToken, delivered, error})`.
 - `collect()` and `cancel()` void a pending wake. `sweep()` expires wakes past `expires_at`.
@@ -111,7 +111,7 @@ Two, and each alone would have lost the answer.
 
 ## Tests
 
-`node --test test/*.test.js`: 67 pass, 0 fail (59 before, 8 new in `test/wake.test.js`).
+`node --test test/*.test.js`: 68 pass, 0 fail (59 before, 9 new in `test/wake.test.js`, including the upgrade backfill on a `queue.db` with no `wakes` table).
 
 `test/wake.test.js` covers: a filed answer creates one wake keyed to the exact session and the list never carries answers; another session lists and claims nothing; claim is a lease (second claimer gets nothing, wrong token is 409, failed ack releases with `last_error`, retry increments `attempts`, delivered ack collects the ask, re-ack is a no-op); bounce owes a wake; `collect` first voids the wake; park never gets a wake while `/api/pending` still serves it; cancel withdraws the wake; `outstanding` is per session; claim without identity is 400; SSE `wake` event names the ticket and agent key and carries no answer.
 
@@ -122,7 +122,7 @@ Not tested end to end: a real tui_gateway process receiving `prompt.submit` from
 ## Rollout
 
 1. Merge `fix/agent-wakeback` into `main` in `/Volumes/StudioExt/repos/personal/unblock`. The live Hermes plugin is a symlink to that checkout (`~/.hermes/profiles/bot/plugins/unblock`), so the merge is the plugin deploy.
-2. Restart the Unblock daemon (`bin/unblock-restart.sh` or the launchd job). The `wakes` table is created on open; no data migration.
+2. Restart the Unblock daemon (`bin/unblock-restart.sh` or the launchd job). The `wakes` table is created on open and filed asks already `answered` or `bounced` are backfilled with a pending wake, so they are delivered once their Hermes host restarts with the new plugin.
 3. Restart Hermes surfaces that should wake (the TUI/desktop gateway and any `hermes chat`) so they load the new plugin code. Until then the old handlers keep returning dicts and keep failing.
 4. Optional, for messaging-gateway sessions (Slack, Telegram, photon): set `plugins.entries.unblock.allow_gateway_injection: true` in the profile's `config.yaml`. Without it those sessions stay collectable by `unblock_check` but are not woken.
 5. Optional: `npm run web:build` to ship the status-copy tweak in the panel.
@@ -132,10 +132,11 @@ Verify after rollout: file an ask from a TUI session, answer it in the UI, and c
 ## Remaining risk
 
 - At-least-once, not exactly-once, across a crash between deliver and ack: if the host dies in that window the lease expires and the same answer is delivered again. The message names the ticket, so a repeat is recognisable.
+- The opposite window is also open, and narrower: `prompt.submit` returns `streaming` once the turn is accepted in memory (`methods_prompt.py` ~930 and ~1061), and the durable crash marker is written by the turn's worker thread a few milliseconds later (`server.py` ~13254 to 13306). A tui_gateway crash inside that gap, after the watcher's `delivered` ack, leaves the ask `collected` with no turn to show for it. The answer is not destroyed: `GET /api/asks/<ticket>` still returns it, and Hermes' own interrupted-turn auto-continue does not apply because no marker exists. Closing this would need the plugin to wait for the marker, which is deeper coupling to tui_gateway internals than the rest of this change; recorded rather than built.
+- `ub_58vs3r` sits `collected`, so the backfill does not touch it; the answer is readable at `GET /api/asks/ub_58vs3r`. Filed asks still `answered` at upgrade time do get a wake.
 - tui_gateway internals (`_sessions`, `dispatch`, `prompt.submit` params) are private names. An upstream rename breaks TUI delivery silently: the watcher then reports the session unreachable and the answer waits for `unblock_check`. Worth a canary after each Hermes update.
 - Gateway sessions need the config grant above; until set, no wake for Slack/Telegram-originated asks. A second channel exists for gateway-hosted sessions only: the Hermes API server (`gateway/platforms/api_server.py`, `/v1/chat/completions` with `X-Hermes-Session-Id`, bearer `API_SERVER_KEY`), which `gateway/wake.py` itself uses. It could let the daemon wake cross-process without the plugin thread, but it does not reach TUI sessions, so it is not used here.
 - Why in-process and not an RPC: a tui_gateway has no inbound listener. Its stdio JSON-RPC belongs to the TUI frontend and `HERMES_TUI_SIDECAR_URL` is publish-only (`tui_gateway/event_publisher.py`). `ctx.inject_message` cannot reach a TUI session either: `_cli_ref` is set only by `hermes chat` (`cli.py:18441`) and the gateway injector is installed only by the main `GatewayRunner` (`gateway/run.py:21070`). The plugin thread inside the tui_gateway process is the only path to that session.
 - TUI sessions running under compute-host isolation (`_session_uses_compute_host` in `tui_gateway/server.py`) load plugins in a child process. That child has no `tui_gateway.server` in `sys.modules`, so the watcher reports the session unreachable and the answer waits for `unblock_check`. The incident session was a plain TUI session, which is covered.
 - The `web/dist` copy change is not built here.
 - Any holder of the daemon bearer secret can claim wakes for any `session_id` it names. That is the daemon's existing trust model (`/api/pending` and `/api/asks/:t/collect` already work this way): the secret is a 0600 file for local clients, and the browser never sees it. Not changed here.
-- `ub_58vs3r` itself is already `collected`; its answer is still readable at `GET /api/asks/ub_58vs3r`, but no wake will be generated for it retroactively.

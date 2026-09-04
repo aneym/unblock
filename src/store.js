@@ -161,6 +161,17 @@ export class Store {
       CREATE INDEX IF NOT EXISTS wakes_agent_idx ON wakes(agent_key, status);
     `)
     this.#addColumn('wakes', 'lease_until', 'INTEGER')
+    // Upgrade backfill: a filed ask answered before this table existed is
+    // exactly the incident this fixes, and it is still sitting uncollected.
+    // Owe it a wake too. Idempotent, so every open may run it.
+    this.#db
+      .prepare(
+        `INSERT INTO wakes (ask_id, agent_key, status, created_at, expires_at)
+         SELECT id, agent_key, 'pending', COALESCE(answered_at, ?), ?
+           FROM asks WHERE kind = 'file' AND status IN ('answered', 'bounced')
+         ON CONFLICT(ask_id) DO NOTHING`,
+      )
+      .run(nowMs(), nowMs() + WAKE_TTL_MS)
   }
 
   /** Additive column, so an existing queue file keeps working. */

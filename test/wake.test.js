@@ -194,4 +194,34 @@ test('wake contract: filed answers become a durable, single-lease wake for the o
   await daemon.close()
 })
 
+test('upgrade backfill: a filed ask answered before the wakes table existed is owed a wake', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const { Store } = await import('../src/store.js')
+  const { normalizeOrigin, validateAsk } = await import('../src/schema.js')
+  const dbPath = join(stateDir, 'backfill.db')
+
+  const first = new Store(dbPath)
+  const origin = normalizeOrigin({ agent: 'hermes', session_id: 'old-session' })
+  const filed = first.create(validateAsk({ kind: 'file', title: 'Old answer', why: 'Answered before the upgrade.', fields: [field] }), origin)
+  first.answer(filed.id, { answer: 'yes' })
+  const parked = first.create(validateAsk({ kind: 'park', title: 'Old park', why: 'Answered before the upgrade.', fields: [field] }), origin)
+  first.answer(parked.id, { answer: 'go' })
+  first.close()
+
+  // Simulate the pre-upgrade file: answered asks, no wake rows at all.
+  const raw = new DatabaseSync(dbPath)
+  raw.exec('DROP TABLE wakes')
+  raw.close()
+
+  const upgraded = new Store(dbPath)
+  const owed = upgraded.listWakes({ agentKey: 'old-session' })
+  assert.deepEqual(owed.map((w) => w.ticket), [filed.ticket])
+  assert.ok(owed[0].expires_at > Date.now() + 23 * 60 * 60 * 1000)
+  // Reopening again does not double up.
+  upgraded.close()
+  const again = new Store(dbPath)
+  assert.equal(again.listWakes({ agentKey: 'old-session' }).length, 1)
+  again.close()
+})
+
 test.after(() => rmSync(stateDir, { recursive: true, force: true }))
