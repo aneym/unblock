@@ -70,18 +70,36 @@ function keychainAvailable() {
 export class SecretStore {
   #backend
   #vault
+  #resolving
 
   constructor({ backend = 'auto', vault = process.env.UNBLOCK_OP_VAULT || 'Private' } = {}) {
     this.#backend = backend
     this.#vault = vault
   }
 
-  /** Resolve `auto` once, at first use. */
-  async backend() {
-    if (this.#backend !== 'auto') return this.#backend
-    if (await opAvailable()) this.#backend = 'op'
-    else if (keychainAvailable()) this.#backend = 'keychain'
-    else this.#backend = 'env'
+  /**
+   * Resolve `auto` once, at first use.
+   *
+   * The in-flight probe is shared: every caller that arrives while `op whoami`
+   * is still deciding waits on the SAME promise. Before this, each concurrent
+   * call ran its own probe, so a daemon whose startup kicked one off still
+   * made the first /api/health wait the full eight seconds.
+   */
+  backend() {
+    if (this.#backend !== 'auto') return Promise.resolve(this.#backend)
+    if (!this.#resolving) {
+      this.#resolving = (async () => {
+        if (await opAvailable()) this.#backend = 'op'
+        else if (keychainAvailable()) this.#backend = 'keychain'
+        else this.#backend = 'env'
+        return this.#backend
+      })()
+    }
+    return this.#resolving
+  }
+
+  /** The backend if it is already known, else 'auto' (still probing). */
+  backendIfResolved() {
     return this.#backend
   }
 

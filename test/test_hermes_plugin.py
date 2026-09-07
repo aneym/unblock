@@ -68,6 +68,14 @@ class FakeQueueHandler(BaseHTTPRequestHandler):
             ask = self.asks[ticket]
             ask["status"] = "collected"
             return self._json(200, {"ask": ask})
+        if self.path.endswith("/cancel"):
+            ticket = self.path.split("/")[3]
+            ask = self.asks[ticket]
+            if ask["status"] != "open":
+                return self._json(409, {"error": "not open", "code": "ASK_NOT_OPEN", "status": ask["status"]})
+            ask["status"] = "cancelled"
+            ask["note"] = body.get("note")
+            return self._json(200, {"ask": ask})
         return self._json(404, {"error": "not found"})
 
 
@@ -110,7 +118,7 @@ class HermesPluginTests(unittest.TestCase):
     def test_file_uses_dynamic_hermes_origin_and_returns_native_url(self):
         import hermes
 
-        result = hermes.unblock_file(
+        raw = hermes.unblock_file(
             {
                 "purpose": "decision",
                 "title": "Founder direction",
@@ -126,6 +134,10 @@ class HermesPluginTests(unittest.TestCase):
             }
         )
 
+        # Hermes' registry accepts a str or the multimodal envelope, nothing
+        # else. A dict here is what produced "unsupported result type: dict".
+        self.assertIsInstance(raw, str)
+        result = json.loads(raw)
         self.assertEqual(result["ticket"], "ub_testticket")
         self.assertIn("/u/link-token", result["url"])
         create = next(call for call in FakeQueueHandler.calls if call[1] == "/api/asks")
@@ -151,13 +163,48 @@ class HermesPluginTests(unittest.TestCase):
             "created_at": 1,
         }
 
-        result = hermes.unblock_check({})
+        raw = hermes.unblock_check({})
 
+        self.assertIsInstance(raw, str)
+        result = json.loads(raw)
         self.assertEqual([ask["ticket"] for ask in result["asks"]], ["ub_done"])
+        self.assertIn("Use buyer calls", result["message"])
         pending_call = next(call for call in FakeQueueHandler.calls if call[1].startswith("/api/pending?"))
         self.assertIn("agent=hermes", pending_call[1])
         self.assertIn("session_id=session-123", pending_call[1])
         self.assertTrue(any(call[1] == "/api/asks/ub_done/collect" for call in FakeQueueHandler.calls))
+
+    def test_every_handler_satisfies_the_hermes_result_contract(self):
+        """Mirror tools/registry.py:_normalize_handler_result: str passes, dict is rejected."""
+        import hermes
+
+        FakeQueueHandler.asks["ub_open"] = {
+            "ticket": "ub_open",
+            "kind": "file",
+            "purpose": "blocker",
+            "title": "Open",
+            "why": "why",
+            "fields": [{"name": "key", "type": "secret", "label": "Key"}],
+            "answers": {},
+            "origin": {"agent": "hermes", "session_id": "session-123"},
+            "status": "open",
+            "created_at": 1,
+        }
+        for name, call in (
+            ("unblock_file", lambda: hermes.unblock_file({"title": "T", "why": "W", "fields": [{"name": "k", "type": "secret"}]})),
+            ("unblock_check", lambda: hermes.unblock_check({})),
+            ("unblock_cancel", lambda: hermes.unblock_cancel({"ticket": "ub_open", "note": "superseded"})),
+        ):
+            with self.subTest(tool=name):
+                result = call()
+                self.assertIsInstance(result, str, "%s returned %s" % (name, type(result).__name__))
+                json.loads(result)
+
+    def test_public_origin_yields_one_stable_identity_url(self):
+        import hermes
+
+        with mock.patch.object(hermes, "_api", side_effect=lambda path, body=None, method=None: {"public_origin": "https://studio.example.ts.net:8797"} if path == "/health" else self.fail("minted a token despite a public origin")):
+            self.assertEqual(hermes._answer_url("ub_x"), "https://studio.example.ts.net:8797/#ask=ub_x")
 
     def test_plugin_contract_is_valid_for_hermes_runtime(self):
         executable = shutil.which("hermes")

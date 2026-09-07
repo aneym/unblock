@@ -481,9 +481,23 @@ export class Store {
     return this.list({ agentKey: agentKey(origin), status: ['answered', 'bounced'] })
   }
 
+  /**
+   * Withdraw an ask the agent no longer needs. Only an OPEN ask can be
+   * cancelled: once a human has answered, bounced, or the answer sits
+   * orphaned, the record holds their work, and an agent superseding its own
+   * stale question must not be able to erase it. Collect it instead.
+   */
   cancel(idOrTicket, note) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
+    if (ask.status !== 'open') {
+      const err = new Error(
+        `ask ${ask.ticket} is ${ask.status}, not open; a human response is never cancelled — collect it`,
+      )
+      err.code = 'ASK_NOT_OPEN'
+      err.askStatus = ask.status
+      throw err
+    }
     this.#db
       .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
       .run(nowMs(), note ?? null, ask.id)

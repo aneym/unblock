@@ -140,6 +140,36 @@ tailscale serve --https=8799 127.0.0.1:4488     # tailnet only
 cloudflared tunnel --url http://127.0.0.1:4488  # no account
 ```
 
+### One stable tailnet URL
+
+Behind `tailscale serve` the daemon can trust Tailscale's identity headers and
+serve the queue at one bookmarkable address, no token in the URL. Put the
+settings in `~/.config/unblock/config.json` so every spawner (the herdr startup
+hook, an MCP server's auto-start, the CLI, launchd) starts the same daemon:
+
+```json
+{
+  "public_origin": "https://studio.tailf266ac.ts.net:8797",
+  "trusted_proxy": "tailscale",
+  "allowed_users": ["you@example.com"],
+  "root": "/path/to/this/checkout"
+}
+```
+
+`public_origin` is exactly one https URL; wildcards, paths, and plaintext off
+loopback are rejected. Requests whose Host is neither loopback nor that origin
+get 403 before authentication runs. `trusted_proxy` only ever means Tailscale,
+and only for requests that arrived on the public origin carrying a
+`tailscale-user-login` in `allowed_users`. `root` names the checkout the daemon
+must run from, so a second copy of this repo (a herdr-managed clone, say)
+never wins the port with a stale panel. Environment variables of the same
+names (`UNBLOCK_PUBLIC_ORIGIN`, `UNBLOCK_TRUSTED_PROXY`, `UNBLOCK_ALLOWED_USERS`,
+`UNBLOCK_PORT`, `UNBLOCK_ROOT`) override the file. `GET /api/health` reports
+`public_origin`, `trusted_proxy`, and which keys the file supplied.
+
+Agents then hand out `https://<origin>/#ask=<ticket>`; for someone off the
+tailnet, `POST /api/links {ticket}` still mints a burn-on-answer token.
+
 ## Layout
 
 ```

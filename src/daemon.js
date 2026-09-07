@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { applyConfig } from './config.js'
 import { normalizeOrigin, optionalScrub, validateAsk, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
 import { Store } from './store.js'
@@ -282,10 +283,19 @@ function safeSecretAnswer(ask, values, records) {
   return { safe, refs }
 }
 
-export async function startDaemon({ port = Number(process.env.UNBLOCK_PORT || 4488) } = {}) {
+export async function startDaemon({ port } = {}) {
+  // The config file fills in whatever the spawner's environment left unset,
+  // so the daemon is reachable on its public origin no matter who started it.
+  const config = applyConfig()
+  if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
-const store = new Store()
+  const store = new Store()
   const secretStore = new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
+  // Resolve the secret backend now rather than on the first /api/health. In
+  // `auto` mode that probe runs `op whoami`, which can take seconds when
+  // 1Password is installed but signed out — long enough that every spawner's
+  // readiness poll gave up on a daemon that was in fact already serving.
+  secretStore.backend().catch(() => {})
   const clients = new Set()
   let actualPort = port
   let isClosed = false
@@ -439,7 +449,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
 
     if ((tail === '/api/answer' || tail === '/api/draft') && req.method === 'POST') {
       const body = await readJson(req)
-      const ticket = scopedAsk?.ticket || body.ticket
+      // The body's ticket is read FIRST so the scope check below can fire.
+      // With the scoped ticket taking precedence, a body naming a different
+      // ask was silently redirected onto the scoped one — its values landed
+      // on an ask the sender never saw — and the 403 branch was unreachable.
+      const ticket = body.ticket || scopedAsk?.ticket
       if (!ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (scopedAsk && ticket !== scopedAsk.ticket) return sendJson(res, 403, { error: 'link is scoped to another ask' })
       const ask = store.get(ticket)
@@ -474,13 +488,25 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     const pathname = url.pathname
 
     if (req.method === 'GET' && pathname === '/api/health') {
+      // Health must answer fast: every spawner polls it to decide whether
+      // the daemon is up. Wait briefly for the secret-backend probe, and if
+      // 1Password is still deciding, report 'auto' rather than hang.
+      const backend = await Promise.race([
+        secretStore.backend(),
+        new Promise((r) => setTimeout(() => r(secretStore.backendIfResolved()), 400).unref()),
+      ])
       return sendJson(res, 200, {
         ok: true,
         version: VERSION,
-        backend: await secretStore.backend(),
+        backend,
         // Clients use this to build ONE stable answer URL instead of minting a
         // throwaway token for every ask.
         public_origin: process.env.UNBLOCK_PUBLIC_ORIGIN ?? null,
+        // Which viewer identity, if any, the daemon trusts, and whether the
+        // settings came from the config file — so a wrong deployment is
+        // visible from one curl instead of a 403 hunt.
+        trusted_proxy: process.env.UNBLOCK_TRUSTED_PROXY || null,
+        config: { path: config.path, present: config.present, applied: config.applied },
       })
     }
 
@@ -661,6 +687,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       if (error.code === 'ALREADY_PARKED') {
         return sendJson(res, 409, { error: error.message, ticket: error.ticket })
       }
+      if (error.code === 'ASK_NOT_OPEN') {
+        return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
+      }
       const status = error.status || 500
       sendJson(res, status, { error: status === 500 ? 'internal server error' : error.message })
     })
@@ -723,11 +752,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
  *     canonical env (public origin, trusted proxy) and must own the port.
  */
 async function startResilient() {
-  const port = Number(process.env.UNBLOCK_PORT || 4488)
   try {
     return await startDaemon({})
   } catch (error) {
     if (error?.code !== 'EADDRINUSE') throw error
+    // startDaemon has applied the config file by now, so the port is final.
+    const port = Number(process.env.UNBLOCK_PORT || 4488)
 
     const healthy = await fetch(`http://${HOST}:${port}/api/health`, {
       signal: AbortSignal.timeout(1500),

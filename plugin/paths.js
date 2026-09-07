@@ -6,7 +6,18 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 
+import { daemonRoot } from '../src/config.js'
+
 export const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+
+/**
+ * Where to start the daemon from. The config file's `root` wins, because a
+ * herdr-managed clone of this repo and the canonical checkout must not both
+ * be able to own the port — the one without a built panel serves a blank page.
+ */
+export function daemonSource() {
+  return daemonRoot() || ROOT
+}
 
 export function stateDir() {
   return (
@@ -53,10 +64,11 @@ export async function daemon({ start = true, timeoutMs = 5000 } = {}) {
   if (await alive(port)) return `http://127.0.0.1:${port}`
   if (!start) throw new Error('unblock daemon is not running')
 
-  spawn(process.execPath, [join(ROOT, 'src', 'daemon.js')], {
+  const source = daemonSource()
+  spawn(process.execPath, [join(source, 'src', 'daemon.js')], {
     detached: true,
     stdio: 'ignore',
-    cwd: ROOT,
+    cwd: source,
   }).unref()
 
   const deadline = Date.now() + timeoutMs

@@ -7,10 +7,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
+import { daemonRoot } from './config.js'
+
 const PROTOCOL_VERSION = '2025-06-18'
 const SERVER_INFO = { name: 'unblock', version: '0.1.0' }
 const HOST = '127.0.0.1'
-const DAEMON_PATH = join(dirname(fileURLToPath(import.meta.url)), 'daemon.js')
+/** Start the daemon from the configured canonical checkout when there is one. */
+function daemonPath() {
+  const root = daemonRoot()
+  return root ? join(root, 'src', 'daemon.js') : join(dirname(fileURLToPath(import.meta.url)), 'daemon.js')
+}
 
 function stateDir() {
   return (
@@ -96,7 +102,7 @@ async function daemonFetch(pathname, options = {}) {
       if (error.status) throw error
       lastError = error
       if (attempt === 0) {
-        spawn(process.execPath, [DAEMON_PATH], {
+        spawn(process.execPath, [daemonPath()], {
           detached: true,
           stdio: 'ignore',
           env: process.env,

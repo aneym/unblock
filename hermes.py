@@ -153,17 +153,25 @@ def _answer_text(ask: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def unblock_file(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
-    """File a nonblocking ask in the canonical Unblock queue."""
+def _result(payload: Dict[str, Any]) -> str:
+    """Serialize for Hermes.
 
+    The Hermes tool registry accepts exactly two handler result shapes: a
+    string, or the multimodal envelope. A plain dict is rejected at dispatch
+    with "Tool handler returned unsupported result type: dict", and the model
+    never sees the ticket or URL. So every handler returns a JSON string.
+    """
+
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _file_payload(args: Mapping[str, Any]) -> Dict[str, Any]:
     result = _create("file", args)
     result["message"] = "Filed %s. Keep working; call unblock_check later." % result["ticket"]
     return result
 
 
-def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
-    """File a gating ask and wait until the user answers it in Unblock."""
-
+def _park_payload(args: Mapping[str, Any]) -> Dict[str, Any]:
     created = _create("park", args)
     ticket = created["ticket"]
     ttl = args.get("ttl_seconds")
@@ -186,9 +194,7 @@ def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
     raise RuntimeError("timed out waiting for %s" % ticket)
 
 
-def unblock_check(_args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
-    """Collect answered filed asks owned by the current Hermes session."""
-
+def _check_payload() -> Dict[str, Any]:
     query = urllib.parse.urlencode(_origin(), doseq=True)
     pending = _api("/pending?" + query).get("asks", [])
     collected: List[Dict[str, Any]] = []
@@ -205,7 +211,7 @@ def unblock_check(_args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
     }
 
 
-def unblock_cancel(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
+def _cancel_payload(args: Mapping[str, Any]) -> Dict[str, Any]:
     ticket = str(args["ticket"])
     body = _api(
         "/asks/%s/cancel" % urllib.parse.quote(ticket),
@@ -213,3 +219,27 @@ def unblock_cancel(args: Mapping[str, Any], **_kwargs: Any) -> Dict[str, Any]:
         method="POST",
     )
     return {"ask": body["ask"], "message": "Cancelled %s." % ticket}
+
+
+def unblock_file(args: Mapping[str, Any], **_kwargs: Any) -> str:
+    """File a nonblocking ask in the canonical Unblock queue."""
+
+    return _result(_file_payload(args))
+
+
+def unblock_park(args: Mapping[str, Any], **_kwargs: Any) -> str:
+    """File a gating ask and wait until the user answers it in Unblock."""
+
+    return _result(_park_payload(args))
+
+
+def unblock_check(_args: Mapping[str, Any], **_kwargs: Any) -> str:
+    """Collect answered filed asks owned by the current Hermes session."""
+
+    return _result(_check_payload())
+
+
+def unblock_cancel(args: Mapping[str, Any], **_kwargs: Any) -> str:
+    """Cancel an open ask. The daemon refuses (HTTP 409) once a human has answered it."""
+
+    return _result(_cancel_payload(args))
