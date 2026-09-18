@@ -113,6 +113,8 @@ export function projectCounts(asks) {
  * `pinnedTicket` a #ask= deep link.
  * `deferredKeys` cards skipped this session, in the order they were skipped.
  * `doneTickets`  answered this session; dropped before the server catches up.
+ * `doneProjects` projects answered in this session, which hold the filter open
+ *                after their last card leaves.
  *
  * The deep-link rule is the part that used to lie. A pinned ask SETS the
  * project rather than being smuggled past the filter: the picker then names
@@ -125,16 +127,23 @@ export function selectDeck({
   pinnedTicket = null,
   deferredKeys = [],
   doneTickets = new Set(),
+  doneProjects = [],
 } = {}) {
   const live = sortAsks(asks.filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket)))
   const projects = projectCounts(live)
 
+  // A filter naming a project with nothing open is dropped — otherwise a stale
+  // localStorage value pins the panel to an empty view forever.
+  //
+  // With ONE exception, which is the whole point: a project you have answered
+  // in this session stays selected after its last card leaves. Without it,
+  // answering the last open-factory ask silently widened the deck to the whole
+  // queue and dealt somebody else's card — the filter said one thing and the
+  // card on screen was from somewhere else. Finishing a project should show you
+  // that project, empty.
+  const holds = new Set([...projects.map(([name]) => name), ...doneProjects])
   const pinnedAsk = pinnedTicket ? live.find((ask) => ask.ticket === pinnedTicket) : undefined
-  const activeProject = pinnedAsk
-    ? groupOf(pinnedAsk)
-    : project && projects.some(([name]) => name === project)
-      ? project
-      : null
+  const activeProject = pinnedAsk ? groupOf(pinnedAsk) : project && holds.has(project) ? project : null
 
   const scoped = activeProject ? live.filter((ask) => groupOf(ask) === activeProject) : live
   const deck = buildDeck(scoped)

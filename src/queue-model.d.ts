@@ -35,4 +35,5 @@ export function selectDeck<A>(input: {
   pinnedTicket?: string | null
   deferredKeys?: string[]
   doneTickets?: ReadonlySet<string>
+  doneProjects?: string[]
 }): SelectionOf<A>

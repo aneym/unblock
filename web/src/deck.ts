@@ -98,6 +98,7 @@ export const selectDeck: (input: {
   pinnedTicket?: string | null
   deferredKeys?: string[]
   doneTickets?: ReadonlySet<string>
+  doneProjects?: string[]
 }) => Selection = selectDeckJs
 
 export function ago(createdAt: number) {

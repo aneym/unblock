@@ -50,6 +50,62 @@ while it was away.
 An agent that needs three things declares one park with three fields. It does
 not park three times, because it can only be stopped in one place.
 
+| tool | does |
+| --- | --- |
+| `unblock_file` | register an ask and keep working |
+| `unblock_park` | register an ask and wait on it |
+| `unblock_peek` | read what they have typed so far, without consuming it |
+| `unblock_update` | revise an open ask in place — add, drop or reword questions |
+| `unblock_check` | collect answers, and see what is part way filled in |
+| `unblock_cancel` | withdraw an open ask |
+
+## Live asks
+
+An ask is not a form you post and walk away from. Every keystroke drafts to the
+daemon, so an agent can watch someone think and ask the obvious follow-up while
+they are still on the page.
+
+The loop is: **file → watch the drafts → `unblock_update` → check.**
+
+```
+unblock_file   ub_7xk2m9   "which database?" + "which region?"
+               human picks "the replica"
+unblock_peek   ub_7xk2m9   draft.database = "replica"
+unblock_update ub_7xk2m9   add_fields: [{ name: "lag_tolerance", ... }]
+               the open page grows a third question on its own
+unblock_check  ub_7xk2m9   all three answers at once
+```
+
+`unblock_update` mutates an OPEN ask through the same schema as `unblock_file`,
+so a revision can never reach a shape a fresh ask could not. It keeps the
+ticket, the link they already have open, and every draft on a field it does not
+touch. Removing a field takes that field's draft and note with it. An answered,
+bounced or cancelled ask is refused: a revision would change the question they
+already answered.
+
+Three ways to watch, cheapest first:
+
+```bash
+# one shot — draft_updated_at only moves when a human types
+curl -s -H "Authorization: Bearer $(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.local/state/unblock/daemon.json")))["auth"])')" \
+  http://127.0.0.1:4488/api/asks/<ticket> | jq .draft_updated_at
+
+unblock peek <ticket>        # the same thing, readable
+
+# a push stream: draft, updated, answered, sent_back, cancelled
+curl -sN -H "Authorization: Bearer $UNBLOCK_AUTH" \
+  http://127.0.0.1:4488/api/asks/<ticket>/events
+```
+
+`GET /api/asks/:ticket` returns the ask with `draft`, `draft_reply`,
+`field_context`, `draft_updated_at`, `updated_at` and `status`. Like everything
+under `/api` it is loopback-and-tailnet only, and it carries the daemon secret
+from `~/.local/state/unblock/daemon.json`.
+
+A draft is not an answer. They are mid-thought, they can still change it, and
+they have not pressed the button — read it to decide what to ASK next, never to
+act on as though it were decided.
+
 ## Secrets
 
 A secret typed into the form never travels back through the channel that lands
@@ -176,8 +232,8 @@ tailnet, `POST /api/links {ticket}` still mints a burn-on-answer token.
 src/schema.js    ask + field validation, the profile rule
 src/store.js     SQLite queue, one-park-per-agent, drafts, links
 src/secrets.js   1Password -> keychain -> env file
-src/daemon.js    HTTP API, the answer page, SSE
-src/mcp.js       MCP server: file / park / check / cancel
+src/daemon.js    HTTP API, the answer page, SSE (queue-wide and per ask)
+src/mcp.js       MCP server: file / park / peek / update / check / cancel
 web/             the answer page
 plugin/          thin herdr launcher / pane adapter
 hermes.py        native Hermes client for the standalone API

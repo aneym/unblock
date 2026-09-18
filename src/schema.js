@@ -308,6 +308,80 @@ export function validateAsk(raw) {
   }
 }
 
+/**
+ * Apply an agent's in-place edit to an OPEN ask and re-validate the result.
+ *
+ * The merged ask goes back through validateAsk untouched, so an update can
+ * never reach a shape a fresh ask could not: the blocker/decision rule, the
+ * field cap and the must_decide cap all still hold. Fields the patch does not
+ * name keep their existing definition — which is exactly what lets the drafts
+ * already typed against them survive the edit.
+ *
+ * Returns { why, fields }; the store writes those and bumps updated_at.
+ */
+export function validateUpdate(ask, patch) {
+  if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
+  const named = ['why', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+    (key) => patch[key] !== undefined,
+  )
+  if (named.length === 0) {
+    throw new ValidationError(
+      'nothing to update — pass why, add_fields, remove_fields or replace_fields',
+    )
+  }
+
+  let fields = ask.fields
+  if (patch.replace_fields !== undefined) {
+    if (!Array.isArray(patch.replace_fields)) {
+      throw new ValidationError('must be an array of fields', 'replace_fields')
+    }
+    fields = patch.replace_fields
+  }
+
+  if (patch.remove_fields !== undefined) {
+    if (!Array.isArray(patch.remove_fields)) {
+      throw new ValidationError('must be an array of field names', 'remove_fields')
+    }
+    const drop = new Set(
+      patch.remove_fields.map((name, i) => str(name, `remove_fields[${i}]`, { max: 48 })),
+    )
+    for (const name of drop) {
+      // Naming a field that is not there means the agent is working from a
+      // stale copy of the ask. Say so rather than silently doing nothing.
+      if (!fields.some((field) => field.name === name)) {
+        throw new ValidationError(`no field named "${name}" on this ask`, 'remove_fields')
+      }
+    }
+    fields = fields.filter((field) => !drop.has(field.name))
+  }
+
+  if (patch.add_fields !== undefined) {
+    if (!Array.isArray(patch.add_fields)) {
+      throw new ValidationError('must be an array of fields', 'add_fields')
+    }
+    for (const raw of patch.add_fields) {
+      // Adding a name that already exists is a REVISION of that question —
+      // reworded, new choices — not a duplicate. It keeps its position, so the
+      // human does not see the list reshuffle under them mid-answer.
+      const name = isPlainObject(raw) ? raw.name : undefined
+      const at = fields.findIndex((field) => field.name === name)
+      fields = at >= 0 ? fields.map((field, i) => (i === at ? raw : field)) : [...fields, raw]
+    }
+  }
+
+  const merged = validateAsk({
+    kind: ask.kind,
+    purpose: ask.purpose,
+    project: ask.project,
+    title: ask.title,
+    why: patch.why ?? ask.why,
+    fields,
+    steps: ask.steps,
+    links: ask.links,
+  })
+  return { why: merged.why, fields: merged.fields }
+}
+
 function normalizeTtl(value) {
   if (value === undefined || value === null) return null
   const n = Number(value)

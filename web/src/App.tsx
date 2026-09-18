@@ -95,7 +95,7 @@ function ProjectPicker({ projects, active, openCount, onPick }: {
   )
 }
 
-function BigState({ icon, title, detail }: { icon?: 'check'; title: string; detail: string }) {
+function BigState({ icon, title, detail, action }: { icon?: 'check'; title: string; detail: string; action?: React.ReactNode }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 14 }}
@@ -115,7 +115,21 @@ function BigState({ icon, title, detail }: { icon?: 'check'; title: string; deta
       )}
       <h2 className="font-display text-[26px] font-semibold leading-tight tracking-[-.01em]">{title}</h2>
       <p className="mx-auto mt-2 max-w-[40ch] text-pretty text-[15px] leading-relaxed text-[var(--dim)]">{detail}</p>
+      {action && <div className="mt-5">{action}</div>}
     </motion.div>
+  )
+}
+
+function ShowEverything({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <motion.button
+      type="button"
+      whileTap={{ scale: 0.97 }}
+      onClick={onClick}
+      className="rounded-full border border-[var(--input-border)] bg-[var(--surface)] px-4 py-2 text-[14px] font-semibold shadow-[0_1px_2px_rgba(60,45,20,.06)] hover:border-[var(--ink)]"
+    >
+      Show all projects · {count} open
+    </motion.button>
   )
 }
 
@@ -154,6 +168,7 @@ export default function App() {
 
   // Every ordering rule lives in the shared model, so the picker, the deck and
   // the counter can never disagree about what is on screen.
+  const doneProjects = useMemo(() => doneLog.map((entry) => entry.project), [doneLog])
   const { items, projects, activeProject, current, remaining } = useMemo(
     () => selectDeck({
       asks: data?.asks || [],
@@ -161,8 +176,9 @@ export default function App() {
       pinnedTicket: pinned,
       deferredKeys: deferred,
       doneTickets,
+      doneProjects,
     }),
-    [data, project, pinned, deferred, doneTickets],
+    [data, project, pinned, deferred, doneTickets, doneProjects],
   )
 
   const clearPin = () => {
@@ -183,8 +199,27 @@ export default function App() {
     } catch { /* ignore */ }
   }
 
+  /**
+   * A deep link picks the project too, not just the card.
+   *
+   * Arriving on #ask=<ticket> put the picker on that ask's project while the
+   * stored filter was still whatever it was before. Answering cleared the pin,
+   * the filter reverted, and the deck dealt a card from another project —
+   * which is what "it jumped" was. Adopting the pin's project makes the state
+   * the picker is already showing the state that actually holds.
+   */
+  useEffect(() => {
+    if (!activeProject || activeProject === project) return
+    setProject(activeProject)
+    try { localStorage.setItem('ub_group', activeProject) } catch { /* ignore */ }
+  }, [activeProject, project])
+
   const doneHere = activeProject ? doneLog.filter((entry) => entry.project === activeProject).length : doneLog.length
   const total = doneHere + remaining
+  // Open cards outside the active filter — what the way out is worth.
+  const elsewhere = activeProject
+    ? projects.reduce((sum, [name, count]) => (name === activeProject ? sum : sum + count), 0)
+    : 0
 
   const unpinIfCurrent = (item: DeckItem) => {
     if (pinned && item.asks.some((ask) => ask.ticket === pinned)) clearPin()
@@ -296,10 +331,22 @@ export default function App() {
                 </motion.div>
               ) : (
                 <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  {doneLog.length > 0 ? (
-                    <BigState icon="check" title="Deck clear" detail={`You answered ${doneLog.length} ${doneLog.length === 1 ? 'card' : 'cards'}. The agents are moving again.`} />
+                  {/* Finishing a project shows you that project, empty — never
+                      somebody else's card. The way out is explicit, because
+                      the filter no longer drops itself. */}
+                  {doneHere > 0 ? (
+                    <BigState
+                      icon="check"
+                      title={activeProject ? `${activeProject} is clear` : 'Deck clear'}
+                      detail={`You answered ${doneHere} ${doneHere === 1 ? 'card' : 'cards'}. The agents are moving again.`}
+                      action={elsewhere > 0 ? <ShowEverything count={elsewhere} onClick={() => setProjectPersist(null)} /> : undefined}
+                    />
                   ) : (
-                    <BigState title="Nothing needs you" detail="No agent is waiting on an action or a decision." />
+                    <BigState
+                      title={activeProject ? `Nothing open in ${activeProject}` : 'Nothing needs you'}
+                      detail="No agent is waiting on an action or a decision."
+                      action={elsewhere > 0 ? <ShowEverything count={elsewhere} onClick={() => setProjectPersist(null)} /> : undefined}
+                    />
                   )}
                 </motion.div>
               )}

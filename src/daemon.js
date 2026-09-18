@@ -6,7 +6,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { applyConfig } from './config.js'
-import { normalizeOrigin, optionalScrub, validateAsk, ValidationError } from './schema.js'
+import { normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
 import { Store } from './store.js'
 
@@ -297,6 +297,10 @@ export async function startDaemon({ port } = {}) {
   // readiness poll gave up on a daemon that was in fact already serving.
   secretStore.backend().catch(() => {})
   const clients = new Set()
+  // Listeners on ONE ask, keyed by ticket. The queue stream above says how many
+  // asks are open; this one says what is happening inside a single ask while
+  // the human fills it in, which is what an agent watching its own ask needs.
+  const askClients = new Map()
   let actualPort = port
   let isClosed = false
 
@@ -314,12 +318,50 @@ export async function startDaemon({ port } = {}) {
     for (const client of clients) client.write(message)
   }
 
+  /**
+   * What a watcher gets on every event: enough to decide whether to act
+   * without a follow-up GET. No secret can be in here — a draft never holds
+   * one, and an answered secret is already a reference by the time it lands.
+   */
+  const askEvent = (ask) => ({
+    ticket: ask.ticket,
+    status: ask.status,
+    draft: ask.draft,
+    draft_reply: ask.draft_reply,
+    field_context: ask.field_context,
+    draft_updated_at: ask.draft_updated_at,
+    updated_at: ask.updated_at,
+    missing: ask.missing,
+  })
+
+  const emitAsk = (ask, event) => {
+    const listeners = ask && askClients.get(ask.ticket)
+    if (!listeners?.size) return
+    const message = `event: ${event}\ndata: ${JSON.stringify(askEvent(ask))}\n\n`
+    for (const client of listeners) client.write(message)
+  }
+
+  /** One path for every draft write, so every transport emits the same event. */
+  function applyDraft(ticket, body) {
+    const ask = store.saveDraft(
+      ticket,
+      body.values || {},
+      scrubFieldContext(body.field_context),
+      draftReply(body),
+    )
+    emitAsk(ask, 'draft')
+    emitQueue()
+    return ask
+  }
+
   async function bounceAsk(ticket, reply) {
   // The note is optional. Requiring one greyed out the send-back button until
   // the human wrote an essay, which made rejecting a bad ask harder than
   // rubber-stamping it. A bounce with no note still tells the agent the ask
   // itself was wrong.
-  return { ask: store.bounce(ticket, optionalScrub(reply, 1000)), complete: true, bounced: true }
+  const ask = store.bounce(ticket, optionalScrub(reply, 1000))
+  emitAsk(ask, 'sent_back')
+  return { ask, complete: true, bounced: true }
 }
 
 /**
@@ -380,12 +422,14 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       }
     }
     const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
-    return store.answer(ticket, safe, {
+    const result = store.answer(ticket, safe, {
       refs,
       reply: optionalScrub(reply, 1000),
       fieldContext: scrubFieldContext(fieldContext),
       fieldBounce: scrubFieldBounce(fieldBounce),
     })
+    emitAsk(result.ask, 'answered')
+    return result
   }
 
   /** The reply drafts alongside the fields; '' erases, undefined leaves it. */
@@ -459,9 +503,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        const updated = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
-        emitQueue()
-        return sendJson(res, 200, { ask: updated })
+        return sendJson(res, 200, { ask: applyDraft(ticket, body) })
       }
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
@@ -576,10 +618,51 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     ticket = routeTicket(pathname, '/draft')
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
+      return sendJson(res, 200, { ask: applyDraft(ticket, await readJson(req)) })
+    }
+
+    // Revise a live ask instead of cancelling and refiling it. The ticket, the
+    // link the human has open, and every draft on a field this does not touch
+    // all survive.
+    ticket = routeTicket(pathname, '/update')
+    if (ticket && req.method === 'POST') {
+      const existing = store.get(ticket)
+      if (!existing) return notFound(res)
       const body = await readJson(req)
-      const ask = store.saveDraft(ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
+      const ask = store.update(ticket, validateUpdate(existing, body))
+      emitAsk(ask, 'updated')
       emitQueue()
       return sendJson(res, 200, { ask })
+    }
+
+    /**
+     * Watch ONE ask. Events: draft (they typed something), answered,
+     * sent_back, cancelled, updated (the agent revised the questions).
+     *
+     * An agent that files an ask and then sits on this stream sees the human
+     * think — a choice clicked, a note written — and can ask the obvious
+     * follow-up through unblock_update while they are still on the page.
+     */
+    ticket = routeTicket(pathname, '/events')
+    if (ticket && req.method === 'GET') {
+      const ask = store.get(ticket)
+      if (!ask) return notFound(res)
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      })
+      const listeners = askClients.get(ask.ticket) ?? new Set()
+      listeners.add(res)
+      askClients.set(ask.ticket, listeners)
+      // The current state first, so a watcher that attached late is not stuck
+      // waiting for a keystroke to learn where the ask already stands.
+      res.write(`event: state\ndata: ${JSON.stringify(askEvent(ask))}\n\n`)
+      req.on('close', () => {
+        listeners.delete(res)
+        if (listeners.size === 0) askClients.delete(ask.ticket)
+      })
+      return
     }
 
     ticket = routeTicket(pathname, '/collect')
@@ -600,13 +683,16 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const note = optionalScrub(body.note, 600)
       const ask = store.cancel(ticket, note)
       if (!ask) return notFound(res)
+      emitAsk(ask, 'cancelled')
       emitQueue()
       return sendJson(res, 200, { ask })
     }
 
     if (req.method === 'GET' && pathname === '/api/pending') {
       const origin = normalizeOrigin(Object.fromEntries(url.searchParams))
-      return sendJson(res, 200, { asks: store.pending(origin) })
+      // `open` rides along so unblock_check can report what the human is part
+      // way through as well as what they finished.
+      return sendJson(res, 200, { asks: store.pending(origin), open: store.openForAgent(origin) })
     }
 
     if (req.method === 'POST' && pathname === '/api/links') {
@@ -660,8 +746,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     if (pathname === '/api/draft' && req.method === 'POST') {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
-      const ask = store.saveDraft(body.ticket, body.values || {}, scrubFieldContext(body.field_context), draftReply(body))
-      return sendJson(res, 200, { ask })
+      if (!store.get(body.ticket)) return notFound(res)
+      return sendJson(res, 200, { ask: applyDraft(body.ticket, body) })
     }
 
     const tokenMatch = pathname.match(/^\/u\/([^/]+)(.*)$/)
@@ -711,6 +797,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
 
   const keepalive = setInterval(() => {
     for (const client of clients) client.write(': keepalive\n\n')
+    for (const listeners of askClients.values()) {
+      for (const client of listeners) client.write(': keepalive\n\n')
+    }
   }, 25_000)
   keepalive.unref()
   const sweeper = setInterval(() => {
@@ -725,6 +814,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     clearInterval(sweeper)
     for (const client of clients) client.end()
     clients.clear()
+    for (const listeners of askClients.values()) {
+      for (const client of listeners) client.end()
+    }
+    askClients.clear()
     await new Promise((resolve) => server.close(resolve))
     store.close()
     try {

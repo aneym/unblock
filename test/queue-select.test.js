@@ -115,6 +115,48 @@ test('a filter naming a project with nothing open falls back to everything', () 
   assert.equal(result.remaining, 1)
 })
 
+test('answering the last card in a project keeps you there, empty', () => {
+  // The regression: the filter said open-factory, the last open-factory card
+  // was submitted, and the deck silently widened and dealt an hiring card.
+  const asks = [long('of1', { project: 'open-factory' }), long('hire1', { project: 'hiring' })]
+  const result = selectDeck({
+    asks,
+    project: 'open-factory',
+    doneTickets: new Set(['of1']),
+    doneProjects: ['open-factory'],
+  })
+  assert.equal(result.activeProject, 'open-factory', 'the filter holds')
+  assert.equal(result.current, undefined, 'and shows empty rather than another project’s card')
+  assert.equal(result.remaining, 0)
+  // The other project is still reported, so the panel can offer the way out.
+  assert.deepEqual(result.projects, [['hiring', 1]])
+})
+
+test('answering one card of several in a project advances within it', () => {
+  const asks = [
+    long('of1', { project: 'open-factory' }),
+    long('of2', { project: 'open-factory' }),
+    long('hire1', { project: 'hiring' }),
+  ]
+  const result = selectDeck({
+    asks,
+    project: 'open-factory',
+    doneTickets: new Set(['of1']),
+    doneProjects: ['open-factory'],
+  })
+  assert.equal(result.activeProject, 'open-factory')
+  assert.equal(result.current.asks[0].ticket, 'of2')
+  assert.equal(result.remaining, 1)
+})
+
+test('a project answered in this session does not resurrect a different filter', () => {
+  // Having answered in open-factory must not hold a filter you never chose.
+  const asks = [long('hire1', { project: 'hiring' })]
+  const result = selectDeck({ asks, project: 'gone', doneProjects: ['open-factory'] })
+  assert.equal(result.activeProject, null)
+  assert.equal(result.current.asks[0].ticket, 'hire1')
+})
+
 test('a pinned ask sets the project instead of being smuggled past the filter', () => {
   // The regression: the picker said sfp-application while a hiring-theory card
   // sat on screen, because the pin prepended itself to a filtered deck.

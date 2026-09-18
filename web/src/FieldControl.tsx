@@ -52,7 +52,6 @@ interface FieldControlProps {
 export function FieldControl({ field, ticket, value, note, bounceNote, onChange, onNoteChange, onBounce, disabled }: FieldControlProps) {
   const id = `f_${ticket}_${field.name}`
   const [isVisible, setIsVisible] = useState(false)
-  const [showNote, setShowNote] = useState(Boolean(note))
   const isBounced = bounceNote !== undefined
   const isRecommendedChoice = (choiceValue: string) => {
     if (!field.recommend || field.must_decide) return false
@@ -152,11 +151,14 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
       {field.type === 'secret' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">Stored on your machine. The agent receives a reference, never the value.</p>}
       {field.recommend && !field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span>{field.type !== 'choice' && <>: {String(field.recommend.value)}</>} · {field.recommend.why}</p>}
       {field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">This one needs your decision.</p>}
+      {/* The context box is always here, never behind a disclosure. Half of
+          what makes an answer usable is the caveat beside it, and a person
+          typing a value does not stop to go looking for somewhere to say it.
+          One line tall while empty, so an ask of eight fields is still a card. */}
+      <Textarea id={`${id}_ctx`} value={note ?? ''} placeholder="Context for this answer (optional)" spellCheck={false} disabled={disabled} className="mt-2 min-h-10 py-2 text-[15px]" onChange={(event) => onNoteChange(field.name, event.target.value)} />
       <div className="mt-2 flex flex-wrap gap-x-4">
-        {!showNote && <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => setShowNote(true)}>Add context</button>}
         <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={disabled} title={hasValue ? 'Your answer still goes through, flagged for the agent to come back on' : 'Reject just this question; the rest of your answers still go through'} onClick={() => onBounce(field.name, '')}>{hasValue ? 'Send back with my answer' : 'Send back this question'}</button>
       </div>
-      {showNote && <Textarea id={`${id}_ctx`} value={note ?? ''} placeholder="Context for this answer" spellCheck={false} disabled={disabled} className="mt-2 min-h-14" onChange={(event) => onNoteChange(field.name, event.target.value)} />}
     </div>
   )
 }

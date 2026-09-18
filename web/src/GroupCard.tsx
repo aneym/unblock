@@ -22,7 +22,6 @@ interface RowState {
   reply: string
   /** set (possibly '') when the whole ask is being sent back */
   bounce?: string
-  noteOpen?: boolean
 }
 
 function seedRow(ask: Ask): RowState {
@@ -143,7 +142,10 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
       window.clearTimeout(timers.current[ticket])
       timers.current[ticket] = window.setTimeout(() => {
         api('/api/draft', { ticket, values: row.values, reply: row.reply }).catch(() => { /* the local mirror already has it */ })
-      }, 600)
+        // Short, because an agent watching this ask is reading the drafts to
+        // decide what to ask next. A single pill tap must reach the daemon
+        // while they are still looking at the card, not a second later.
+      }, 300)
       return next
     })
   }
@@ -264,15 +266,17 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
                       {field.help && field.type !== 'confirm' && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]">{field.help}</p>}
                     </div>
                   ))}
+                  {/* Open, not behind "Add context": the caveat beside an
+                      answer is half of what makes it usable, and nobody goes
+                      hunting for somewhere to put it. Empty it is one line. */}
+                  {!isBounced && <Textarea value={row.reply} placeholder="Context for this answer (optional)" spellCheck={false} disabled={isBusy} className="min-h-10 py-2 text-[15px]" onChange={(event) => update(ask.ticket, { reply: event.target.value })} />}
                   {!isBounced && (
                     <div className="flex flex-wrap gap-x-4">
-                      {!row.noteOpen && <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={isBusy} onClick={() => update(ask.ticket, { noteOpen: true })}>Add context</button>}
                       <button type="button" className="text-[12px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={isBusy} onClick={() => update(ask.ticket, { bounce: '' })}>
                         {hasAnswer ? 'Send back with my answer' : 'Send back'}
                       </button>
                     </div>
                   )}
-                  {row.noteOpen && !isBounced && <Textarea value={row.reply} placeholder="Context for this answer" spellCheck={false} disabled={isBusy} className="min-h-12" onChange={(event) => update(ask.ticket, { reply: event.target.value })} />}
                   {isBounced && (
                     <div className="rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
                       <p className="text-[13.5px] leading-5 text-[var(--danger)]">

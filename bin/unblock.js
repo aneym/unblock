@@ -60,6 +60,9 @@ switch (cmd) {
   case 'answer':
     await answer(rest)
     break
+  case 'peek':
+    await peek(rest[0])
+    break
   case 'reveal':
     await reveal(rest[0], rest[1])
     break
@@ -82,6 +85,7 @@ function help() {
   unblock ui                   open the interactive queue
   unblock link [ticket]        mint an ephemeral answer link
   unblock answer <ticket> k=v  answer from the shell
+  unblock peek <ticket>        what they have typed so far, unsubmitted
   unblock reveal <ticket> <f>  print a stored secret (this machine only)
   unblock mirror [path]        write BLOCKERS.md from the queue
   unblock daemon start|stop|status
@@ -171,6 +175,25 @@ async function answer(args) {
   } else {
     console.log(`saved — still needs: ${ask.missing.join(', ')}`)
   }
+}
+
+/**
+ * What the human has typed into an open ask, without consuming it. The polling
+ * loop an agent runs while it waits; `draft_updated_at` is the cheap thing to
+ * watch, and it only moves when they type.
+ */
+async function peek(ticket) {
+  if (!ticket) die('usage: unblock peek <ticket>')
+  const ask = await api(`/api/asks/${ticket}`)
+  console.log(`${ask.ticket}  ${ask.title}  [${ask.status}]`)
+  for (const field of ask.fields) {
+    const value = ask.draft?.[field.name]
+    const note = ask.field_context?.[field.name]
+    console.log(`  ${field.name}: ${value === undefined ? '—' : JSON.stringify(value)}`)
+    if (note) console.log(`      context: ${note}`)
+  }
+  if (ask.draft_reply) console.log(`  reply: ${ask.draft_reply}`)
+  console.log(ask.draft_updated_at ? `  last typed ${age(ask.draft_updated_at)} ago` : '  nothing typed yet')
 }
 
 /** Local only, by design. Never exposed over HTTP or MCP. */

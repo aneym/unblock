@@ -112,6 +112,10 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
   /**
    * Every change lands in localStorage synchronously, then the server draft
    * follows on a short debounce.
+   *
+   * Short on purpose: an agent watching this ask reads the drafts to decide
+   * what to ask next, so a single choice click has to reach the daemon while
+   * the human is still on the question, not after they have moved on.
    */
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
@@ -124,7 +128,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       api('/api/draft', { ticket: ask.ticket, values: safeValues(merged.values), field_context: merged.notes, reply: merged.reply })
         .then(() => setDraftState('saved'))
         .catch(() => setDraftState('offline'))
-    }, 500)
+    }, 300)
   }
 
   /** Leaving the page flushes a pending draft without waiting on the network. */

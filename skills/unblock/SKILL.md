@@ -47,6 +47,52 @@ One park per agent, because you can only be stopped in one place. If you need
 three things before you can move, that is **one park with three fields**, not
 three parks. Call `unblock_check` when you resume to collect anything you filed.
 
+## The ask is live while they answer it
+
+An ask is not a form you post and walk away from. Every keystroke they make
+drafts to the daemon, so you can watch someone think and ask the obvious
+follow-up while they are still on the page.
+
+**file → watch the drafts → `unblock_update` → `unblock_check`.**
+
+| tool | for |
+| --- | --- |
+| `unblock_peek {ticket}` | what they have typed so far. Consumes nothing |
+| `unblock_update {ticket, why?, add_fields?, remove_fields?, replace_fields?}` | revise an OPEN ask in place |
+
+`unblock_update` keeps the ticket, the page they already have open, and every
+draft on a field it does not touch. Removing a field takes that field's draft
+with it. Adding a field whose name already exists rewords that question in
+place. It goes through the same schema as `unblock_file`, and it is refused once
+the ask is answered, sent back or cancelled — by then the questions they
+answered have to stay the questions they answered.
+
+Use it instead of `unblock_cancel` + a fresh `unblock_file`, which throws away
+the ticket, the link and everything they had typed.
+
+To watch a filed ask without burning turns, poll `draft_updated_at` — it only
+moves when a human types:
+
+```bash
+curl -s -H "Authorization: Bearer $(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.local/state/unblock/daemon.json")))["auth"])')" \
+  http://127.0.0.1:4488/api/asks/<ticket> | jq .draft_updated_at
+```
+
+or take the push stream, which emits `draft`, `updated`, `answered`,
+`sent_back` and `cancelled`:
+
+```bash
+curl -sN -H "Authorization: Bearer $UNBLOCK_AUTH" \
+  http://127.0.0.1:4488/api/asks/<ticket>/events
+```
+
+`unblock_check` reports open asks that are part way filled in, so you can see
+what someone is in the middle of instead of re-asking it.
+
+**A draft is not an answer.** They are mid-thought, they can still change it,
+and they have not pressed the button. Read it to decide what to *ask* next,
+never to act on as though it were decided. Secret fields never draft at all.
+
 ## Before you ask anything
 
 1. **Can I do this myself?** Read the config, check the docs, run the command.
@@ -83,9 +129,10 @@ falls back to guessing from workspace or repo.
 `steps` — the shortest path to done. Console paths as `Product → Page → Field`.
 `links` — bare action URLs only. Never a link to a repo file; inline that instead.
 
-Every field gets its own optional context box, and the whole ask gets a
-free-text reply box. You declare neither. Expect per-field notes back in the
-answer (`their context: …`) and treat them as part of that field's answer.
+Every field gets its own context box, and the whole ask gets a free-text reply
+box. You declare neither, and both sit open on the page rather than behind a
+disclosure — so expect per-field notes back on most asks (`their context: …`),
+and treat each as part of that field's answer, not decoration.
 
 ## Reading what comes back
 

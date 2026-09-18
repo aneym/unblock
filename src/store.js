@@ -132,6 +132,10 @@ export class Store {
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
+    // Set when an agent revises a live ask in place. A client that is already
+    // rendering the ask watches this to know the QUESTIONS changed, which
+    // draft_updated_at cannot tell it — that one only moves when the human types.
+    this.#addColumn('asks', 'updated_at', 'INTEGER')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -201,6 +205,48 @@ export class Store {
     return this.get(id)
   }
 
+  /**
+   * Revise an OPEN ask in place. `body` is the output of validateUpdate.
+   *
+   * This exists because the alternative was cancel-and-refile, which throws
+   * away the ticket, the link the human already has open, and everything they
+   * had typed. An agent watching the drafts come in should be able to ask the
+   * obvious follow-up without taking the page out from under them.
+   *
+   * Only an open ask can be revised: once a human has answered or sent it back,
+   * the record holds their work and the questions they answered must stay the
+   * questions they answered.
+   */
+  update(idOrTicket, { why, fields }) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return null
+    if (ask.status !== 'open') {
+      const err = new Error(
+        `ask ${ask.ticket} is ${ask.status}, not open; a revision would change the question they already answered`,
+      )
+      err.code = 'ASK_NOT_OPEN'
+      err.askStatus = ask.status
+      throw err
+    }
+    const at = nowMs()
+    this.#db
+      .prepare('UPDATE asks SET why = ?, fields_json = ?, updated_at = ? WHERE id = ?')
+      .run(why, JSON.stringify(fields), at, ask.id)
+
+    // Drafts and notes for fields that no longer exist would hydrate into an
+    // ask with nowhere to show them. Everything else is left alone on purpose:
+    // an edit must not cost the human the answers they already typed.
+    const keep = new Set(fields.map((field) => field.name))
+    const dropDraft = this.#db.prepare('DELETE FROM drafts WHERE ask_id = ? AND field_name = ?')
+    const dropNote = this.#db.prepare('DELETE FROM field_notes WHERE ask_id = ? AND field_name = ?')
+    for (const name of new Set([...Object.keys(ask.draft), ...Object.keys(ask.field_context)])) {
+      if (keep.has(name)) continue
+      dropDraft.run(ask.id, name)
+      dropNote.run(ask.id, name)
+    }
+    return this.get(ask.id)
+  }
+
   #hydrate(row) {
     if (!row) return null
     const answers = {}
@@ -255,6 +301,7 @@ export class Store {
       draft_updated_at: draftAt || undefined,
       field_context: fieldContext,
       created_at: row.created_at,
+      updated_at: row.updated_at ?? undefined,
       answered_at: row.answered_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
       closed_at: row.closed_at ?? undefined,
@@ -479,6 +526,15 @@ export class Store {
   /** Everything this agent can be told right now: its answered asks, filed or parked. */
   pending(origin) {
     return this.list({ agentKey: agentKey(origin), status: ['answered', 'bounced'] })
+  }
+
+  /**
+   * This agent's asks that are still open. Half-filled drafts live on these,
+   * which is what lets an agent react while the human is still typing instead
+   * of only after they submit.
+   */
+  openForAgent(origin) {
+    return this.list({ profile: '*', agentKey: agentKey(origin), status: ['open'] })
   }
 
   /**

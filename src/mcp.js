@@ -199,8 +199,37 @@ const TOOLS = [
   },
   {
     name: 'unblock_check',
-    description: 'Collect answered requests previously filed by this agent.',
+    description:
+      'Collect answered requests previously filed by this agent, and see what is part way filled in on the ones still open.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'unblock_peek',
+    description:
+      'Read what the human has typed into an open ask so far — drafts and per-field context — without consuming the answer. Use it while they are still on the page, then unblock_update to follow up.',
+    inputSchema: {
+      type: 'object',
+      properties: { ticket: { type: 'string' } },
+      required: ['ticket'],
+    },
+  },
+  {
+    name: 'unblock_update',
+    description:
+      'Revise an OPEN ask in place: add follow-up questions, drop ones their answers made pointless, or restate why. The ticket, the page they have open and every draft on a field you do not touch all survive. Cancelling and refiling loses all three.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticket: { type: 'string' },
+        why: askProperties.why,
+        // Same field shape as unblock_file, validated by the same schema — a
+        // revision can never reach a shape a fresh ask could not.
+        add_fields: askProperties.fields,
+        remove_fields: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+        replace_fields: askProperties.fields,
+      },
+      required: ['ticket'],
+    },
   },
   {
     name: 'unblock_cancel',
@@ -266,6 +295,35 @@ function answerText(ask) {
   return lines.join('\n')
 }
 
+/**
+ * What the human has typed so far, without consuming anything.
+ *
+ * A draft is not an answer: they are mid-thought, they may change it, and they
+ * have not pressed the button. Read it to decide what to ASK next, never to act
+ * on as though it were decided. Secrets never draft, so a secret field here is
+ * always empty.
+ */
+function draftText(ask) {
+  const lines = [`${ask.ticket}: ${ask.title} — ${ask.status}`]
+  for (const field of ask.fields) {
+    const value = ask.draft?.[field.name]
+    const note = ask.field_context?.[field.name]
+    if (value === undefined && note === undefined) {
+      lines.push(`${field.name}: (nothing yet)`)
+      continue
+    }
+    if (value !== undefined) lines.push(`${field.name}: ${JSON.stringify(value)} (draft, not submitted)`)
+    if (note !== undefined) lines.push(`  their context: ${note}`)
+  }
+  if (ask.draft_reply) lines.push(`they are writing: ${ask.draft_reply}`)
+  lines.push(
+    ask.draft_updated_at
+      ? `last typed at ${new Date(ask.draft_updated_at).toISOString()}`
+      : 'they have not typed anything yet',
+  )
+  return lines.join('\n')
+}
+
 async function createAsk(kind, args) {
   const project = process.env.UNBLOCK_PROJECT || undefined
   return daemonFetch('/asks', {
@@ -308,6 +366,28 @@ export class McpConnection {
       return textResult(`Cancelled ${body.ask.ticket}.`, { ask: body.ask })
     }
 
+    if (name === 'unblock_peek') {
+      const ask = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}`)
+      return textResult(draftText(ask), { ask })
+    }
+
+    if (name === 'unblock_update') {
+      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/update`, {
+        method: 'POST',
+        body: JSON.stringify({
+          why: args.why,
+          add_fields: args.add_fields,
+          remove_fields: args.remove_fields,
+          replace_fields: args.replace_fields,
+        }),
+      })
+      const names = body.ask.fields.map((field) => field.name).join(', ')
+      return textResult(
+        `Updated ${body.ask.ticket}; it now asks: ${names}. Their page picks it up on its own — do not re-park.`,
+        { ask: body.ask },
+      )
+    }
+
     if (name === 'unblock_check') {
       const query = new URLSearchParams(Object.entries(origin()).filter(([, value]) => value != null))
       const pending = await daemonFetch(`/pending?${query}`)
@@ -319,8 +399,21 @@ export class McpConnection {
         })
         collected.push(body.ask)
       }
-      if (collected.length === 0) return textResult('No answered requests are waiting.', { asks: [] })
-      return textResult(collected.map(answerText).join('\n\n'), { asks: collected })
+      // Asks nobody has submitted yet, but which someone is visibly part way
+      // through. Reporting them is what stops an agent re-asking a question
+      // the human is in the middle of answering.
+      const drafts = (pending.open || []).filter((ask) => ask.draft_updated_at)
+      if (collected.length === 0 && drafts.length === 0) {
+        return textResult('No answered requests are waiting.', { asks: [], drafts: [] })
+      }
+      const sections = []
+      if (collected.length > 0) sections.push(collected.map(answerText).join('\n\n'))
+      if (drafts.length > 0) {
+        sections.push(
+          ['Still open, and being filled in right now:', ...drafts.map(draftText)].join('\n'),
+        )
+      }
+      return textResult(sections.join('\n\n'), { asks: collected, drafts })
     }
 
     if (name === 'unblock_park') {
