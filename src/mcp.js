@@ -403,8 +403,18 @@ export class McpConnection {
       // through. Reporting them is what stops an agent re-asking a question
       // the human is in the middle of answering.
       const drafts = (pending.open || []).filter((ask) => ask.draft_updated_at)
-      if (collected.length === 0 && drafts.length === 0) {
-        return textResult('No answered requests are waiting.', { asks: [], drafts: [] })
+      // Every open ask, with the link the human answers it at. A park whose
+      // result the agent never saw (the harness backgrounded the call, the
+      // session was resumed) is otherwise unrecoverable: the agent knows it
+      // asked something and cannot say where, so it guesses a URL or asks
+      // again.
+      const open = []
+      for (const ask of pending.open || []) {
+        const link = await answerLink(ask.ticket)
+        open.push({ ticket: ask.ticket, title: ask.title, url: link.url, draft_updated_at: ask.draft_updated_at ?? null })
+      }
+      if (collected.length === 0 && drafts.length === 0 && open.length === 0) {
+        return textResult('No answered requests are waiting.', { asks: [], drafts: [], open: [] })
       }
       const sections = []
       if (collected.length > 0) sections.push(collected.map(answerText).join('\n\n'))
@@ -413,7 +423,12 @@ export class McpConnection {
           ['Still open, and being filled in right now:', ...drafts.map(draftText)].join('\n'),
         )
       }
-      return textResult(sections.join('\n\n'), { asks: collected, drafts })
+      if (open.length > 0) {
+        sections.push(
+          ['Open, answer links:', ...open.map((ask) => `- ${ask.ticket} "${ask.title}" → ${ask.url}`)].join('\n'),
+        )
+      }
+      return textResult(sections.join('\n\n'), { asks: collected, drafts, open })
     }
 
     if (name === 'unblock_park') {
