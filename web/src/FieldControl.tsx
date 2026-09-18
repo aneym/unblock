@@ -5,6 +5,7 @@ import { Input } from './components/ui/input'
 import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
 import { Textarea } from './components/ui/textarea'
 import { cn } from './lib/utils'
+import { Linkify } from './lib/linkify'
 import { isMissing, type Field, type FieldValue } from './deck'
 
 export function CopyBlock({ text }: { text: string }) {
@@ -60,7 +61,7 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
   }
   const label = (
     <label htmlFor={id} className="mb-2 block text-[13.5px] font-semibold leading-5 text-[var(--ink)]">
-      {field.label}
+      <Linkify text={field.label} />
       {field.required ? <span className="text-[var(--accent)]"> *</span> : <span className="font-normal text-[var(--faint)]"> · optional</span>}
     </label>
   )
@@ -91,7 +92,7 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
     control = <div className="grid gap-1.5">
       {(field.choices || []).map((choice) => {
         const checked = selected.includes(choice.value)
-        return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, withOther(next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value), otherValue))} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
+        return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, withOther(next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value), otherValue))} /><span><Linkify text={choice.label} />{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
       })}
       <div className={cn('flex items-center gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-2.5 text-[15px]', otherValue && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
         <span className="text-[var(--dim)]">Other:</span>
@@ -104,7 +105,7 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
     const radioValue = value === null ? '__skip__' : isOther ? '__other__' : typeof value === 'string' ? value : ''
     control = <div className="grid gap-1.5">
       <RadioGroup value={radioValue} onValueChange={(next) => onChange(field.name, next === '__skip__' ? null : next === '__other__' ? (isOther ? value : '') : next)} disabled={disabled}>
-        {(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span>{choice.label}{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}
+        {(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span><Linkify text={choice.label} />{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}
         <label className={cn('flex cursor-pointer items-center gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-2.5 text-[15px]', isOther && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
           <RadioGroupItem value="__other__" />
           <span className="text-[var(--dim)]">Other:</span>
@@ -117,7 +118,7 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
       </RadioGroup>
     </div>
   } else if (field.type === 'confirm') {
-    control = <label className="flex cursor-pointer items-start gap-3 text-[15px]"><Checkbox id={id} checked={value === true} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true)} /><span>{field.help || 'Done'}</span></label>
+    control = <label className="flex cursor-pointer items-start gap-3 text-[15px]"><Checkbox id={id} checked={value === true} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true)} /><span><Linkify text={field.help || 'Done'} /></span></label>
   } else if (field.type === 'paste') {
     control = <div className="grid gap-2"><CopyBlock text={field.command || ''} /><Textarea id={id} value={typeof value === 'string' ? value : ''} placeholder="paste the output here" spellCheck={false} disabled={disabled} className="font-mono" onChange={(event) => onChange(field.name, event.target.value)} /></div>
   } else if (field.multiline) {
@@ -147,9 +148,9 @@ export function FieldControl({ field, ticket, value, note, bounceNote, onChange,
     <div className="border-t border-[var(--rule)] py-5 first:border-t">
       {label}{control}
       {field.url && <a className="mt-2 block break-all text-[15px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={field.url} target="_blank" rel="noreferrer noopener">{field.url}</a>}
-      {field.help && field.type !== 'confirm' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">{field.help}</p>}
+      {field.help && field.type !== 'confirm' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><Linkify text={field.help} /></p>}
       {field.type === 'secret' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">Stored on your machine. The agent receives a reference, never the value.</p>}
-      {field.recommend && !field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span>{field.type !== 'choice' && <>: {String(field.recommend.value)}</>} · {field.recommend.why}</p>}
+      {field.recommend && !field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span>{field.type !== 'choice' && <>: {String(field.recommend.value)}</>} · <Linkify text={field.recommend.why} /></p>}
       {field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">This one needs your decision.</p>}
       {/* The context box is always here, never behind a disclosure. Half of
           what makes an answer usable is the caveat beside it, and a person

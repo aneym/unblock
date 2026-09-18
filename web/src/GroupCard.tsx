@@ -5,6 +5,7 @@ import { Checkbox } from './components/ui/checkbox'
 import { Input } from './components/ui/input'
 import { Textarea } from './components/ui/textarea'
 import { cn } from './lib/utils'
+import { Linkify } from './lib/linkify'
 import { api, FinishedError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { SuccessOverlay } from './SoloCard'
@@ -67,7 +68,7 @@ function ChoicePills({ field, value, disabled, onChange }: { field: Field; value
             active(choice.value) ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)]' : 'hover:border-[var(--ink)]',
           )}
         >
-          {choice.label}
+          <Linkify text={choice.label} />
           {recommended(choice.value) && <span className={cn('ml-1.5 align-middle text-[10px]', active(choice.value) ? 'text-[var(--bg)]' : 'text-[var(--accent)]')}>●</span>}
         </motion.button>
       ))}
@@ -241,7 +242,7 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
                 <h3 className="font-display min-w-0 text-[17.5px] font-semibold leading-snug tracking-[-.005em]">{ask.title}</h3>
                 <span className="font-mono text-[11.5px] text-[var(--faint)]">{ask.origin.agent || 'agent'} · {ago(ask.created_at)}</span>
               </div>
-              <p className="mt-1 text-pretty text-[14px] leading-relaxed text-[var(--dim)]">{ask.why}</p>
+              <p className="mt-1 text-pretty text-[14px] leading-relaxed text-[var(--dim)]"><Linkify text={ask.why} /></p>
               {/* The controls stay put when an ask is sent back: a typed
                   answer rides along as a draft, so hiding it was a lie. */}
               <div className="mt-3 grid gap-3">
@@ -256,14 +257,14 @@ export function GroupCard({ item, deferrable, onFinished, onDefer }: GroupCardPr
                       {field.type === 'confirm' ? (
                         <label className="flex cursor-pointer items-start gap-3 text-[14.5px]">
                           <Checkbox checked={row.values[field.name] === true} disabled={isBusy} onCheckedChange={(next) => update(ask.ticket, { values: { ...row.values, [field.name]: next === true } })} />
-                          <span>{field.help || 'Done'}</span>
+                          <span><Linkify text={field.help || 'Done'} /></span>
                         </label>
                       ) : (
                         <ChoicePills field={field} value={row.values[field.name]} disabled={isBusy} onChange={(value) => update(ask.ticket, { values: { ...row.values, [field.name]: value } })} />
                       )}
-                      {field.recommend && !field.must_decide && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span> · {field.recommend.why}</p>}
+                      {field.recommend && !field.must_decide && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span> · <Linkify text={field.recommend.why} /></p>}
                       {field.must_decide && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]">This one needs your decision.</p>}
-                      {field.help && field.type !== 'confirm' && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]">{field.help}</p>}
+                      {field.help && field.type !== 'confirm' && <p className="mt-1.5 text-[12.5px] leading-5 text-[var(--dim)]"><Linkify text={field.help} /></p>}
                     </div>
                   ))}
                   {/* Open, not behind "Add context": the caveat beside an

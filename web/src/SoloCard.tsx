@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Button } from './components/ui/button'
 import { Textarea } from './components/ui/textarea'
 import { cn } from './lib/utils'
+import { Linkify } from './lib/linkify'
 import { api, BASE, FinishedError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { FieldControl } from './FieldControl'
@@ -304,8 +305,8 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
         {draftState !== 'idle' && <><span aria-hidden>·</span><span className={cn(draftState === 'offline' && 'text-[var(--danger)]')}>{draftState === 'saving' ? 'saving draft…' : draftState === 'saved' ? 'draft saved' : 'draft kept in this browser'}</span></>}
       </div>
       <h2 className="font-display mt-3.5 text-balance text-[24px] font-semibold leading-[1.25] tracking-[-.01em] sm:text-[26px]">{ask.title}</h2>
-      <p className="mt-2 text-pretty text-[15px] leading-relaxed text-[var(--dim)]">{ask.why}</p>
-      {!!ask.steps?.length && <ol className="my-4 list-decimal space-y-1.5 pl-6 text-[15px] leading-relaxed marker:text-[var(--faint)]">{ask.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>}
+      <p className="mt-2 text-pretty text-[15px] leading-relaxed text-[var(--dim)]"><Linkify text={ask.why} /></p>
+      {!!ask.steps?.length && <ol className="my-4 list-decimal space-y-1.5 pl-6 text-[15px] leading-relaxed marker:text-[var(--faint)]">{ask.steps.map((step, index) => <li key={index}><Linkify text={step} /></li>)}</ol>}
       {!!ask.links?.length && <div className="my-4 grid gap-1.5">{ask.links.map((link) => <a key={link.url} className="break-all text-[15px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={link.url} target="_blank" rel="noreferrer noopener">{link.label}</a>)}</div>}
       {paged && !reviewing && (
         <div className="mt-5 flex items-center gap-1.5">
