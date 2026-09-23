@@ -14,7 +14,7 @@ import { ago, groupOf, isMissing, type Ask, type Bounced, type FieldValue, type 
  * click makes some Chromium shells open an about:blank tab when no OS handler
  * answers; a throwaway iframe fires the handler with no navigation either way.
  */
-function openHerdr(href: string) {
+function openExternalScheme(href: string) {
   const frame = document.createElement('iframe')
   frame.style.display = 'none'
   frame.src = href
@@ -46,12 +46,11 @@ export function SuccessOverlay({ label }: { label: string }) {
 
 interface SoloCardProps {
   ask: Ask
-  deferrable: boolean
   onFinished: () => void
-  onDefer: () => void
+  onDraftChange?: (values: Values, bounced: Bounced) => void
 }
 
-export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps) {
+export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
   /**
    * Seed once per ticket: server draft first, then the local mirror on top
    * when it is newer than what the daemon has. Later polls replace the `ask`
@@ -97,6 +96,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     return () => window.clearTimeout(timer)
   }, [armed])
   const draftTimer = useRef<number | undefined>(undefined)
+  const completed = useRef(false)
   const latest = useRef({ values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced })
   const secretNames = useMemo(() => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)), [ask.fields])
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
@@ -121,7 +121,9 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
-    writeLocal(ask.ticket, { values: safeValues(merged.values), notes: merged.notes, reply: merged.reply, bounced: merged.bounced })
+    const safe = safeValues(merged.values)
+    writeLocal(ask.ticket, { values: safe, notes: merged.notes, reply: merged.reply, bounced: merged.bounced })
+    onDraftChange?.(safe, merged.bounced)
     window.clearTimeout(draftTimer.current)
     setDraftState('saving')
     draftTimer.current = window.setTimeout(() => {
@@ -135,7 +137,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
   /** Leaving the page flushes a pending draft without waiting on the network. */
   useEffect(() => {
     const flush = () => {
-      if (draftTimer.current === undefined) return
+      if (draftTimer.current === undefined || completed.current) return
       window.clearTimeout(draftTimer.current)
       draftTimer.current = undefined
       const merged = latest.current
@@ -151,7 +153,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     return () => {
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
-      window.clearTimeout(draftTimer.current)
+      flush()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
@@ -206,6 +208,9 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       setState('done')
       setMessage(output.complete ? ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent' : 'saved, still incomplete')
       if (output.complete) {
+        completed.current = true
+        window.clearTimeout(draftTimer.current)
+        draftTimer.current = undefined
         clearLocal(ask.ticket)
         window.setTimeout(onFinished, 950)
       }
@@ -225,6 +230,9 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       await api('/api/answer', { ticket: ask.ticket, reply, bounce: true })
       setState('done')
       setMessage('sent back — the agent will rework it')
+      completed.current = true
+      window.clearTimeout(draftTimer.current)
+      draftTimer.current = undefined
       clearLocal(ask.ticket)
       window.setTimeout(onFinished, 1100)
     } catch (error) {
@@ -232,22 +240,21 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
     }
   }
-  /**
-   * Cmd+Enter (or Ctrl+Enter) moves you forward: to the next question while
-   * stepping through a long ask, and to send once everything is on screen.
-   */
-  const onKeyDown = (event: React.KeyboardEvent) => {
+  /** Cmd/Ctrl+Enter submits this ask; it never changes the selected ask. */
+  const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
     if (isBusy || detected) return
     event.preventDefault()
-    if (paged && !reviewing) {
-      if (step >= unanswered.length - 1) setReviewing(true)
-      else setStep((current) => current + 1)
-      return
-    }
+    if (paged && !reviewing) setReviewing(true)
     if (hardMissing.length > 0) return
     void submit()
   }
+  useEffect(() => {
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+  const topLinks = [...(ask.links || []), ...ask.fields.filter((field) => field.url).map((field) => ({ label: field.label, url: field.url! }))]
+    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
       (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
@@ -291,7 +298,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
     ].filter(Boolean).join(' · ')
 
   return (
-    <article onKeyDown={onKeyDown} className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 pt-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:pt-8', detected && 'opacity-75')}>
+    <article className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 pt-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:pt-8', detected && 'opacity-75')}>
       <AnimatePresence>{state === 'done' && <SuccessOverlay label={message} />}</AnimatePresence>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[12px] leading-5 text-[var(--faint)]">
         {ask.gating ? <span className="font-semibold text-[var(--accent)]">● waiting</span> : detected ? <span>detected</span> : <span>filed</span>}
@@ -299,7 +306,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
         <span>{ask.origin.agent || 'agent'}</span>
         <span aria-hidden>·</span>
         <span className="text-[var(--dim)]">{groupOf(ask)}</span>
-        {ask.origin.pane_id && herdrHref && <><span aria-hidden>·</span><a href={herdrHref} onClick={(event) => { event.preventDefault(); openHerdr(herdrHref) }} title="Jump to this pane in Herdr" className="underline decoration-[var(--faint)] underline-offset-2 hover:text-[var(--accent)] hover:decoration-[var(--accent)]">{ask.origin.pane_id}</a></>}
+        {ask.origin.pane_id && herdrHref && <><span aria-hidden>·</span><a href={herdrHref} onClick={(event) => { event.preventDefault(); openExternalScheme(herdrHref) }} title="Jump to this pane in Herdr" className="underline decoration-[var(--faint)] underline-offset-2 hover:text-[var(--accent)] hover:decoration-[var(--accent)]">{ask.origin.pane_id}</a></>}
         <span aria-hidden>·</span>
         <span>{ago(ask.created_at)}</span>
         {draftState !== 'idle' && <><span aria-hidden>·</span><span className={cn(draftState === 'offline' && 'text-[var(--danger)]')}>{draftState === 'saving' ? 'saving draft…' : draftState === 'saved' ? 'draft saved' : 'draft kept in this browser'}</span></>}
@@ -307,7 +314,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
       <h2 className="font-display mt-3.5 text-balance text-[24px] font-semibold leading-[1.25] tracking-[-.01em] sm:text-[26px]">{ask.title}</h2>
       <p className="mt-2 text-pretty text-[15px] leading-relaxed text-[var(--dim)]"><Linkify text={ask.why} /></p>
       {!!ask.steps?.length && <ol className="my-4 list-decimal space-y-1.5 pl-6 text-[15px] leading-relaxed marker:text-[var(--faint)]">{ask.steps.map((step, index) => <li key={index}><Linkify text={step} /></li>)}</ol>}
-      {!!ask.links?.length && <div className="my-4 grid gap-1.5">{ask.links.map((link) => <a key={link.url} className="break-all text-[15px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={link.url} target="_blank" rel="noreferrer noopener">{link.label}</a>)}</div>}
+      {!!topLinks.length && <div className="my-5 flex flex-wrap gap-2">{topLinks.map((link) => <a key={link.url} className="inline-flex min-h-10 max-w-full items-center rounded-[var(--radius-sm)] border border-[var(--input-border)] bg-[var(--surface2)] px-3 text-[13.5px] font-medium text-[var(--ink)] hover:border-[var(--accent)]" href={link.url} target={/^https?:/i.test(link.url) ? '_blank' : undefined} rel="noreferrer noopener" onClick={/^https?:/i.test(link.url) ? undefined : (event) => { event.preventDefault(); openExternalScheme(link.url) }}><span className="truncate">{link.label}</span><span className="ml-2 text-[var(--accent)]" aria-hidden>↗</span></a>)}</div>}
       {paged && !reviewing && (
         <div className="mt-5 flex items-center gap-1.5">
           {unanswered.map((field, index) => {
@@ -372,7 +379,7 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
           </>
         ) : !detected && (
           <>
-            <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{ask.gating ? 'Answer & wake' : isDecision ? 'Submit & next' : 'Answer & next'}</Button>
+            <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{ask.gating ? 'Answer & wake' : isDecision ? 'Submit answer' : 'Answer'}</Button>
             <Button
               variant="secondary"
               disabled={isBusy}
@@ -384,7 +391,6 @@ export function SoloCard({ ask, deferrable, onFinished, onDefer }: SoloCardProps
             </Button>
           </>
         )}
-        {deferrable && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} title="Skip for now — this card comes back at the end of the deck" onClick={onDefer}>Skip</button>}
         <span className={cn('min-w-0 text-[13px] leading-5 text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{statusHint}</span>
       </div>
     </article>

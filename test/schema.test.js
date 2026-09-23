@@ -41,7 +41,15 @@ test('strips control characters from every agent-supplied string', () => {
   }
 })
 
-test('rejects non-http URLs so a javascript: href can never be stored', () => {
+test('accepts supported action links in asks and fields', () => {
+  for (const url of ['https://example.com', 'codex://thread/123', 'x-apple.systempreferences:com.apple.preference.security']) {
+    const ask = validateAsk({ title: 't', why: 'w', links: [{ url }], fields: [{ name: 'a', type: 'text', url }] })
+    assert.equal(ask.links[0].url, url)
+    assert.equal(ask.fields[0].url, url)
+  }
+})
+
+test('rejects unsafe action URLs so a javascript: href can never be stored', () => {
   for (const url of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd']) {
     assert.throws(
       () =>
@@ -51,7 +59,7 @@ test('rejects non-http URLs so a javascript: href can never be stored', () => {
           links: [{ url }],
           fields: [{ name: 'a', type: 'text' }],
         }),
-      /http\(s\) URL/,
+      /http\(s\), codex, or system preferences URL/,
       url,
     )
   }

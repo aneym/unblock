@@ -95,6 +95,10 @@ export function normalizePort(value) {
   return Number.isInteger(port) && port > 0 && port < 65536 ? String(port) : null
 }
 
+export function normalizeSecretBackend(value) {
+  return ['auto', 'op', 'keychain', 'env'].includes(value) ? value : null
+}
+
 /**
  * Fill UNBLOCK_* variables that are unset from the config file. Returns what
  * was applied and from where so health can report it. Idempotent.
@@ -107,6 +111,7 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
     ['UNBLOCK_TRUSTED_PROXY', normalizeTrustedProxy(file.trusted_proxy)],
     ['UNBLOCK_ALLOWED_USERS', normalizeAllowedUsers(file.allowed_users)],
     ['UNBLOCK_PORT', normalizePort(file.port)],
+    ['UNBLOCK_SECRET_BACKEND', normalizeSecretBackend(file.secret_backend)],
   ]
   for (const [name, value] of settings) {
     if (env[name] !== undefined && env[name] !== '') continue

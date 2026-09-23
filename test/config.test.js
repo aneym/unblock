@@ -9,6 +9,7 @@ import {
   daemonRoot,
   normalizeAllowedUsers,
   normalizePublicOrigin,
+  normalizeSecretBackend,
   normalizeTrustedProxy,
   readConfig,
 } from '../src/config.js'
@@ -45,6 +46,12 @@ test('only tailscale is a known trusted proxy', () => {
   assert.equal(normalizeTrustedProxy('*'), null)
 })
 
+test('secret backend config accepts only supported stores', () => {
+  assert.equal(normalizeSecretBackend('env'), 'env')
+  assert.equal(normalizeSecretBackend('keychain'), 'keychain')
+  assert.equal(normalizeSecretBackend('file'), null)
+})
+
 test('allowed users accept a list or a comma string, never a wildcard', () => {
   assert.equal(normalizeAllowedUsers(['a@example.com', ' b@example.com ']), 'a@example.com,b@example.com')
   assert.equal(normalizeAllowedUsers('a@example.com,b@example.com'), 'a@example.com,b@example.com')
@@ -61,6 +68,7 @@ test('the file fills unset variables and the environment wins', () => {
       trusted_proxy: 'tailscale',
       allowed_users: ['a.neyman17@gmail.com'],
       port: 4488,
+      secret_backend: 'env',
     }),
   )
   const env = {}
@@ -70,16 +78,18 @@ test('the file fills unset variables and the environment wins', () => {
     'UNBLOCK_ALLOWED_USERS',
     'UNBLOCK_PORT',
     'UNBLOCK_PUBLIC_ORIGIN',
+    'UNBLOCK_SECRET_BACKEND',
     'UNBLOCK_TRUSTED_PROXY',
   ])
   assert.equal(env.UNBLOCK_PUBLIC_ORIGIN, 'https://studio.tailf266ac.ts.net:8797')
   assert.equal(env.UNBLOCK_PORT, '4488')
+  assert.equal(env.UNBLOCK_SECRET_BACKEND, 'env')
 
   const pinned = { UNBLOCK_PUBLIC_ORIGIN: 'http://127.0.0.1:4488', UNBLOCK_PORT: '0' }
   const second = applyConfig({ env: pinned, path: file })
   assert.equal(pinned.UNBLOCK_PUBLIC_ORIGIN, 'http://127.0.0.1:4488')
   assert.equal(pinned.UNBLOCK_PORT, '0')
-  assert.deepEqual(second.applied.sort(), ['UNBLOCK_ALLOWED_USERS', 'UNBLOCK_TRUSTED_PROXY'])
+  assert.deepEqual(second.applied.sort(), ['UNBLOCK_ALLOWED_USERS', 'UNBLOCK_SECRET_BACKEND', 'UNBLOCK_TRUSTED_PROXY'])
 })
 
 test('an invalid origin in the file is dropped rather than half-applied', () => {

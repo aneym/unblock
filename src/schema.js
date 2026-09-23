@@ -57,6 +57,8 @@ export const ASK_STATUSES = [
 const NAME_RE = /^[a-z][a-z0-9_]{0,47}$/
 const MAX_TITLE = 90
 const MAX_FIELDS = 12
+const ACTION_URL_RE = /^(?:https?:\/\/[^\s]+|codex:\/\/[^\s]+|x-apple\.systempreferences:[^\s]+)$/i
+const isActionUrl = (url) => ACTION_URL_RE.test(url)
 
 class ValidationError extends Error {
   constructor(message, path) {
@@ -130,8 +132,8 @@ function validateField(raw, index, seen, purpose = 'blocker') {
     url: optionalStr(raw.url, `${path}.url`, { max: 2000 }),
   }
 
-  if (field.url && !/^https?:\/\//.test(field.url)) {
-    throw new ValidationError('must be an http(s) URL', `${path}.url`)
+  if (field.url && !isActionUrl(field.url)) {
+    throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
   }
 
   if (type === 'choice') {
@@ -301,7 +303,7 @@ export function validateAsk(raw) {
       const path = `links[${i}]`
       if (!isPlainObject(l)) throw new ValidationError('must be an object', path)
       const url = str(l.url, `${path}.url`, { max: 2000 })
-      if (!/^https?:\/\//.test(url)) throw new ValidationError('must be an http(s) URL', `${path}.url`)
+      if (!isActionUrl(url)) throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
       return { url, label: str(l.label ?? url, `${path}.label`, { max: 160 }) }
     }),
     ttl_seconds: normalizeTtl(raw.ttl_seconds),

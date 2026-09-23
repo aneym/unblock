@@ -1,363 +1,126 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { api, FinishedError, VIEWER } from './lib/api'
-import { selectDeck, type DeckItem, type QueueData } from './deck'
+import { ago, groupOf, isMissing, sortAsks, type Ask, type Bounced, type QueueData, type Values } from './deck'
+import { readLocal } from './lib/drafts'
 import { SoloCard } from './SoloCard'
-import { GroupCard } from './GroupCard'
 import { cn } from './lib/utils'
 
-/** #ask=<ticket> deep-links a card to the front of the deck. */
 function readPinned(): string | null {
   const match = window.location.hash.match(/#ask=([^&]+)/)
-  return match ? decodeURIComponent(match[1]) : null
+  if (!match) return null
+  try { return decodeURIComponent(match[1]) } catch { return null }
 }
 
-function Meter({ done, total }: { done: number; total: number }) {
-  if (total < 2) return null
-  if (total > 14) {
-    return (
-      <div className="mt-3.5 h-[3px] overflow-hidden rounded-full bg-[var(--rule)]">
-        <motion.div
-          className="h-full rounded-full bg-[var(--ink)]"
-          animate={{ width: `${Math.round((done / total) * 100)}%` }}
-          transition={{ type: 'spring', stiffness: 200, damping: 28 }}
-        />
-      </div>
-    )
-  }
-  return (
-    <div className="mt-3.5 flex gap-1.5">
-      {Array.from({ length: total }, (_, index) => (
-        <span
-          key={index}
-          className={cn(
-            'h-[3px] flex-1 rounded-full transition-colors duration-500',
-            index < done ? 'bg-[var(--ink)]' : 'bg-[var(--rule)]',
-          )}
-        />
-      ))}
-    </div>
-  )
+function remainingFields(ask: Ask, live?: { values: Values; bounced: Bounced }) {
+  const local = readLocal(ask.ticket)
+  const draft = local && local.t > (ask.draft_updated_at || 0) ? local : null
+  const values = live?.values || { ...(ask.draft || {}), ...(draft?.values || {}) }
+  const bounced = live?.bounced || draft?.bounced || {}
+  return ask.fields.filter((field) => field.required && !(field.name in (ask.answers || {})) && !(field.name in bounced) && isMissing(values[field.name])).length
 }
 
-function ProjectPicker({ projects, active, openCount, onPick }: {
-  projects: [string, number][]
-  active: string | null
-  openCount: number
-  onPick: (project: string | null) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const pick = (project: string | null) => { onPick(project); setOpen(false) }
-  return (
-    <div className="relative">
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.97 }}
-        onClick={() => setOpen((current) => !current)}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        className="flex items-center gap-2 rounded-full border border-[var(--input-border)] bg-[var(--surface)] py-2 pl-4 pr-3.5 text-[14px] font-semibold shadow-[0_1px_2px_rgba(60,45,20,.06)]"
-      >
-        {active ?? 'All projects'}
-        <span className="text-[10px] text-[var(--faint)]" aria-hidden>▾</span>
-      </motion.button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <button type="button" aria-label="Close" className="fixed inset-0 z-10 cursor-default" onClick={() => setOpen(false)} />
-            <motion.ul
-              role="listbox"
-              initial={{ opacity: 0, y: -6, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.98 }}
-              transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-              className="absolute left-0 top-[calc(100%+6px)] z-20 min-w-52 origin-top-left rounded-[var(--radius)] border border-[var(--rule)] bg-[var(--surface)] py-1.5 shadow-[0_18px_40px_-18px_rgba(60,45,20,.4)]"
-            >
-              <li>
-                <button type="button" role="option" aria-selected={!active} onClick={() => pick(null)} className={cn('flex w-full items-baseline gap-3 px-4 py-2 text-left text-[14px] hover:bg-[var(--surface2)]', !active && 'font-semibold')}>
-                  <span className="min-w-0 flex-1">All projects</span>
-                  <span className="font-mono text-[12px] text-[var(--faint)]">{openCount}</span>
-                </button>
-              </li>
-              {projects.map(([name, count]) => (
-                <li key={name}>
-                  <button type="button" role="option" aria-selected={active === name} onClick={() => pick(name)} className={cn('flex w-full items-baseline gap-3 px-4 py-2 text-left text-[14px] hover:bg-[var(--surface2)]', active === name && 'font-semibold')}>
-                    <span className="min-w-0 flex-1 truncate">{name}</span>
-                    <span className="font-mono text-[12px] text-[var(--faint)]">{count}</span>
-                  </button>
-                </li>
-              ))}
-            </motion.ul>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  )
-}
-
-function BigState({ icon, title, detail, action }: { icon?: 'check'; title: string; detail: string; action?: React.ReactNode }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 26 }}
-      className="px-5 py-20 text-center"
-    >
-      {icon === 'check' && (
-        <motion.span
-          initial={{ scale: 0.4, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', stiffness: 380, damping: 20, delay: 0.05 }}
-          className="mx-auto mb-5 flex size-12 items-center justify-center rounded-full bg-[var(--ok)] text-[22px] font-bold text-white"
-        >
-          ✓
-        </motion.span>
-      )}
-      <h2 className="font-display text-[26px] font-semibold leading-tight tracking-[-.01em]">{title}</h2>
-      <p className="mx-auto mt-2 max-w-[40ch] text-pretty text-[15px] leading-relaxed text-[var(--dim)]">{detail}</p>
-      {action && <div className="mt-5">{action}</div>}
-    </motion.div>
-  )
-}
-
-function ShowEverything({ count, onClick }: { count: number; onClick: () => void }) {
-  return (
-    <motion.button
-      type="button"
-      whileTap={{ scale: 0.97 }}
-      onClick={onClick}
-      className="rounded-full border border-[var(--input-border)] bg-[var(--surface)] px-4 py-2 text-[14px] font-semibold shadow-[0_1px_2px_rgba(60,45,20,.06)] hover:border-[var(--ink)]"
-    >
-      Show all projects · {count} open
-    </motion.button>
-  )
+function Empty({ title, detail }: { title: string; detail: string }) {
+  return <div className="rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-6 py-16 text-center">
+    <h2 className="font-display text-[25px] font-semibold">{title}</h2>
+    <p className="mt-2 text-[15px] text-[var(--dim)]">{detail}</p>
+  </div>
 }
 
 export default function App() {
   const [data, setData] = useState<QueueData | null>(null)
   const [error, setError] = useState('')
   const [finished, setFinished] = useState(false)
-  // One entry per answered card, with its project — so the "N of M" header
-  // can recount under a project filter instead of carrying global numbers.
-  const [doneLog, setDoneLog] = useState<{ key: string; project: string }[]>([])
+  const [selectedTicket, setSelectedTicket] = useState<string | null>(() => readPinned())
   const [doneTickets, setDoneTickets] = useState<ReadonlySet<string>>(new Set())
-  const [deferred, setDeferred] = useState<string[]>([])
-  const [pinned, setPinned] = useState<string | null>(() => readPinned())
-  const [project, setProject] = useState<string | null>(() => {
-    try { return localStorage.getItem('ub_group') } catch { return null }
-  })
-  const reduced = useReducedMotion()
+  const [liveDrafts, setLiveDrafts] = useState<Record<string, { values: Values; bounced: Bounced }>>({})
 
   const load = useCallback(async () => {
     try { setData(await api<QueueData>('/api/queue')); setError('') }
-    catch (cause) { if (cause instanceof FinishedError) setFinished(true); else setError(cause instanceof Error ? cause.message : 'Unknown error') }
+    catch (cause) {
+      if (cause instanceof FinishedError) setFinished(true)
+      else setError(cause instanceof Error ? cause.message : 'Unknown error')
+    }
   }, [])
   useEffect(() => {
     void load()
     const timer = window.setInterval(() => {
-      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+      if (document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) return
       void load()
     }, 6000)
     return () => window.clearInterval(timer)
   }, [load])
   useEffect(() => {
-    const onHashChange = () => setPinned(readPinned())
+    const onHashChange = () => setSelectedTicket(readPinned())
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  // Every ordering rule lives in the shared model, so the picker, the deck and
-  // the counter can never disagree about what is on screen.
-  const doneProjects = useMemo(() => doneLog.map((entry) => entry.project), [doneLog])
-  const { items, projects, activeProject, current, remaining } = useMemo(
-    () => selectDeck({
-      asks: data?.asks || [],
-      project,
-      pinnedTicket: pinned,
-      deferredKeys: deferred,
-      doneTickets,
-      doneProjects,
-    }),
-    [data, project, pinned, deferred, doneTickets, doneProjects],
-  )
-
-  const clearPin = () => {
-    setPinned(null)
-    if (window.location.hash.startsWith('#ask=')) {
-      history.replaceState(null, '', window.location.pathname + window.location.search)
-    }
+  const asks = useMemo(() => sortAsks((data?.asks || []).filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))), [data, doneTickets])
+  const selected = asks.find((ask) => ask.ticket === selectedTicket) || asks[0]
+  const selectedIndex = selected ? asks.findIndex((ask) => ask.ticket === selected.ticket) : -1
+  const choose = (ticket: string) => {
+    setSelectedTicket(ticket)
+    if (window.location.hash.startsWith('#ask=')) history.replaceState(null, '', window.location.pathname + window.location.search)
   }
-  // Choosing a project is an explicit instruction, so it drops the deep link
-  // that was holding the deck to one ask. Without this the picker changed and
-  // the card did not, which is what made the filter look broken.
-  const setProjectPersist = (next: string | null) => {
-    clearPin()
-    setProject(next)
-    try {
-      if (next) localStorage.setItem('ub_group', next)
-      else localStorage.removeItem('ub_group')
-    } catch { /* ignore */ }
-  }
-
-  /**
-   * A deep link picks the project too, not just the card.
-   *
-   * Arriving on #ask=<ticket> put the picker on that ask's project while the
-   * stored filter was still whatever it was before. Answering cleared the pin,
-   * the filter reverted, and the deck dealt a card from another project —
-   * which is what "it jumped" was. Adopting the pin's project makes the state
-   * the picker is already showing the state that actually holds.
-   */
-  useEffect(() => {
-    if (!activeProject || activeProject === project) return
-    setProject(activeProject)
-    try { localStorage.setItem('ub_group', activeProject) } catch { /* ignore */ }
-  }, [activeProject, project])
-
-  const doneHere = activeProject ? doneLog.filter((entry) => entry.project === activeProject).length : doneLog.length
-  const total = doneHere + remaining
-  // Open cards outside the active filter — what the way out is worth.
-  const elsewhere = activeProject
-    ? projects.reduce((sum, [name, count]) => (name === activeProject ? sum : sum + count), 0)
-    : 0
-
-  const unpinIfCurrent = (item: DeckItem) => {
-    if (pinned && item.asks.some((ask) => ask.ticket === pinned)) clearPin()
-  }
-  const advance = (item: DeckItem) => {
-    setDoneTickets((previous) => new Set([...previous, ...item.asks.map((ask) => ask.ticket)]))
-    setDoneLog((previous) => [...previous, { key: item.key, project: item.project }])
-    unpinIfCurrent(item)
+  const finish = (ticket: string) => {
+    const index = asks.findIndex((ask) => ask.ticket === ticket)
+    const next = asks[index + 1] || asks[index - 1]
+    setDoneTickets((previous) => new Set([...previous, ticket]))
+    setSelectedTicket((current) => current === ticket ? next?.ticket || null : current)
+    if (window.location.hash.startsWith('#ask=')) history.replaceState(null, '', window.location.pathname + window.location.search)
     void load()
   }
-  const defer = (item: DeckItem) => {
-    setDeferred((previous) => [...previous.filter((key) => key !== item.key), item.key])
-    unpinIfCurrent(item)
-  }
-
-  // A card answered elsewhere (the herdr pane, another tab) leaves the deck on
-  // the next poll; drop its skip record so the list cannot grow forever.
   useEffect(() => {
-    setDeferred((previous) => {
-      const alive = previous.filter((key) => items.some((item) => item.key === key))
-      return alive.length === previous.length ? previous : alive
-    })
-  }, [items])
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
+      if (event.target instanceof HTMLElement && (event.target.closest('input, textarea, select, button, a, [contenteditable="true"]') || event.target.isContentEditable)) return
+      const direction = event.key === 'j' || event.key === 'ArrowDown' ? 1 : event.key === 'k' || event.key === 'ArrowUp' ? -1 : 0
+      if (!direction || asks.length === 0) return
+      event.preventDefault()
+      const index = selectedIndex < 0 ? 0 : (selectedIndex + direction + asks.length) % asks.length
+      choose(asks[index].ticket)
+      document.getElementById(`ask-tab-${encodeURIComponent(asks[index].ticket)}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [asks, selectedIndex])
 
-  if (finished) {
-    return (
-      <div className="mx-auto max-w-[720px] px-4 pt-16">
-        <BigState title="This link is finished" detail="Ask for a fresh one, or answer in the herdr pane." />
+  if (finished) return <div className="mx-auto max-w-[720px] px-4 pt-16"><Empty title="This link is finished" detail="Ask for a fresh one, or answer in the herdr pane." /></div>
+
+  return <div className="mx-auto max-w-[1180px] px-4 pb-24 pt-5 sm:px-6 sm:pt-8">
+    <header className="mb-6 border-b border-[var(--rule)] pb-5">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-[var(--faint)]">
+        <span className="text-[14px] font-semibold text-[var(--ink)]">unblock</span>
+        {data?.profile && data.profile !== '*' && <span>profile {data.profile}</span>}
+        {!!data?.hidden && <span>{data.hidden} more in other profiles</span>}
+        {VIEWER && <span className="ml-auto" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
       </div>
-    )
-  }
-
-  return (
-    <div className="mx-auto max-w-[720px] px-4 pb-24 pt-5 sm:px-5 sm:pt-8">
-      <header>
-        <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] leading-none text-[var(--faint)]">
-          <span className="text-[14px] font-semibold text-[var(--ink)]">unblock</span>
-          {data?.profile && data.profile !== '*' && <span>profile {data.profile}</span>}
-          {!!data?.hidden && <span>{data.hidden} more in other profiles</span>}
-          {VIEWER && <span className="ml-auto" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
+      <div className="mt-4 flex items-baseline justify-between gap-4">
+        <h1 className="font-display text-[28px] font-semibold leading-tight">Open asks</h1>
+        <span className="font-mono text-[13px] text-[var(--dim)]">{asks.length} open</span>
+      </div>
+    </header>
+    {error ? <Empty title="Cannot reach the daemon" detail={error} /> : !data ? <div className="py-20 text-center text-[var(--dim)]">Loading the queue…</div> : asks.length === 0 ? <Empty title="Nothing needs you" detail="No agent is waiting on an action or a decision." /> : <main className="grid items-start gap-5 md:grid-cols-[minmax(250px,330px)_minmax(0,1fr)]">
+      <nav aria-label="Open asks" className="min-w-0">
+        <p className="mb-2 hidden text-[12px] text-[var(--faint)] md:block">Select any ask · j/k to move</p>
+        <div className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6 md:mx-0 md:block md:space-y-2 md:overflow-visible md:p-0">
+          {asks.map((ask) => {
+            const active = ask.ticket === selected?.ticket
+            const left = remainingFields(ask, liveDrafts[ask.ticket])
+            const local = readLocal(ask.ticket)
+            const hasDraft = !!(ask.draft_updated_at || local || liveDrafts[ask.ticket])
+            return <button key={ask.ticket} id={`ask-tab-${encodeURIComponent(ask.ticket)}`} type="button" aria-current={active ? 'true' : undefined} onClick={() => choose(ask.ticket)} className={cn('min-w-[240px] max-w-[290px] shrink-0 snap-start rounded-[var(--radius)] border bg-[var(--surface)] px-4 py-3 text-left shadow-[0_1px_2px_rgba(60,45,20,.04)] transition-colors hover:border-[var(--accent)] md:w-full md:max-w-none md:min-w-0', active ? 'border-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--rule)]')}>
+              <span className="block truncate font-display text-[17px] font-semibold leading-snug">{ask.title}</span>
+              <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--dim)]"><span className="min-w-0 truncate">{groupOf(ask)}</span><span aria-hidden>·</span><span className="shrink-0">{ago(ask.created_at)}</span></span>
+              <span className="mt-2 flex items-center gap-2 font-mono text-[11px] text-[var(--dim)]"><span>{left} required {left === 1 ? 'field' : 'fields'} left</span>{hasDraft && <span title="Draft saved" aria-label="Draft saved" className="size-1.5 rounded-full bg-[var(--accent)]" />}</span>
+            </button>
+          })}
         </div>
-        <div className="flex items-center gap-3">
-          {projects.length > 0 && (
-            <ProjectPicker
-              projects={projects}
-              active={activeProject}
-              openCount={projects.reduce((sum, [, count]) => sum + count, 0)}
-              onPick={setProjectPersist}
-            />
-          )}
-          {remaining > 0 && (
-            // Cards left, not "N of M". Skipping moves a card without
-            // finishing it, and a position counter that sits still while the
-            // card changes reads as a bug.
-            <span className="ml-auto font-mono text-[13px] font-medium text-[var(--dim)]">{remaining} left</span>
-          )}
-        </div>
-        <Meter done={doneHere} total={total} />
-      </header>
-
-      <main aria-live="polite" className="mt-6">
-        {error ? (
-          <BigState title="Cannot reach the daemon" detail={error} />
-        ) : !data ? (
-          <div className="px-5 py-20 text-center text-[15px] text-[var(--dim)]">Loading the queue…</div>
-        ) : (
-          /**
-           * The stack. Each undealt card is a real layer BEHIND the live one,
-           * inset and pushed down so only its bottom lip shows. Rendering them
-           * as siblings underneath (the first attempt) read as two stray trays
-           * floating below the card, because a lip needs the card on top of it
-           * to be a lip at all.
-           */
-          <div className="relative">
-            <AnimatePresence>
-              {[2, 1].filter((depth) => remaining > depth).map((depth) => (
-                <motion.div
-                  key={`peek${depth}`}
-                  aria-hidden
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-                  style={{
-                    top: depth * 9,
-                    bottom: depth * -9,
-                    left: depth * 13,
-                    right: depth * 13,
-                  }}
-                  className="pointer-events-none absolute rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] shadow-[0_10px_24px_-20px_rgba(60,45,20,.4)]"
-                />
-              ))}
-            </AnimatePresence>
-            <AnimatePresence mode="popLayout" initial={false}>
-              {current ? (
-                <motion.div
-                  key={current.key}
-                  className="relative z-10"
-                  initial={reduced ? { opacity: 0 } : { y: 26, scale: 0.97, opacity: 0 }}
-                  animate={{ y: 0, scale: 1, opacity: 1 }}
-                  exit={reduced ? { opacity: 0 } : { y: -34, opacity: 0, rotate: -1.2 }}
-                  transition={{ type: 'spring', stiffness: 340, damping: 30 }}
-                >
-                  {current.grouped ? (
-                    <GroupCard item={current} deferrable={remaining > 1} onFinished={() => advance(current)} onDefer={() => defer(current)} />
-                  ) : (
-                    <SoloCard ask={current.asks[0]} deferrable={remaining > 1} onFinished={() => advance(current)} onDefer={() => defer(current)} />
-                  )}
-                </motion.div>
-              ) : (
-                <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  {/* Finishing a project shows you that project, empty — never
-                      somebody else's card. The way out is explicit, because
-                      the filter no longer drops itself. */}
-                  {doneHere > 0 ? (
-                    <BigState
-                      icon="check"
-                      title={activeProject ? `${activeProject} is clear` : 'Deck clear'}
-                      detail={`You answered ${doneHere} ${doneHere === 1 ? 'card' : 'cards'}. The agents are moving again.`}
-                      action={elsewhere > 0 ? <ShowEverything count={elsewhere} onClick={() => setProjectPersist(null)} /> : undefined}
-                    />
-                  ) : (
-                    <BigState
-                      title={activeProject ? `Nothing open in ${activeProject}` : 'Nothing needs you'}
-                      detail="No agent is waiting on an action or a decision."
-                      action={elsewhere > 0 ? <ShowEverything count={elsewhere} onClick={() => setProjectPersist(null)} /> : undefined}
-                    />
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-      </main>
-
-      <footer className="mt-14 border-t border-[var(--rule)] pt-4 text-[13px] leading-5 text-[var(--faint)]">
-        Answers go straight to the agent. Blanks go back as explicit skips.
-      </footer>
-    </div>
-  )
+      </nav>
+      <section aria-label="Selected ask" className="min-w-0">
+        {selected && <SoloCard key={selected.ticket} ask={selected} onFinished={() => finish(selected.ticket)} onDraftChange={(values, bounced) => setLiveDrafts((previous) => ({ ...previous, [selected.ticket]: { values, bounced } }))} />}
+      </section>
+    </main>}
+    <footer className="mt-14 border-t border-[var(--rule)] pt-4 text-[13px] leading-5 text-[var(--faint)]">Answers go straight to the agent. Blanks go back as explicit skips.</footer>
+  </div>
 }
