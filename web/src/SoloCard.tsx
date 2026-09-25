@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, ApiError, BASE, FinishedError } from './lib/api'
+import { api, ApiError, BASE, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type Values } from './deck'
 import { FieldControl } from './FieldControl'
@@ -26,6 +26,13 @@ function openPane(href: string) {
   frame.src = href
   document.body.appendChild(frame)
   window.setTimeout(() => frame.remove(), 2000)
+}
+/** Plain words for a failed send; the full sentence goes in the page, not the bar. */
+function sendFailure(error: unknown, what: string, button: string): string {
+  if (error instanceof NetworkError) {
+    return `Not sent: the connection to unblock dropped, even after retrying. ${what} is still here. Tap ${button} to try again.`
+  }
+  return `Not sent: ${error instanceof Error ? error.message : 'unknown error'}.`
 }
 function StepList({ ticket, steps, fields, values, renderField, checked, setChecked }: {
   ticket: string; steps: string[]; fields: Ask['fields']; values: Values
@@ -88,6 +95,91 @@ function StepList({ ticket, steps, fields, values, renderField, checked, setChec
   )
 }
 
+/**
+ * Who asked, when, status and links: context, not the question. It sits below
+ * the question, folded on a phone and open on a wide screen, so the first
+ * screen is always title, why and the question (Alex, phone order, 2026-09-25).
+ */
+function Details({ ask, answered, herdrHref, topLinks }: {
+  ask: Ask
+  answered: boolean
+  herdrHref: string | undefined
+  topLinks: { label: string; url: string }[]
+}) {
+  const [open, setOpen] = useState(() => window.matchMedia('(min-width: 960px)').matches)
+  const statusLabel = answered ? 'Answered' : ask.kind === 'park' ? 'Agent paused' : 'Waiting on you'
+  const statusIcon = answered ? 'answered' : ask.kind === 'park' ? 'park' : 'waiting'
+  const statusNote = ask.kind === 'park' ? 'the agent is paused until you answer' : 'the agent keeps working meanwhile'
+  const summary = [
+    `${ask.origin.agent || 'agent'} · ${ago(ask.created_at)} ago`,
+    topLinks.length ? `${topLinks.length} ${topLinks.length === 1 ? 'link' : 'links'}` : '',
+  ].filter(Boolean).join(' · ')
+  return (
+    <details
+      className="details"
+      open={open}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary><span className="details-label">Details</span> <span className="muted">{summary}</span></summary>
+      <div className="properties">
+        <div className="property">
+          <span className="property-label">Ask</span>
+          <span className="property-value">
+            {groupOf(ask)} <span className="muted">·</span> <span className="ticket">{ask.ticket}</span>
+          </span>
+        </div>
+        <div className="property">
+          <span className="property-label">Status</span>
+          <span className="property-value">
+            <Icon name={statusIcon} size={14} /> {statusLabel} <span className="muted">· {statusNote}</span>
+          </span>
+        </div>
+        <div className="property">
+          <span className="property-label">Asked by</span>
+          <span className="property-value">
+            {ask.origin.agent || 'agent'}{' '}
+            {herdrHref && (
+              <>
+                <span className="muted">·</span>{' '}
+                <a
+                  href={herdrHref}
+                  className="mono pane-link"
+                  onClick={(event) => { event.preventDefault(); openPane(herdrHref) }}
+                >
+                  {ask.origin.pane_id}
+                </a>
+              </>
+            )}{' '}
+            <span className="muted">· {ago(ask.created_at)} ago</span>
+          </span>
+        </div>
+        {!!ask.blocks?.length && (
+          <div className="property">
+            <span className="property-label">Unblocks</span>
+            <span className="property-value"><PlainText text={ask.blocks.join(', ')} /></span>
+          </div>
+        )}
+        {!!topLinks.length && (
+          <div className="property">
+            <span className="property-label">Links</span>
+            <span className="property-value links">
+              {topLinks.map((link) => <Chip key={link.url} url={link.url} />)}
+            </span>
+          </div>
+        )}
+        {!!ask.tried?.length && (
+          <div className="property">
+            <span className="property-label">Agent tried</span>
+            <ul className="property-value tried-list">
+              {ask.tried.map((item, index) => <li key={index}><ChipText text={item} /></li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  )
+}
+
 export function SoloCard({ ask, onFinished, onReload }: {
   ask: Ask; onFinished: () => void; onReload: () => Promise<void>
 }) {
@@ -108,22 +200,29 @@ export function SoloCard({ ask, onFinished, onReload }: {
     if (approvalKind && typeof local?.values?.edited_text === 'string') {
       values.edited_text = local.values.edited_text
     }
+    // The recommendation is the pre-picked answer, so one tap sends it. It
+    // stays out of the draft until touched: an agent reading drafts must never
+    // mistake the page's default for a choice, and a sent-back field never
+    // carries it either.
+    const prePicked = new Set<string>()
+    if (kind === 'decision' || kind === 'question') {
+      for (const field of ask.fields) {
+        if (!field.must_decide && field.recommend && isMissing(values[field.name])) {
+          values[field.name] = field.recommend.value
+          prePicked.add(field.name)
+        }
+      }
+    }
     return {
       values,
       notes: { ...(ask.field_context || {}), ...(useLocal ? local.notes : {}) },
       reply: useLocal ? local.reply : ask.draft_reply || '',
+      prePicked,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
-  const [values, setValues] = useState<Values>(() => {
-    const chosen = { ...seeded.values }
-    if (kind === 'decision' || kind === 'question') for (const field of ask.fields) {
-      if (!field.must_decide && field.recommend && isMissing(chosen[field.name])) {
-        chosen[field.name] = field.recommend.value
-      }
-    }
-    return chosen
-  })
+  const prePicked = useRef(seeded.prePicked)
+  const [values, setValues] = useState<Values>(seeded.values)
   const [notes, setNotes] = useState(seeded.notes)
   const [bounced, setBounced] = useState<Record<string, string>>(
     () => approvalKind ? {} : readLocal(ask.ticket)?.bounced || {},
@@ -141,13 +240,12 @@ export function SoloCard({ ask, onFinished, onReload }: {
   )
   const [menu, setMenu] = useState(false)
   const [manual, setManual] = useState(false)
-  const [primaryVisible, setPrimaryVisible] = useState(true)
   const focalRef = useRef<HTMLElement>(null)
-  const primaryRef = useRef<HTMLButtonElement>(null)
   const [sendBackOpen, setSendBackOpen] = useState(false)
   const [backNote, setBackNote] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [status, setStatus] = useState('')
+  const [errorText, setErrorText] = useState('')
   const [draftState, setDraftState] = useState('')
   const [safetyNotice, setSafetyNotice] = useState('')
   const timer = useRef<number | undefined>(undefined)
@@ -187,10 +285,24 @@ export function SoloCard({ ask, onFinished, onReload }: {
       + (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
     : undefined
   const topLink = ask.links?.[0]
+  // A field's own url stays beside that field; the Links row is only the
+  // ask's remaining links, and it moves under the steps when there are any
+  // ("link below"), otherwise into Details.
+  const fieldUrls = new Set(ask.fields.map((field) => field.url).filter(Boolean))
+  const topLinks = (ask.links || [])
+    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
+    .filter((link) => !fieldUrls.has(link.url))
+    .filter((link) => !topLink || link.url !== topLink.url)
+  const hasMainSteps = (kind === 'key' || kind === 'click') && !!ask.steps?.length
+  const persistable = (raw: Values): Values => {
+    const filtered = safeValues(raw)
+    for (const name of prePicked.current) delete filtered[name]
+    return filtered
+  }
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
-    const localValues = safeValues(merged.values)
+    const localValues = persistable(merged.values)
     if (approvalKind && typeof merged.values.edited_text === 'string') {
       localValues.edited_text = merged.values.edited_text
     }
@@ -200,9 +312,9 @@ export function SoloCard({ ask, onFinished, onReload }: {
     timer.current = window.setTimeout(() => {
       timer.current = undefined
       void api('/api/draft', {
-        ticket: ask.ticket, values: safeValues(merged.values),
+        ticket: ask.ticket, values: persistable(merged.values),
         field_context: merged.notes, reply: merged.reply,
-      }).then(() => setDraftState('Draft saved')).catch(() => setDraftState('Draft kept in this browser'))
+      }, { retry: false }).then(() => setDraftState('Draft saved')).catch(() => setDraftState('Draft kept in this browser'))
     }, 300)
   }
   useEffect(() => {
@@ -212,7 +324,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
       timer.current = undefined
       const merged = latest.current
       const body = new Blob([JSON.stringify({
-        ticket: ask.ticket, values: safeValues(merged.values),
+        ticket: ask.ticket, values: persistable(merged.values),
         field_context: merged.notes, reply: merged.reply,
       })], { type: 'application/json' })
       try { navigator.sendBeacon(`${BASE}/api/draft`, body) } catch { /* local mirror remains */ }
@@ -228,6 +340,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
   const onChange = (name: string, value: FieldValue, secret = false) => {
+    prePicked.current.delete(name)
     const next = { ...latest.current.values, [name]: value }
     setValues(next)
     setState('idle')
@@ -250,7 +363,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
     const next = { ...bounced, [name]: note }
     setBounced(next)
     const merged = latest.current
-    const localValues = safeValues(merged.values)
+    const localValues = persistable(merged.values)
     if (approvalKind && typeof merged.values.edited_text === 'string') {
       localValues.edited_text = merged.values.edited_text
     }
@@ -275,12 +388,14 @@ export function SoloCard({ ask, onFinished, onReload }: {
       else delete payload.edited_text
     }
     for (const field of unanswered) {
+      // A sent-back question keeps only what the human typed, never the page's default.
+      if (field.name in bounced && prePicked.current.has(field.name)) delete payload[field.name]
       if (field.name in bounced) continue
       if (kind === 'consent' && field.name === 'note') continue
       if (kind === 'message' && field.name === 'edited_text') continue
       if (isMissing(payload[field.name]) && !field.must_decide) payload[field.name] = null
     }
-    setState('sending'); setStatus('Sending…')
+    setState('sending'); setStatus('Sending…'); setErrorText('')
     try {
       const result = await api<{ complete: boolean }>('/api/answer', {
         ticket: ask.ticket, revision: ask.revision, values: payload,
@@ -292,6 +407,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
       if (result.complete) finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
+      if (error instanceof ApiError && error.code === 'ASK_NOT_OPEN') return onFinished()
       if (error instanceof ApiError && error.code === 'STALE_REVISION') {
         setSafetyNotice('The agent changed this ask. Check it again.')
         setState('idle'); setStatus('')
@@ -303,18 +419,20 @@ export function SoloCard({ ask, onFinished, onReload }: {
         setState('idle'); setStatus('')
         return
       }
-      setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send answer')
+      setState('error'); setStatus('Not sent')
+      setErrorText(sendFailure(error, 'Your answer', approvalKind ? primaryLabel : 'Send'))
     }
   }
   const sendBack = async (note = backNote) => {
     if (isBusy) return
-    setState('sending'); setStatus('Sending back…')
+    setState('sending'); setStatus('Sending back…'); setErrorText('')
     try {
       await api('/api/answer', { ticket: ask.ticket, revision: ask.revision, reply: note, bounce: true })
       setState('done'); setStatus('Sent back — the agent will rework it')
       finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
+      if (error instanceof ApiError && error.code === 'ASK_NOT_OPEN') return onFinished()
       if (error instanceof ApiError && error.code === 'STALE_REVISION') {
         setSafetyNotice('The agent changed this ask. Check it again.')
         setState('idle'); setStatus('')
@@ -326,7 +444,8 @@ export function SoloCard({ ask, onFinished, onReload }: {
         setState('idle'); setStatus('')
         return
       }
-      setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send it back')
+      setState('error'); setStatus('Not sent')
+      setErrorText(sendFailure(error, 'Your note', 'Send back'))
     }
   }
   const allRecommended = (kind === 'decision' || kind === 'question')
@@ -359,13 +478,6 @@ export function SoloCard({ ask, onFinished, onReload }: {
     if (ask.plan?.start_url) window.open(ask.plan.start_url, '_blank', 'noopener,noreferrer')
     void submit('self')
   }
-  useEffect(() => {
-    const target = primaryRef.current || focalRef.current
-    if (!approvalKind || !target || typeof IntersectionObserver === 'undefined') return
-    const observer = new IntersectionObserver(([entry]) => setPrimaryVisible(entry.isIntersecting))
-    observer.observe(target)
-    return () => observer.disconnect()
-  }, [approvalKind])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
@@ -407,17 +519,16 @@ export function SoloCard({ ask, onFinished, onReload }: {
   const after = ask.after || afterDefaults[kind]
   const primaryAvailable = (kind !== 'key' && kind !== 'click') || !!topLink
   const primaryDisabled = isBusy || (kind === 'consent' && !!planNote.trim())
-  const actionButtons = (mirror = false) => (
+  const actionButtons = () => (
     <>
       {primaryAvailable && (kind === 'key' || kind === 'click' ? (
         <a className="primary" href={topLink!.url} target="_blank" rel="noopener noreferrer">
           <PlainText text={primaryLabel} />
         </a>
       ) : (kind === 'decision' || kind === 'question') && !allRecommended ? null : (
-        <button
-          ref={mirror ? undefined : primaryRef} type="button" className="primary"
-          disabled={primaryDisabled} onClick={onPrimary}
-        ><PlainText text={primaryLabel} /></button>
+        <button type="button" className="primary" disabled={primaryDisabled} onClick={onPrimary}>
+          <PlainText text={primaryLabel} />
+        </button>
       ))}
       {kind === 'consent' && (
         <>
@@ -453,24 +564,26 @@ export function SoloCard({ ask, onFinished, onReload }: {
     <article className={`ask-article kind-${kind}`}>
       <div className="card-heading">
         <span className="kind-label"><Icon name={kind} size={16} /> {kind}</span>
-        <span
-          className={`status-pill${answered ? ' answered' : ask.kind === 'park' ? ' paused' : ''}`}
-          title={ask.kind === 'park' ? 'The agent is paused until you answer' : 'The agent keeps working meanwhile'}
-        >
-          <Icon name={answered ? 'answered' : ask.kind === 'park' ? 'park' : 'waiting'} size={14} />
-          {answered ? 'Answered' : ask.kind === 'park' ? 'Agent paused' : 'Waiting on you'}
-        </span>
       </div>
       <h1><PlainText text={ask.title} /></h1>
-      <div className="ask-meta">
-        {groupOf(ask)} · asked by {ask.origin.agent || 'agent'}{' '}
-        {herdrHref && (
-          <a href={herdrHref} className="pane-link" onClick={(event) => {
-            event.preventDefault(); openPane(herdrHref)
-          }}>({ask.origin.pane_id})</a>
-        )}{' '}· {ago(ask.created_at)} ago
-        {!!ask.blocks?.length && <> · unblocks: <PlainText text={ask.blocks.join(', ')} /></>}
-      </div>
+      <section className="why-section">
+        <h2 className="section-label">Why</h2>
+        <p><ChipText text={ask.why} /></p>
+      </section>
+      {hasMainSteps && (
+        <section className="ask-body">
+          <StepList
+            ticket={ask.ticket} steps={ask.steps!} fields={unanswered} values={values}
+            renderField={renderField} checked={checked} setChecked={setChecked}
+          />
+          {/* Steps point at the links ("link below"), so with steps they stay beside them. */}
+          {!!topLinks.length && (
+            <div className="step-links">
+              {topLinks.map((link) => <Chip key={link.url} url={link.url} />)}
+            </div>
+          )}
+        </section>
+      )}
       <section className="focal-card" ref={focalRef}>
         {kind === 'spend' && ask.spend && (
           <div className="amount">
@@ -571,16 +684,8 @@ export function SoloCard({ ask, onFinished, onReload }: {
           </button>
         </section>
       )}
-      {(kind === 'key' || kind === 'click') && (
-        <section className="ask-body">
-          {!!ask.steps?.length && (
-            <StepList
-              ticket={ask.ticket} steps={ask.steps} fields={unanswered} values={values}
-              renderField={renderField} checked={checked} setChecked={setChecked}
-            />
-          )}
-          {!ask.steps?.length && unanswered.map(renderField)}
-        </section>
+      {(kind === 'key' || kind === 'click') && !hasMainSteps && (
+        <section className="ask-body">{unanswered.map(renderField)}</section>
       )}
       {(kind === 'decision' || kind === 'question') && (
         <section className="ask-body decision-fields">{unanswered.map(renderField)}</section>
@@ -594,6 +699,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
           />
         </div>
       )}
+      {state === 'error' && errorText && <p className="send-error" role="alert">{errorText}</p>}
       {safetyNotice && <p className="safety-notice" role="alert">{safetyNotice}</p>}
       {sendBackOpen && (
         <div className="send-back-box">
@@ -607,24 +713,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
           </button>
         </div>
       )}
-      <div className="ask-details">
-        <details><summary>Why</summary><p><ChipText text={ask.why} /></p></details>
-        {!!ask.tried?.length && (
-          <details>
-            <summary>What the agent tried ({ask.tried.length})</summary>
-            <ul>{ask.tried.map((item, index) => <li key={index}><ChipText text={item} /></li>)}</ul>
-          </details>
-        )}
-        {!!ask.links?.slice(1).length && (
-          <details>
-            <summary>More links</summary>
-            <div className="more-links">
-              {ask.links.slice(1).map((link, index) => <Chip key={index} url={link.url} />)}
-            </div>
-          </details>
-        )}
-        <span className="ticket">{ask.ticket}</span>
-      </div>
+      <Details ask={ask} answered={answered} herdrHref={herdrHref} topLinks={hasMainSteps ? [] : topLinks} />
       {answered && kind === 'consent' && receipt && (
         <section className="receipt-card">
           <h2><Icon name="answered" size={18} /> Done by the agent ·{' '}
@@ -644,21 +733,29 @@ export function SoloCard({ ask, onFinished, onReload }: {
           {receipt.final_url && <Chip url={receipt.final_url} />}
         </section>
       )}
-      {!answered && !detected && !approvalKind && (
-        <div className="card-footer">
-          <span className="footer-progress" role="status">
-            {state === 'error' ? status : state !== 'idle' ? status : progress || draftState}
-          </span>
-          <button className="primary" type="button" disabled={isBusy || !!hardMissing.length}
-            onClick={() => void submit()}>
-            Send
+      {!answered && !detected && (
+        <div className="action-bar">
+          {approvalKind ? (
+            <button type="button" className="primary" disabled={primaryDisabled} onClick={onPrimary}>
+              <PlainText text={primaryLabel} />
+            </button>
+          ) : (
+            <button
+              type="button" className="primary" disabled={isBusy || !!hardMissing.length}
+              onClick={() => void submit()}
+            >
+              Send
+            </button>
+          )}
+          <button
+            type="button" className="text-button send-back" disabled={isBusy}
+            onClick={() => setSendBackOpen(true)}
+          >
+            Send back…
           </button>
-        </div>
-      )}
-      {!answered && !detected && approvalKind && !primaryVisible && (
-        <div className="card-footer mirror-footer">
-          <span className="footer-progress" role="status">{status}</span>
-          <div className="footer-actions">{actionButtons(true)}</div>
+          <span className={`action-status${state === 'error' ? ' error' : ''}`} role="status">
+            {state === 'error' ? 'Not sent' : state !== 'idle' ? status : (progress || draftState)}
+          </span>
         </div>
       )}
     </article>

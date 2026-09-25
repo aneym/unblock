@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { approvalAssertion, enrollPasskey } from './helpers/passkey-client.js'
+
 const state = mkdtempSync(join(process.env.UNBLOCK_TEST_TMPDIR || tmpdir(), 'unblock-v2-'))
 process.env.UNBLOCK_STATE_DIR = state
 process.env.UNBLOCK_CONFIG_DIR = join(state, 'config')
@@ -18,6 +20,7 @@ const token = loadOrCreateSecret()
 let daemon
 const auth = { Authorization: `Bearer ${token}` }
 const human = { Host: 'studio.tailnet.test:8797', 'tailscale-user-login': 'alex@example.test' }
+const rp = { rpId: 'studio.tailnet.test', origin: process.env.UNBLOCK_PUBLIC_ORIGIN }
 let number = 0
 const base = { kind: 'file', title: 'Action', why: 'This needs your approval.', tried: ['Checked the available tools and could not do it alone.'] }
 const plan = { site: 'example.com', start_url: 'https://example.com/settings/new', steps: ['Open the settings page'], changes: 'Updates a setting', untouched: 'Other settings' }
@@ -38,7 +41,18 @@ function raw(path, { method = 'GET', headers = auth, body } = {}) {
 }
 const post = (path, body, headers) => raw(path, { method: 'POST', body, headers })
 async function create(ask) { const result = await post('/api/asks', { ask }); assert.equal(result.status, 201, JSON.stringify(result.json)); return result.json }
-async function approve(ask, values = { verdict: 'approve' }) { return post('/api/answer', { ticket: ask.ticket, revision: ask.revision, values }, human) }
+async function approve(ask, values = { verdict: 'approve' }, assertion) { return post('/api/answer', { ticket: ask.ticket, revision: ask.revision, values, assertion }, human) }
+
+/**
+ * `consent approve`, `message approve` and `permission allow_once` are
+ * passkey-gated (src/passkey.js, src/store.js#answer) — this file is not
+ * about that gate (test/passkey.test.js owns it in detail), so it enrolls
+ * ONE software passkey the first time a test needs to get past it, and
+ * reuses that same device for every later gated approval in this file.
+ */
+let passkey
+async function getPasskey() { return passkey ??= await enrollPasskey(post, human, rp) }
+async function gatedAssertion(ticket) { return approvalAssertion(post, human, ticket, await getPasskey()) }
 function cli(...args) { return new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [join(import.meta.dirname, '..', 'bin/unblock.js'), ...args], { env: { ...process.env, UNBLOCK_PORT: String(daemon.port), UNBLOCK_STATE_DIR: state, UNBLOCK_LINK_CLI: join(state, 'fake-link') } })
   let stdout = '', stderr = ''
@@ -114,9 +128,17 @@ test('human-only, strict verdict, revision, immutable answered ask', async () =>
   assert.equal(deniedLinkDraft.json.code, 'HUMAN_ONLY')
   const shared = await create(shape('message'))
   const sharedLink = await post('/api/links', { ticket: shared.ticket }, human)
-  const sharedAnswer = await post(`/u/${sharedLink.json.token}/api/answer`, { ticket: shared.ticket, revision: 1, values: { verdict: 'approve' } }, {})
-  assert.equal(sharedAnswer.status, 200)
-  assert.equal(sharedAnswer.json.ask.answered_via, 'share-link:tailnet:alex@example.test')
+  // Message approve is passkey-gated (src/passkey.js), and the ceremony
+  // itself stays off share links (`PASSKEY_ON_SHARE_LINK` below covers
+  // that), so the assertion is fetched on the human path first and only its
+  // already-signed body rides along on the share link's own /api/answer.
+  const sharedAssertion = await gatedAssertion(shared.ticket)
+  const sharedAnswer = await post(`/u/${sharedLink.json.token}/api/answer`, { ticket: shared.ticket, revision: 1, values: { verdict: 'approve' }, assertion: sharedAssertion }, {})
+  assert.equal(sharedAnswer.status, 200, JSON.stringify(sharedAnswer.json))
+  // Passkey-gated purposes record WHICH credential approved, not which
+  // transport the request rode in on (src/store.js#answer overrides
+  // answeredVia to `passkey:<id_suffix>` once the assertion is verified).
+  assert.equal(sharedAnswer.json.ask.answered_via, `passkey:${passkey.id.slice(-8)}`)
 
   const updated = await post(`${path}/update`, { plan: { ...plan, changes: 'Different setting' } })
   assert.equal(updated.status, 200)
@@ -129,12 +151,28 @@ test('human-only, strict verdict, revision, immutable answered ask', async () =>
     [{ revision: 2, values: { verdict: 'approve', note: 'change it' } }, 400, 'NOTE_MEANS_CHANGE'],
     [{ revision: 2, values: { verdict: 'approve' }, reply: 'change it' }, 400, 'NOTE_MEANS_CHANGE'],
     [{ revision: 2, values: { verdict: 'approve' }, field_context: { note: 'change it' } }, 400, 'NOTE_MEANS_CHANGE'],
-  ]) { const result = await post('/api/answer', { ticket: ask.ticket, ...body }, human); assert.equal(result.status, status); assert.equal(result.json.code, code) }
+  ]) {
+    // A real assertion is fetched whenever the sent verdict is the gated one
+    // ('approve'), so the request reaches ITS OWN check (stale revision,
+    // invalid verdict, note-means-change) instead of stopping earlier at the
+    // passkey gate for lack of an assertion.
+    const assertion = body.values?.verdict === 'approve' ? await gatedAssertion(ask.ticket) : undefined
+    const result = await post('/api/answer', { ticket: ask.ticket, ...body, assertion }, human)
+    assert.equal(result.status, status)
+    assert.equal(result.json.code, code)
+  }
   const rejectedFields = await post(`${path}/update`, { add_fields: [] }); assert.equal(rejectedFields.status, 400); assert.equal(rejectedFields.json.path, 'fields')
-  const approved = await approve(updated.json.ask)
+  const approveAssertion = await gatedAssertion(ask.ticket)
+  const approved = await approve(updated.json.ask, { verdict: 'approve' }, approveAssertion)
   assert.equal(approved.status, 200, JSON.stringify(approved.json))
-  assert.equal(approved.json.ask.answered_via, 'tailnet:alex@example.test')
-  const secondAnswer = await approve(updated.json.ask); assert.equal(secondAnswer.status, 409); assert.equal(secondAnswer.json.code, 'ASK_NOT_OPEN')
+  assert.equal(approved.json.ask.answered_via, `passkey:${passkey.id.slice(-8)}`)
+  // A second answer against the now-answered ask still needs a real,
+  // unconsumed assertion to get PAST the passkey gate at all — otherwise it
+  // reads PASSKEY_REQUIRED, not the ASK_NOT_OPEN this checks for — so a
+  // fresh one is fetched for the same (unchanged) revision before retrying.
+  const secondAssertion = await gatedAssertion(ask.ticket)
+  const secondAnswer = await approve(updated.json.ask, { verdict: 'approve' }, secondAssertion)
+  assert.equal(secondAnswer.status, 409); assert.equal(secondAnswer.json.code, 'ASK_NOT_OPEN')
   const answeredUpdate = await post(`${path}/update`, { title: 'Altered' }); assert.equal(answeredUpdate.status, 409); assert.equal(answeredUpdate.json.code, 'ASK_NOT_OPEN')
 })
 
@@ -143,7 +181,8 @@ test('receipts enforce scope, file bounds, and authenticated reads', async () =>
   const path = `/api/asks/${ask.ticket}/receipt`
   assert.equal((await post(path, {})).json.code, 'RECEIPT_NOT_ALLOWED')
   const badTicket = await post('/api/asks/ub_INVALID/receipt', {}); assert.equal(badTicket.status, 400); assert.equal(badTicket.json.error, 'invalid ticket')
-  await approve(ask)
+  const approved = await approve(ask, { verdict: 'approve' }, await gatedAssertion(ask.ticket))
+  assert.equal(approved.status, 200, JSON.stringify(approved.json))
   const collected = await post(`/api/asks/${ask.ticket}/collect`, {})
   assert.equal(collected.json.ask.status, 'collected')
   const png = join(state, 'source.png')
@@ -156,7 +195,8 @@ test('receipts enforce scope, file bounds, and authenticated reads', async () =>
   writeFileSync(huge, Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(5 * 1024 * 1024)]))
   for (const file of [symlink, invalid, huge]) { const rejected = await post(path, { before: file }); assert.equal(rejected.status, 400); assert.equal(rejected.json.error, 'invalid PNG file') }
   const directoryAsk = await create(shape('consent'))
-  await approve(directoryAsk)
+  const directoryApproved = await approve(directoryAsk, { verdict: 'approve' }, await gatedAssertion(directoryAsk.ticket))
+  assert.equal(directoryApproved.status, 200, JSON.stringify(directoryApproved.json))
   const receiptRoot = join(state, 'receipts')
   mkdirSync(receiptRoot, { recursive: true })
   const redirected = join(receiptRoot, directoryAsk.ticket)
@@ -273,10 +313,11 @@ test('revision two approval send-back and permission human gate', async () => {
     else { assert.equal(response.status, 200, JSON.stringify(response.json)); assert.equal(response.json.ask.status, 'bounced'); assert.equal(response.json.ask.reply, body.reply) }
   }
   const allowed = await create({ ...permission, title: `Permission ${++number}` })
-  const approved = await post('/api/answer', { ticket: allowed.ticket, revision: 1, values: { verdict: 'allow_once' } }, human)
+  const allowedAssertion = await gatedAssertion(allowed.ticket)
+  const approved = await post('/api/answer', { ticket: allowed.ticket, revision: 1, values: { verdict: 'allow_once' }, assertion: allowedAssertion }, human)
   assert.equal(approved.status, 200, JSON.stringify(approved.json))
   assert.equal(approved.json.ask.answers.verdict, 'allow_once')
-  assert.equal(approved.json.ask.answered_via, 'tailnet:alex@example.test')
+  assert.equal(approved.json.ask.answered_via, `passkey:${passkey.id.slice(-8)}`)
   const revised = await create({ ...permission, title: `Permission ${++number}` })
   const updated = await post(`/api/asks/${revised.ticket}/update`, { permission: { ...permission.permission, summary: 'Read only one file' } })
   assert.equal(updated.status, 200, JSON.stringify(updated.json))

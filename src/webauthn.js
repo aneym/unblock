@@ -139,6 +139,7 @@ export function verifyRegistration({ credential, expectedChallenge, expectedOrig
     const { flags, signCount } = authData(bytes, rpId);
     if (!(flags & 0x40)) invalid('AT flag missing');
     if (bytes.length < 55) invalid('Malformed attested credential data');
+    const aaguid = bytes.subarray(37, 53).toString('hex');
     const idLength = bytes.readUInt16BE(53);
     const keyStart = 55 + idLength;
     if (!idLength || keyStart >= bytes.length) invalid('Malformed attested credential data');
@@ -151,7 +152,7 @@ export function verifyRegistration({ credential, expectedChallenge, expectedOrig
     } else if (parsed.offset !== bytes.length) invalid('Trailing authenticatorData bytes');
     const { alg, publicKeyJwk } = coseJwk(parsed.value);
     createPublicKey({ key: publicKeyJwk, format: 'jwk' });
-    return { credentialId, publicKeyJwk, alg, signCount };
+    return { credentialId, publicKeyJwk, alg, signCount, aaguid };
   });
 }
 
