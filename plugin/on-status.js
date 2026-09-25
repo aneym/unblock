@@ -25,7 +25,7 @@ try {
   }
 
   if (status !== 'blocked') {
-    for (const entry of entries(String(paneId)).filter((e) => ['permission', 'detected'].includes(e.type))) {
+    for (const entry of entries(String(paneId)).filter((e) => ['permission', 'detected'].includes(e.type)).slice(0, 4)) {
       // Hook filing precedes herdr's blocked event; do not race that update.
       if (Date.now() - Date.parse(entry.created_at) < 10000) continue
       try {
@@ -47,7 +47,7 @@ try {
   }
   if (mine.length > 0) process.exit(0)
   // A hook may just have filed its entry before the queue listing updated.
-  for (const entry of entries(String(paneId))) {
+  for (const entry of entries(String(paneId)).slice(0, 4)) {
     const ask = await request(`/api/asks/${entry.ticket}`).catch(() => null)
     if (ask?.status === 'open') process.exit(0)
   }

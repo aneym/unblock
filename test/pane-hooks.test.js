@@ -91,12 +91,12 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
     assert.deepEqual(permissionAsk.fields[0].choices.map((c) => c.value), ['allow_once', 'deny'])
     assert.equal(permissionAsk.fields[0].choices.some((c) => /always/i.test(c.label + c.value)), false)
 
-    const redaction = 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789'
+    const redaction = 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789 API_KEY=shortvalue AUTH_TOKEN=anothersecret'
     assert.deepEqual(await hook('claude-permission', permission(`echo ${redaction}`)), { code: 0, stdout: '' })
     const after = await json(base, '/api/asks?profile=*')
     const redacted = after.asks.find((ask) => ask.why.includes('[redacted]'))
     assert.ok(redacted)
-    assert.doesNotMatch(redacted.why, /abcdefghijklmnopqrstuvwxyz0123456789/)
+    assert.doesNotMatch(redacted.why, /abcdefghijklmnopqrstuvwxyz0123456789|shortvalue|anothersecret/)
     assert.equal((await json(base, `/api/asks/${permissionAsk.ticket}`)).status, 'cancelled')
     assert.equal(redacted.status, 'open')
   } finally {

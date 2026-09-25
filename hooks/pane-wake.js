@@ -50,6 +50,11 @@ function answerLine(ask) {
   if (ask.status === 'bounced') return `[unblock ${ticket}] Alex sent your question back: ${ask.reply || 'no note'}. Ask again better, or decide yourself if you can.`
   const values = ask.fields.map((field) => {
     const value = ask.answers?.[field.name]
+    // A per-field send-back is {$bounce: note|true, value?}, not a plain value.
+    if (value && typeof value === 'object' && !Array.isArray(value) && '$bounce' in value) {
+      const note = typeof value.$bounce === 'string' ? value.$bounce : 'no note'
+      return `${field.label} -> sent back (${note})${value.value !== undefined ? `, leaning ${value.value}` : ''}`
+    }
     return `${field.label} -> ${Array.isArray(value) ? value.join(', ') : String(value ?? '')}`
   })
   return `[unblock ${ticket}] Alex answered: ${values.join(' | ')}${ask.reply ? ` | Note: ${ask.reply}` : ''}`
@@ -101,7 +106,17 @@ async function deliverPermission(ask, entry) {
       await collect()
       return true
     }
-    await herdr(['pane', 'send-keys', entry.pane_id, value === 'allow_once' ? 'enter' : 'esc'])
+    // One shot: drop the registry entry before the key, so neither this loop
+    // nor a second watcher can ever press it again, even if send-keys errors
+    // after the key already landed.
+    remove(ticket)
+    try {
+      await herdr(['pane', 'send-keys', entry.pane_id, value === 'allow_once' ? 'enter' : 'esc'])
+    } catch {
+      log('permission key send reported failure; not retried')
+      await request(`/api/asks/${ticket}/collect`, {}).catch(() => {})
+      return true
+    }
     // Once a key was sent, never retry the key if the follow-up or collect fails.
     try {
       if (value === 'deny') {

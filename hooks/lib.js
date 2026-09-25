@@ -122,7 +122,7 @@ export function watcher(ticket) {
 export function redact(summary) {
   return String(summary)
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
-    .replace(/\b(token|key|secret|password|passwd|auth)([=: ]+)\S+/gi, '$1$2[redacted]')
+    .replace(/\b([A-Za-z0-9_]*(?:token|key|secret|password|passwd|auth)[A-Za-z0-9_]*)([=: ]+)\S+/gi, '$1$2[redacted]')
     .replace(/--(token|key|secret|password|api-key)([= ]+)\S+/gi, '--$1$2[redacted]')
     .replace(/sk-[A-Za-z0-9_-]{10,}/g, '[redacted]')
     .replace(/[A-Za-z0-9+/=_-]{32,}/g, '[redacted]')
