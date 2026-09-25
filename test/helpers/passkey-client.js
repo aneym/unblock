@@ -30,14 +30,13 @@ export async function enrollPasskey(post, headers, { rpId, origin } = {}) {
 
 /**
  * Fetches approve options for `ticket` on the human path and signs them with
- * `device`, returning the assertion body `/api/answer` (or a share link's
- * `/api/answer`, once the ticket and challenge already exist) expects at
- * `body.assertion`. The challenge is bound to this ticket's current revision
+ * `device`, returning the assertion body the human-path `/api/answer` expects
+ * at `body.assertion`. The challenge is bound to this ticket's current revision
  * at fetch time, so call this right before the answer it gates.
  */
 export async function approvalAssertion(post, headers, ticket, device) {
   const options = await post('/api/passkeys/approve/options', { ticket }, headers)
   assert.equal(options.status, 200, JSON.stringify(options.json))
   const built = device.assert(options.json.challenge)
-  return { challenge_id: options.json.challenge_id, id: built.id, rawId: built.rawId, response: built.response }
+  return { challenge_id: options.json.challenge_id, id: built.id, rawId: built.rawId, type: built.type, response: built.response }
 }

@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { PASSKEY_CREDENTIAL_CAP } from './store.js'
@@ -138,9 +138,6 @@ export function register(store, body, { userAgent, logDir } = {}) {
   // A challenge handed out while enrollment was open (no passkeys yet) must
   // not outlive that window: once any passkey exists, only a challenge an
   // existing passkey signed off on can add another.
-  if (!challenge.authorized && store.countCredentials() > 0) {
-    fail('PASSKEY_INVALID', 'a passkey was added meanwhile; approve this one with it', 403)
-  }
   let verified
   try {
     verified = verifyRegistration({ credential: body?.credential, expectedChallenge: b64url(challenge.challenge), expectedOrigin: rp.origin, rpId: rp.rpId })
@@ -148,21 +145,25 @@ export function register(store, body, { userAgent, logDir } = {}) {
     if (error instanceof WebAuthnError) fail('PASSKEY_INVALID', error.message, 403)
     throw error
   }
-  if (!store.consumeChallenge(challenge.id, { kind: 'register' }))
-    fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
-  const label = `Passkey · ${new Date().toISOString().slice(0, 10)}`
-  store.addCredential({
-    id: verified.credentialId,
-    publicKeyJwk: verified.publicKeyJwk,
-    alg: verified.alg,
-    signCount: verified.signCount,
-    label,
-    createdVia: 'enrollment',
-    userAgent: clip(userAgent, 200),
+  return store.transaction(() => {
+    if (!challenge.authorized && store.countCredentials() > 0)
+      fail('PASSKEY_INVALID', 'a passkey was added meanwhile; approve this one with it', 403)
+    if (!store.consumeChallenge(challenge.id, { kind: 'register' }, { inTransaction: true }))
+      fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
+    const label = `Passkey · ${new Date().toISOString().slice(0, 10)}`
+    store.addCredential({
+      id: verified.credentialId,
+      publicKeyJwk: verified.publicKeyJwk,
+      alg: verified.alg,
+      signCount: verified.signCount,
+      label,
+      createdVia: 'enrollment',
+      userAgent: clip(userAgent, 200),
+    })
+    const event = store.addPasskeyEvent({ kind: 'enrolled', credentialId: verified.credentialId, label, via: 'enrollment' })
+    appendEnrollmentLog(logDir, { credentialId: verified.credentialId, aaguid: verified.aaguid, userAgent })
+    return { id_suffix: verified.credentialId.slice(-8), label, event_id: event.id }
   })
-  const event = store.addPasskeyEvent({ kind: 'enrolled', credentialId: verified.credentialId, label, via: 'enrollment' })
-  appendEnrollmentLog(logDir, { credentialId: verified.credentialId, aaguid: verified.aaguid, userAgent })
-  return { id_suffix: verified.credentialId.slice(-8), label, event_id: event.id }
 }
 
 export function listPasskeys(store) {
@@ -219,14 +220,16 @@ export function removeCredential(store, id, body) {
   const rp = requireRp()
   const target = store.getCredential(id)
   if (!target) fail('PASSKEY_INVALID', 'unknown credential', 403)
-  const isLast = store.countCredentials() <= 1
   const { challenge, credential, newSignCount } = verifyWithChallenge(store, body?.assertion, 'enroll_auth', rp)
-  if (!isLast && credential.id === id) fail('PASSKEY_INVALID', 'use a different passkey to remove this one', 403)
-  if (!store.consumeChallenge(challenge.id, { kind: 'enroll_auth' }))
-    fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
-  store.updateCredentialSignCount(credential.id, newSignCount)
-  store.removeCredential(id)
-  return {}
+  return store.transaction(() => {
+    if (store.countCredentials() > 1 && credential.id === id)
+      fail('PASSKEY_INVALID', 'use a different passkey to remove this one', 403)
+    if (!store.consumeChallenge(challenge.id, { kind: 'enroll_auth' }, { inTransaction: true }))
+      fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
+    store.updateCredentialSignCount(credential.id, newSignCount)
+    store.removeCredential(id)
+    return {}
+  })
 }
 
 /**
@@ -242,6 +245,7 @@ function appendEnrollmentLog(stateDir, { credentialId, aaguid, userAgent }) {
   const file = join(stateDir, 'passkey-enrollments.log')
   const line = [new Date().toISOString(), credentialId.slice(0, 8), aaguid, clip(userAgent, 200)].join('\t') + '\n'
   appendFileSync(file, line, { mode: 0o600 })
+  chmodSync(file, 0o600)
 }
 
 export { PASSKEY_CREDENTIAL_CAP }

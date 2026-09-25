@@ -158,6 +158,7 @@ export function verifyRegistration({ credential, expectedChallenge, expectedOrig
 
 export function verifyAssertion({ assertion, expectedChallenge, expectedOrigin, rpId, credential }) {
   return checked(() => {
+    if (assertion?.type !== 'public-key') invalid('Wrong credential type');
     if (assertion?.id !== credential?.id || assertion?.rawId !== credential?.id) invalid('Assertion credential id mismatch');
     const client = clientData(assertion.response?.clientDataJSON, 'webauthn.get', expectedChallenge, expectedOrigin);
     const bytes = fromB64url(assertion.response?.authenticatorData);

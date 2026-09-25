@@ -7,12 +7,14 @@
  */
 import assert from 'node:assert/strict'
 import http from 'node:http'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import { createAuthenticator } from './helpers/authenticator.js'
+import { register } from '../src/passkey.js'
 
 const state = mkdtempSync(join(process.env.UNBLOCK_TEST_TMPDIR || tmpdir(), 'unblock-passkey-'))
 process.env.UNBLOCK_STATE_DIR = state
@@ -82,7 +84,7 @@ async function create(ask) {
 /** Turns a raw authenticator assertion into the wire shape `store.answer` expects, bound to one challenge. */
 function toAssertion(device, challengeId, challenge, opts) {
   const built = device.assert(challenge, opts)
-  return { challenge_id: challengeId, id: built.id, rawId: built.rawId, response: built.response }
+  return { challenge_id: challengeId, id: built.id, rawId: built.rawId, type: built.type, response: built.response }
 }
 
 async function registerOptions(body) { return post('/api/passkeys/register/options', body, human) }
@@ -225,6 +227,29 @@ test('enrollment: open with zero credentials, gated afterwards, and it raises a 
   assert.equal(afterDismiss.json.banner.some((e) => e.event_id === firstEventId), false)
 })
 
+test('failed enrollment log rolls back credential and banner event', async () => {
+  const auth = await enrollAuthOptions()
+  const options = await registerOptions({ assertion: toAssertion(device1, auth.json.challenge_id, auth.json.challenge) })
+  assert.equal(options.status, 200, JSON.stringify(options.json))
+  const candidate = createAuthenticator({ rpId, origin })
+  const credential = candidate.register(options.json.challenge)
+  const store = new Store()
+  const count = store.countCredentials()
+  const banners = store.listBannerEvents()
+  const blockedDir = join(state, 'not-a-directory')
+  writeFileSync(blockedDir, '')
+  assert.throws(() => register(store, { challenge_id: options.json.challenge_id, credential }, { logDir: blockedDir }), { code: 'EEXIST' })
+  assert.equal(store.countCredentials(), count)
+  assert.deepEqual(store.listBannerEvents(), banners)
+  const list = await get('/api/passkeys', human)
+  assert.equal(list.json.credentials.length, count)
+  assert.deepEqual(list.json.banner, banners)
+  // The same registration challenge also survives the rollback.
+  const retry = await post('/api/passkeys/register', { challenge_id: options.json.challenge_id, credential }, human)
+  assert.equal(retry.status, 200, JSON.stringify(retry.json))
+  enrolledDevices.push(candidate)
+})
+
 test('a valid assertion approves, and answered_via records passkey:<id_suffix>', async () => {
   const consent = await create(consentAsk())
   const options = await approveOptions(consent.ticket)
@@ -234,6 +259,30 @@ test('a valid assertion approves, and answered_via records passkey:<id_suffix>',
   assert.equal(answered.status, 200, JSON.stringify(answered.json))
   assert.equal(answered.json.ask.answered_via, `passkey:${device1.id.slice(-8)}`)
   assert.equal(answered.json.ask.status, 'answered')
+})
+
+test('outer assertion type mismatch refuses approval without closing the ask', async () => {
+  const ask = await create(consentAsk())
+  const options = await approveOptions(ask.ticket)
+  const assertion = { ...toAssertion(device1, options.json.challenge_id, options.json.challenge), type: 'public-key-x' }
+  const answer = await post('/api/answer', { ticket: ask.ticket, revision: 1, values: { verdict: 'approve' }, assertion }, human)
+  assert.equal(answer.status, 403, JSON.stringify(answer.json))
+  assert.equal(answer.json.code, 'PASSKEY_INVALID')
+  assert.equal((await get(`/api/asks/${ask.ticket}`, human)).json.status, 'open')
+})
+
+test('expired approval challenge refuses an otherwise valid assertion', async () => {
+  const ask = await create(consentAsk())
+  const store = new Store()
+  // saveChallenge already accepts ttlMs, so mint an expired challenge through
+  // the real store rather than waiting for the production two-minute TTL.
+  const bytes = randomBytes(32)
+  const challengeId = store.saveChallenge({ kind: 'approve', challenge: bytes, askId: store.get(ask.ticket).id, revision: 1, ttlMs: -1 })
+  const assertion = toAssertion(device1, challengeId, bytes.toString('base64url'))
+  const answer = await post('/api/answer', { ticket: ask.ticket, revision: 1, values: { verdict: 'approve' }, assertion }, human)
+  assert.equal(answer.status, 403, JSON.stringify(answer.json))
+  assert.equal(answer.json.code, 'PASSKEY_INVALID')
+  assert.equal((await get(`/api/asks/${ask.ticket}`, human)).json.status, 'open')
 })
 
 test('replaying the same assertion and challenge on another answer attempt gets 403 PASSKEY_INVALID', async () => {
@@ -362,8 +411,9 @@ test('UV=0, wrong origin, wrong rpIdHash, a bad signature, and a non-increasing 
 })
 
 test('the enrollment log is tab-separated, mode 0600, and records the id prefix, AAGUID, and user agent', async () => {
-  const fresh = await enrollAdditional(device1)
   const file = join(state, 'passkey-enrollments.log')
+  chmodSync(file, 0o644)
+  const fresh = await enrollAdditional(device1)
   const contents = readFileSync(file, 'utf8')
   const mode = statSync(file).mode & 0o777
   assert.equal(mode, 0o600)

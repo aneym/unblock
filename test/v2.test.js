@@ -128,17 +128,16 @@ test('human-only, strict verdict, revision, immutable answered ask', async () =>
   assert.equal(deniedLinkDraft.json.code, 'HUMAN_ONLY')
   const shared = await create(shape('message'))
   const sharedLink = await post('/api/links', { ticket: shared.ticket }, human)
-  // Message approve is passkey-gated (src/passkey.js), and the ceremony
-  // itself stays off share links (`PASSKEY_ON_SHARE_LINK` below covers
-  // that), so the assertion is fetched on the human path first and only its
-  // already-signed body rides along on the share link's own /api/answer.
+  // Even a valid assertion cannot be submitted through a share link; it
+  // must remain usable on the human path after that refusal.
   const sharedAssertion = await gatedAssertion(shared.ticket)
   const sharedAnswer = await post(`/u/${sharedLink.json.token}/api/answer`, { ticket: shared.ticket, revision: 1, values: { verdict: 'approve' }, assertion: sharedAssertion }, {})
-  assert.equal(sharedAnswer.status, 200, JSON.stringify(sharedAnswer.json))
-  // Passkey-gated purposes record WHICH credential approved, not which
-  // transport the request rode in on (src/store.js#answer overrides
-  // answeredVia to `passkey:<id_suffix>` once the assertion is verified).
-  assert.equal(sharedAnswer.json.ask.answered_via, `passkey:${passkey.id.slice(-8)}`)
+  assert.equal(sharedAnswer.status, 403, JSON.stringify(sharedAnswer.json))
+  assert.equal(sharedAnswer.json.code, 'PASSKEY_ON_SHARE_LINK')
+  assert.equal((await raw(`/api/asks/${shared.ticket}`, { headers: human })).json.status, 'open')
+  const humanAnswer = await approve(shared, { verdict: 'approve' }, sharedAssertion)
+  assert.equal(humanAnswer.status, 200, JSON.stringify(humanAnswer.json))
+  assert.equal(humanAnswer.json.ask.answered_via, `passkey:${passkey.id.slice(-8)}`)
 
   const updated = await post(`${path}/update`, { plan: { ...plan, changes: 'Different setting' } })
   assert.equal(updated.status, 200)

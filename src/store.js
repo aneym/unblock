@@ -864,17 +864,23 @@ export class Store {
     return result.changes === 1
   }
 
-  /** Public entry point for `register` and `enroll_auth` challenges, which are consumed outside an `answer()` transaction. */
-  consumeChallenge(id, opts) {
+  /** Run a synchronous store operation as one write transaction. */
+  transaction(fn) {
     this.#db.exec('BEGIN IMMEDIATE')
     try {
-      const ok = this.#consumeChallenge(id, opts)
+      const value = fn()
       this.#db.exec('COMMIT')
-      return ok
+      return value
     } catch (error) {
       this.#db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Consume a challenge inside a caller-owned transaction, or atomically on its own. */
+  consumeChallenge(id, opts, { inTransaction = false } = {}) {
+    if (inTransaction) return this.#consumeChallenge(id, opts)
+    return this.transaction(() => this.#consumeChallenge(id, opts))
   }
 
   countCredentials() {

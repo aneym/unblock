@@ -21,6 +21,7 @@ export interface Assertion {
   challenge_id: string
   id: string
   rawId: string
+  type: string
   response: {
     clientDataJSON: string
     authenticatorData: string
@@ -130,7 +131,7 @@ export async function approveAssertion(ticket: string): Promise<Assertion> {
   }
   const credential = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential
   const json = credentialToJson(credential)
-  return { challenge_id: options.challenge_id, id: json.id, rawId: json.rawId, response: json.response as Assertion['response'] }
+  return { challenge_id: options.challenge_id, id: json.id, rawId: json.rawId, type: json.type, response: json.response as Assertion['response'] }
 }
 
 export function listPasskeys(): Promise<PasskeyList> {

@@ -535,13 +535,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (viaToken) return sendAsset(res, viaToken)
     }
 
-    // A share link is a valid human path for answering, but it cannot fetch
-    // a passkey ceremony: enrollment and Touch ID approval stay on the
-    // tailnet page, which is the one place Alex's own identity is checked.
-    // A passkey-gated verdict sent through a share link still reaches
-    // answerAsk below, and fails PASSKEY_REQUIRED there for lack of an
-    // assertion — this just gives the options routes a clear refusal instead
-    // of a bare 404.
+    // A share link can answer ungated verdicts, but cannot fetch a passkey
+    // ceremony or carry an assertion. Enrollment and Touch ID approval stay
+    // on the tailnet page, where Alex's identity is checked.
     if (tail.startsWith('/api/passkeys')) {
       return sendJson(res, 403, { error: 'passkey routes are not available on a share link; use the tailnet page', code: 'PASSKEY_ON_SHARE_LINK' })
     }
@@ -581,9 +577,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (tail === '/api/draft') {
         return sendJson(res, 200, { ask: applyDraft(ticket, body, `share-link:${link.minted_by}`) })
       }
+      if (body.assertion != null) return sendJson(res, 403, { error: 'approve on the unblock page; it needs Touch ID', code: 'PASSKEY_ON_SHARE_LINK' })
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply, `share-link:${link.minted_by}`, body.revision, body.field_bounce)
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`, body.assertion)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
