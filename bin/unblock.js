@@ -245,7 +245,18 @@ async function readBody(path) {
 async function file(args) {
   const { rest } = flags(args, {})
   if (rest.length > 1) fail('usage: unblock file [path|-]')
-  const ask = await request('/api/asks', await readBody(rest[0]))
+  // Same JSON the MCP tool takes. A body already shaped {ask, origin} passes through.
+  const body = await readBody(rest[0])
+  const ask = await request('/api/asks', body && typeof body === 'object' && 'ask' in body ? body : {
+    ask: body,
+    origin: {
+      agent: process.env.UNBLOCK_AGENT || 'cli',
+      pane_id: process.env.HERDR_PANE_ID,
+      tab_id: process.env.HERDR_TAB_ID,
+      workspace_id: process.env.HERDR_WORKSPACE_ID,
+      cwd: process.cwd(),
+    },
+  })
   const link = stable(await request('/api/health'), ask.ticket)
   output({ ...safe(ask), link }, [ask.ticket, link].filter(Boolean).join('\n'))
 }
