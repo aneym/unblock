@@ -9,6 +9,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'unblock-pane-hooks-'))
 process.env.UNBLOCK_STATE_DIR = stateDir
 process.env.UNBLOCK_CONFIG_DIR = join(stateDir, 'config')
 process.env.UNBLOCK_SECRET_BACKEND = 'env'
+const { ASK_PURPOSES } = await import('../src/schema.js')
 const { startDaemon, loadOrCreateSecret } = await import('../src/daemon.js')
 const auth = loadOrCreateSecret()
 
@@ -62,10 +63,15 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
       { label: 'Left', description: 'Left side' }, { label: 'Right', description: 'Right side' },
     ] })
     const filed = await json(base, `/api/asks/${ticket(await hook('claude-ask', two))}`)
-    assert.equal(filed.purpose, 'decision')
+    assert.equal(filed.purpose, ASK_PURPOSES.includes('question') ? 'question' : 'decision')
     assert.equal(filed.fields.length, 2)
     assert.equal(filed.fields[0].recommend.value, 'Second')
     assert.deepEqual(filed.fields[0].choices.map((c) => c.label), ['First', 'Second'])
+    if (ASK_PURPOSES.includes('question')) {
+      assert.deepEqual(filed.fields[0].choices.map((c) => c.description), ['Try this', 'Prefer this'])
+      assert.match(filed.summary, /^Claude asks:/)
+      assert.equal(filed.only_you, null)
+    }
     assert.equal(filed.fields[1].multi, true)
 
     for (const env of [
@@ -85,18 +91,19 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
     const first = await hook('claude-permission', permission('ls -la'))
     assert.deepEqual(first, { code: 0, stdout: '' })
     const list = await json(base, '/api/asks?profile=*')
-    const permissionAsk = list.asks.find((ask) => ask.why.includes('ls -la'))
+    const permissionAsk = list.asks.find((ask) => ASK_PURPOSES.includes('permission') ? ask.permission?.command?.includes('ls -la') : ask.why.includes('ls -la'))
     assert.ok(permissionAsk)
     assert.equal(permissionAsk.status, 'open')
+    assert.equal(permissionAsk.purpose, ASK_PURPOSES.includes('permission') ? 'permission' : 'decision')
     assert.deepEqual(permissionAsk.fields[0].choices.map((c) => c.value), ['allow_once', 'deny'])
     assert.equal(permissionAsk.fields[0].choices.some((c) => /always/i.test(c.label + c.value)), false)
 
     const redaction = 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789 API_KEY=shortvalue AUTH_TOKEN=anothersecret'
     assert.deepEqual(await hook('claude-permission', permission(`echo ${redaction}`)), { code: 0, stdout: '' })
     const after = await json(base, '/api/asks?profile=*')
-    const redacted = after.asks.find((ask) => ask.why.includes('[redacted]'))
+    const redacted = after.asks.find((ask) => (ASK_PURPOSES.includes('permission') ? ask.permission?.command : ask.why)?.includes('[redacted]'))
     assert.ok(redacted)
-    assert.doesNotMatch(redacted.why, /abcdefghijklmnopqrstuvwxyz0123456789|shortvalue|anothersecret/)
+    assert.doesNotMatch(ASK_PURPOSES.includes('permission') ? redacted.permission.command : redacted.why, /abcdefghijklmnopqrstuvwxyz0123456789|shortvalue|anothersecret/)
     assert.equal((await json(base, `/api/asks/${permissionAsk.ticket}`)).status, 'cancelled')
     assert.equal(redacted.status, 'open')
   } finally {

@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, unlinkSync, write
 import { basename, join } from 'node:path'
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { paneOrigin } from '../plugin/herdr.js'
-import { validateAsk } from '../src/schema.js'
+import { ASK_PURPOSES, validateAsk } from '../src/schema.js'
 
 export const registryDir = () => join(stateDir(), 'pane-asks')
 export const entryPath = (ticket) => join(registryDir(), `${ticket}.json`)
@@ -72,16 +72,25 @@ export async function request(path, body) {
   return data
 }
 
-export async function fileAsk(ask, source) {
-  validateAsk(ask)
-  try {
-    const filed = await request('/api/asks', { ask, origin: source })
-    return { ticket: filed.ticket, created: true }
-  } catch (error) {
-    if (error.status !== 409 || !error.data?.ticket) throw error
-    const old = await request(`/api/asks/${encodeURIComponent(error.data.ticket)}`)
-    if (old.status !== 'open' || old.origin?.pane_id !== source.pane_id) throw new Error('duplicate belongs to another pane or is closed')
-    return { ticket: old.ticket, created: false }
+/** Fall back only when the daemon does not recognize a newer ask shape. */
+export async function fileFirst(candidates, source) {
+  for (let i = 0; i < candidates.length; i++) {
+    const ask = candidates[i]
+    if (ASK_PURPOSES.includes(ask.purpose)) validateAsk(ask)
+    try {
+      const filed = await request('/api/asks', { ask, origin: source })
+      return { ticket: filed.ticket, created: true }
+    } catch (error) {
+      if (error.status === 409 && error.data?.ticket) {
+        const old = await request(`/api/asks/${encodeURIComponent(error.data.ticket)}`)
+        if (old.status !== 'open' || old.origin?.pane_id !== source.pane_id) throw new Error('duplicate belongs to another pane or is closed')
+        return { ticket: old.ticket, created: false }
+      }
+      const detail = String(error.data?.error ?? '')
+      if (error.status === 400 && i < candidates.length - 1 &&
+        (/(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i.test(detail))) continue
+      throw error
+    }
   }
 }
 

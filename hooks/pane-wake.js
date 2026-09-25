@@ -57,7 +57,9 @@ function answerLine(ask) {
     }
     // null is an explicit skip: the human left it to the agent's recommendation.
     if (value === null) return `${field.label} -> skipped, go with your recommendation${field.recommend ? ` (${field.recommend.value})` : ''}`
-    return `${field.label} -> ${Array.isArray(value) ? value.join(', ') : String(value ?? '')}`
+    const allowed = field.type === 'choice' ? new Set(field.choices.map((choice) => choice.value)) : null
+    const render = (item) => typeof item === 'string' && allowed && !allowed.has(item) ? `in their words: ${item}` : String(item ?? '')
+    return `${field.label} -> ${Array.isArray(value) ? value.map(render).join(', ') : render(value)}`
   })
   return `[unblock ${ticket}] Alex answered: ${values.join(' | ')}${ask.reply ? ` | Note: ${ask.reply}` : ''}`
 }
@@ -77,8 +79,13 @@ async function deliverQuestion(ask, pane) {
 }
 
 async function deliverPermission(ask, entry) {
-  const value = ask.answers?.decision
-  if (ask.status === 'bounced' || !['allow_once', 'deny'].includes(value) || typeof value !== 'string') {
+  if (ask.status === 'bounced') {
+    log('permission sent back; nothing sent')
+    await collect()
+    return true
+  }
+  const value = ask.answers?.verdict ?? ask.answers?.decision
+  if (!['allow_once', 'deny'].includes(value) || typeof value !== 'string') {
     log('permission answer is not a valid decision; no keys sent')
     await collect()
     return true
@@ -123,7 +130,8 @@ async function deliverPermission(ask, entry) {
     try {
       if (value === 'deny') {
         await sleep(1500)
-        await herdr(['agent', 'prompt', entry.pane_id, `[unblock ${ticket}] Alex denied that step${ask.reply ? `: ${ask.reply}` : ''}. Find another way or ask.`])
+        const note = typeof ask.answers?.note === 'string' && ask.answers.note.trim() ? ask.answers.note.trim() : ask.reply
+        await herdr(['agent', 'prompt', entry.pane_id, `[unblock ${ticket}] Alex denied that step${note ? `: ${note}` : ''}. Find another way or ask.`])
       }
       await collect()
     } catch {
