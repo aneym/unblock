@@ -54,6 +54,7 @@ h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
 .property-value { min-width: 0; overflow-wrap: anywhere; }
 .property-value .state-icon { margin-right: 4px; }
 .links { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.step-links { margin: 4px 0 0 28px; }
 .context, .steps, .questions, .reply { margin: 0 0 32px; }
 .context p { margin: 0; line-height: 1.6; max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tried-list { margin: 0; padding-left: 18px; }

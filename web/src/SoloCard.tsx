@@ -27,6 +27,29 @@ function openExternalScheme(href: string) {
   window.setTimeout(() => frame.remove(), 2000)
 }
 
+function LinkList({ links, className }: { links: { label: string; url: string }[]; className: string }) {
+  return (
+    <span className={`${className} links`}>
+      {links.map((link) => {
+        const isHttp = /^https?:/i.test(link.url)
+        return (
+          <a
+            key={link.url}
+            href={link.url}
+            target={isHttp ? '_blank' : undefined}
+            rel="noopener noreferrer"
+            onClick={isHttp ? undefined : (event) => {
+              event.preventDefault(); openExternalScheme(link.url)
+            }}
+          >
+            {link.label} ↗
+          </a>
+        )
+      })}
+    </span>
+  )
+}
+
 /**
  * Who asked, when, status and links: context, not the decision. It sits below
  * the question, folded on a phone and open on a wide screen, so the first
@@ -94,24 +117,7 @@ function Details({ ask, herdrHref, topLinks }: {
       {!!topLinks.length && (
         <div className="property">
           <span className="property-label">Links</span>
-          <span className="property-value links">
-            {topLinks.map((link) => {
-              const isHttp = /^https?:/i.test(link.url)
-              return (
-                <a
-                  key={link.url}
-                  href={link.url}
-                  target={isHttp ? '_blank' : undefined}
-                  rel="noopener noreferrer"
-                  onClick={isHttp ? undefined : (event) => {
-                    event.preventDefault(); openExternalScheme(link.url)
-                  }}
-                >
-                  {link.label} ↗
-                </a>
-              )
-            })}
-          </span>
+          <LinkList links={topLinks} className="property-value" />
         </div>
       )}
       {!!ask.tried?.length && (
@@ -452,6 +458,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
           <section className="steps">
             <h2>Do this</h2>
             <ol>{ask.steps.map((step, i) => <li key={i}><Linkify text={step} /></li>)}</ol>
+            {!!topLinks.length && <LinkList links={topLinks} className="step-links" />}
           </section>
         )}
         {!detected && (
@@ -492,7 +499,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
             {state === 'error' && <p className="send-error" role="alert">{message}</p>}
           </>
         )}
-        <Details ask={ask} herdrHref={herdrHref} topLinks={topLinks} />
+        {/* Steps point at the links ("link below"), so with steps they stay beside them. */}
+        <Details ask={ask} herdrHref={herdrHref} topLinks={ask.steps?.length ? [] : topLinks} />
       </div>
       {!detected && (
         <ActionBar
