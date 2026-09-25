@@ -59,6 +59,33 @@ not park three times, because it can only be stopped in one place.
 | `unblock_check` | collect answers, and see what is part way filled in |
 | `unblock_cancel` | withdraw an open ask |
 
+## Real blockers only
+
+The queue costs a human attention, so the daemon only takes what only they can do. Every ask
+carries `only_you`, the reason: `credential` (their sign-in or key), `their_account` (a click in
+a console signed in as them), `spend` (money or a new account), `message` (a message to a real
+person) or `judgment` (a product call). It also carries `tried`: one to eight lines saying what
+the agent ran or attempted and why that could not clear it. A manual step needs a deep link to
+the exact screen, not a home page. Titles and labels are checked for repo jargon. A second open
+ask with the same project and title is refused with the existing ticket.
+
+## CLI
+
+```
+unblock [list] [--all] [--project P]   what is waiting, grouped by project
+unblock show <ticket>                  one ask in full (never secret values)
+unblock answer <ticket> <value>        answer a one-question ask in one line
+unblock answer <ticket> name=value ... answer by question name
+unblock close <ticket> <reason...>     withdraw an open ask with a one-line reason
+unblock file [path|-]                  file an ask from JSON
+unblock update <ticket> [path|-]       revise an open ask
+unblock link <ticket> [--share]        the stable queue link, or a 15-minute share link
+unblock daemon start|stop|restart|status
+```
+
+`--json` works on every command except `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
+unreachable, 2 usage, 3 no such ask, 4 rejected by the queue, 5 ask is not open.
+
 ## Live asks
 
 An ask is not a form you post and walk away from. Every keystroke drafts to the

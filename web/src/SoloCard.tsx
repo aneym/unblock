@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { Button } from './components/ui/button'
-import { Textarea } from './components/ui/textarea'
-import { cn } from './lib/utils'
 import { Linkify } from './lib/linkify'
+import { Icon, stateOf } from './icons'
 import { api, BASE, FinishedError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { FieldControl } from './FieldControl'
 import { ago, groupOf, isMissing, type Ask, type Bounced, type FieldValue, type Values } from './deck'
+
+const onlyYou: Record<string, string> = {
+  credential: 'Your sign-in or key',
+  their_account: 'A click in your account',
+  spend: 'Spending or a new account',
+  message: 'A message from you',
+  judgment: 'Your call',
+}
 
 /**
  * Navigate to a custom-scheme URL without touching the page. A plain anchor
@@ -22,35 +27,104 @@ function openExternalScheme(href: string) {
   window.setTimeout(() => frame.remove(), 2000)
 }
 
-export function SuccessOverlay({ label }: { label: string }) {
+function Properties({ ask, herdrHref, topLinks }: {
+  ask: Ask
+  herdrHref: string | undefined
+  topLinks: { label: string; url: string }[]
+}) {
+  const status = stateOf(ask)
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-[var(--surface)]/92 backdrop-blur-[2px]"
-    >
-      <motion.span
-        initial={{ scale: 0.4, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 420, damping: 22 }}
-        className="flex size-12 items-center justify-center rounded-full bg-[var(--ok)] text-[22px] font-bold text-white"
-      >
-        ✓
-      </motion.span>
-      <motion.p initial={{ y: 8, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.08 }} className="text-[14.5px] font-medium text-[var(--dim)]">
-        {label}
-      </motion.p>
-    </motion.div>
+    <div className="properties">
+      <div className="property">
+        <span className="property-label">Status</span>
+        <span className="property-value">
+          <Icon name={status.name} /> {status.label}{' '}
+          <span className="muted">
+            · {ask.gating ? 'the agent waits for you' : 'the agent keeps working'}
+          </span>
+        </span>
+      </div>
+      {ask.only_you && (
+        <div className="property">
+          <span className="property-label">Needs you for</span>
+          <span className="property-value">{onlyYou[ask.only_you] || ask.only_you}</span>
+        </div>
+      )}
+      <div className="property">
+        <span className="property-label">Asked by</span>
+        <span className="property-value">
+          {ask.origin.agent || 'agent'}{' '}
+          {herdrHref && (
+            <>
+              <span className="muted">·</span>{' '}
+              <a
+                href={herdrHref}
+                className="mono pane-link"
+                onClick={(event) => { event.preventDefault(); openExternalScheme(herdrHref) }}
+              >
+                {ask.origin.pane_id}
+              </a>
+            </>
+          )}{' '}
+          <span className="muted">· {ago(ask.created_at)} ago</span>
+        </span>
+      </div>
+      {!!topLinks.length && (
+        <div className="property">
+          <span className="property-label">Links</span>
+          <span className="property-value links">
+            {topLinks.map((link) => {
+              const isHttp = /^https?:/i.test(link.url)
+              return (
+                <a
+                  key={link.url}
+                  href={link.url}
+                  target={isHttp ? '_blank' : undefined}
+                  rel="noopener noreferrer"
+                  onClick={isHttp ? undefined : (event) => {
+                    event.preventDefault(); openExternalScheme(link.url)
+                  }}
+                >
+                  {link.label} ↗
+                </a>
+              )
+            })}
+          </span>
+        </div>
+      )}
+    </div>
   )
 }
 
-interface SoloCardProps {
-  ask: Ask
-  onFinished: () => void
-  onDraftChange?: (values: Values, bounced: Bounced) => void
+function ActionBar({
+  isDecision, hardMissing, isBusy, submit, hasRecommendations, useRecommendations,
+  armed, onSendBack, statusHint, hasError,
+}: {
+  isDecision: boolean; hardMissing: string[]; isBusy: boolean; submit: () => void
+  hasRecommendations: boolean; useRecommendations: () => void
+  armed: boolean; onSendBack: () => void; statusHint: string; hasError: boolean
+}) {
+  return (
+    <div className="action-bar">
+      <button className="primary" disabled={hardMissing.length > 0 || isBusy} onClick={submit}>
+        {isDecision ? 'Send decision' : 'Send answer'}
+      </button>
+      <div className="action-secondary">
+        {hasRecommendations && (
+          <button className="secondary" disabled={isBusy} onClick={useRecommendations}>
+            Use recommendations
+          </button>
+        )}
+        <button className="text-button" disabled={isBusy} onClick={onSendBack}>
+          {armed ? 'Confirm send back?' : 'Send back…'}
+        </button>
+      </div>
+      <span className={`action-status${hasError ? ' error' : ''}`} role="status">{statusHint}</span>
+    </div>
+  )
 }
 
-export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
+export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
   /**
    * Seed once per ticket: server draft first, then the local mirror on top
    * when it is newer than what the daemon has. Later polls replace the `ask`
@@ -87,9 +161,7 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
   // second sends it. Nothing else on the card is destructive enough to need
   // this, and nothing else gets it.
   const [armed, setArmed] = useState(false)
-  const [step, setStep] = useState(0)
-  const [reviewing, setReviewing] = useState(false)
-  const reduced = useReducedMotion()
+  const [showReply, setShowReply] = useState(!!seeded.reply)
   useEffect(() => {
     if (!armed) return
     const timer = window.setTimeout(() => setArmed(false), 4000)
@@ -97,18 +169,28 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
   }, [armed])
   const draftTimer = useRef<number | undefined>(undefined)
   const completed = useRef(false)
-  const latest = useRef({ values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced })
-  const secretNames = useMemo(() => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)), [ask.fields])
+  const latest = useRef({
+    values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
+  })
+  const secretNames = useMemo(
+    () => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)),
+    [ask.fields],
+  )
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
-  const missing = unanswered.filter((field) => !(field.name in bounced) && field.required && isMissing(values[field.name])).map((field) => field.label)
+  const missing = unanswered
+    .filter((field) => !(field.name in bounced) && field.required && isMissing(values[field.name]))
+    .map((field) => field.label)
   // Only must_decide fields hard-block the submit — and sending one back
   // counts as engaging with it. Everything else left blank is sent as an
   // explicit skip (null), a real "no answer" the agent acts on.
-  const hardMissing = unanswered.filter((field) => field.must_decide && !(field.name in bounced) && isMissing(values[field.name])).map((field) => field.label)
+  const hardMissing = unanswered
+    .filter((field) => field.must_decide && !(field.name in bounced) && isMissing(values[field.name]))
+    .map((field) => field.label)
   const detected = ask.origin.detected === true
   const isDecision = ask.purpose === 'decision'
 
-  const safeValues = (raw: Values) => Object.fromEntries(Object.entries(raw).filter(([key]) => !secretNames.has(key)))
+  const safeValues = (raw: Values) =>
+    Object.fromEntries(Object.entries(raw).filter(([key]) => !secretNames.has(key)))
 
   /**
    * Every change lands in localStorage synchronously, then the server draft
@@ -122,13 +204,19 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
     const merged = { ...latest.current, ...next }
     latest.current = merged
     const safe = safeValues(merged.values)
-    writeLocal(ask.ticket, { values: safe, notes: merged.notes, reply: merged.reply, bounced: merged.bounced })
-    onDraftChange?.(safe, merged.bounced)
+    writeLocal(ask.ticket, {
+      values: safe, notes: merged.notes, reply: merged.reply, bounced: merged.bounced,
+    })
     window.clearTimeout(draftTimer.current)
     setDraftState('saving')
     draftTimer.current = window.setTimeout(() => {
       draftTimer.current = undefined
-      api('/api/draft', { ticket: ask.ticket, values: safeValues(merged.values), field_context: merged.notes, reply: merged.reply })
+      api('/api/draft', {
+        ticket: ask.ticket,
+        values: safeValues(merged.values),
+        field_context: merged.notes,
+        reply: merged.reply,
+      })
         .then(() => setDraftState('saved'))
         .catch(() => setDraftState('offline'))
     }, 300)
@@ -142,7 +230,12 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
       draftTimer.current = undefined
       const merged = latest.current
       const body = new Blob(
-        [JSON.stringify({ ticket: ask.ticket, values: safeValues(merged.values), field_context: merged.notes, reply: merged.reply })],
+        [JSON.stringify({
+          ticket: ask.ticket,
+          values: safeValues(merged.values),
+          field_context: merged.notes,
+          reply: merged.reply,
+        })],
         { type: 'application/json' },
       )
       try { navigator.sendBeacon(`${BASE}/api/draft`, body) } catch { /* the local mirror already has it */ }
@@ -195,6 +288,7 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
   }
 
   const submit = async () => {
+    if (hardMissing.length || isBusy || detected) return
     setState('sending'); setMessage('sending…')
     // Bounced fields keep their typed value: the store stores it beside the
     // bounce note as a draft, so "right, but ask me again" is expressible.
@@ -204,15 +298,21 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
       if (field.required && !field.must_decide && isMissing(payload[field.name])) payload[field.name] = null
     }
     try {
-      const output = await api<{ complete: boolean }>('/api/answer', { ticket: ask.ticket, values: payload, reply, field_context: notes, field_bounce: bounced })
+      const output = await api<{ complete: boolean }>('/api/answer', {
+        ticket: ask.ticket, values: payload, reply, field_context: notes, field_bounce: bounced,
+      })
       setState('done')
-      setMessage(output.complete ? ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent' : 'saved, still incomplete')
+      setMessage(
+        output.complete
+          ? (ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent')
+          : 'saved, still incomplete',
+      )
       if (output.complete) {
         completed.current = true
         window.clearTimeout(draftTimer.current)
         draftTimer.current = undefined
         clearLocal(ask.ticket)
-        window.setTimeout(onFinished, 950)
+        window.setTimeout(onFinished, 1200)
       }
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
@@ -234,7 +334,7 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
       window.clearTimeout(draftTimer.current)
       draftTimer.current = undefined
       clearLocal(ask.ticket)
-      window.setTimeout(onFinished, 1100)
+      window.setTimeout(onFinished, 1200)
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
       setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
@@ -245,7 +345,6 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
     if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
     if (isBusy || detected) return
     event.preventDefault()
-    if (paged && !reviewing) setReviewing(true)
     if (hardMissing.length > 0) return
     void submit()
   }
@@ -253,146 +352,136 @@ export function SoloCard({ ask, onFinished, onDraftChange }: SoloCardProps) {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   })
-  const topLinks = [...(ask.links || []), ...ask.fields.filter((field) => field.url).map((field) => ({ label: field.label, url: field.url! }))]
-    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
+  const topLinks = [
+    ...(ask.links || []),
+    ...ask.fields.filter((field) => field.url).map((field) => ({ label: field.label, url: field.url! })),
+  ].filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
       (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
       (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
     : undefined
   const isBusy = state === 'sending' || state === 'done'
-  const bounceCount = Object.keys(bounced).length
 
-  /**
-   * A nine-question grill is not a card, it is a wall. Past three open
-   * questions the card steps through them one at a time and ends on a review
-   * of everything before it sends — the deck's premise applied inside the
-   * card, instead of abandoned the moment an ask gets long.
-   */
-  const paged = unanswered.length > 3 && !detected
-  const stepIndex = Math.min(step, Math.max(unanswered.length - 1, 0))
-  const stepField = unanswered[stepIndex]
-  const showAll = !paged || reviewing
-  const isLastStep = stepIndex >= unanswered.length - 1
-  const dotState = (field: typeof unanswered[number]) =>
-    field.name in bounced ? 'bounced' : !isMissing(values[field.name]) ? 'done' : 'todo'
-  // Field labels can be whole sentences, so naming three of them buries the
+  // Field labels can be whole sentences, so naming several of them buries the
   // bar in prose. Name one, count the rest.
   const stillNeeds = hardMissing.length === 1
-    ? `still needs: ${hardMissing[0]}`
+    ? `Pick an answer for "${hardMissing[0]}"`
     : hardMissing.length > 1
-      ? `still needs ${hardMissing.length} decisions`
+      ? `Pick answers for ${hardMissing.length} questions`
       : ''
-  const answeredCount = unanswered.filter((field) => dotState(field) !== 'todo').length
-  const statusHint = message
-    || (armed ? 'this throws away every answer on this card' : '')
-    || (paged && !reviewing
-      ? answeredCount
-        ? `${answeredCount} of ${unanswered.length} answered · blanks go back as skipped`
-        : 'blanks go back as skipped'
-      : '')
-    || stillNeeds
-    || [
-      missing.length ? `${missing.length} unanswered ${missing.length === 1 ? 'field goes' : 'fields go'} back as skipped` : '',
-      bounceCount ? `${bounceCount} ${bounceCount === 1 ? 'question goes' : 'questions go'} back for rework` : '',
-    ].filter(Boolean).join(' · ')
+  const statusHint = state === 'error'
+    ? message
+    : state === 'sending'
+      ? 'Sending…'
+      : state === 'done'
+        ? 'Sent'
+        : armed
+          ? 'Send back the whole ask and discard answers?'
+          : stillNeeds || (
+            draftState === 'offline'
+              ? 'Draft kept in this browser'
+              : draftState === 'saved'
+                ? 'Draft saved'
+                : missing.length
+                  ? `${missing.length} ${missing.length === 1 ? 'question' : 'questions'} left`
+                  : ''
+          )
+  const hasRecommendations = unanswered.some(
+    (field) => !field.must_decide && field.recommend
+      && isMissing(values[field.name]) && !(field.name in bounced),
+  )
+  const useRecommendations = () => {
+    const next = { ...latest.current.values }
+    for (const field of unanswered) {
+      if (!field.must_decide && field.recommend && isMissing(next[field.name])
+        && !(field.name in bounced) && field.type !== 'secret') {
+        next[field.name] = field.recommend.value
+      }
+    }
+    setValues(next)
+    persist({ values: next })
+  }
+  const onSendBackClick = () => {
+    if (!armed) { setArmed(true); setShowReply(true) }
+    else void sendBack()
+  }
 
   return (
-    <article className={cn('relative rounded-[var(--radius-lg)] border border-[var(--rule)] bg-[var(--surface)] px-4 pt-7 shadow-[0_1px_0_rgba(255,255,255,.6)_inset,0_18px_40px_-24px_rgba(60,45,20,.35)] sm:px-7 sm:pt-8', detected && 'opacity-75')}>
-      <AnimatePresence>{state === 'done' && <SuccessOverlay label={message} />}</AnimatePresence>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-mono text-[12px] leading-5 text-[var(--faint)]">
-        {ask.gating ? <span className="font-semibold text-[var(--accent)]">● waiting</span> : detected ? <span>detected</span> : <span>filed</span>}
-        <span aria-hidden>·</span>
-        <span>{ask.origin.agent || 'agent'}</span>
-        <span aria-hidden>·</span>
-        <span className="text-[var(--dim)]">{groupOf(ask)}</span>
-        {ask.origin.pane_id && herdrHref && <><span aria-hidden>·</span><a href={herdrHref} onClick={(event) => { event.preventDefault(); openExternalScheme(herdrHref) }} title="Jump to this pane in Herdr" className="underline decoration-[var(--faint)] underline-offset-2 hover:text-[var(--accent)] hover:decoration-[var(--accent)]">{ask.origin.pane_id}</a></>}
-        <span aria-hidden>·</span>
-        <span>{ago(ask.created_at)}</span>
-        {draftState !== 'idle' && <><span aria-hidden>·</span><span className={cn(draftState === 'offline' && 'text-[var(--danger)]')}>{draftState === 'saving' ? 'saving draft…' : draftState === 'saved' ? 'draft saved' : 'draft kept in this browser'}</span></>}
-      </div>
-      <h2 className="font-display mt-3.5 text-balance text-[24px] font-semibold leading-[1.25] tracking-[-.01em] sm:text-[26px]">{ask.title}</h2>
-      <p className="mt-2 text-pretty text-[15px] leading-relaxed text-[var(--dim)]"><Linkify text={ask.why} /></p>
-      {!!ask.steps?.length && <ol className="my-4 list-decimal space-y-1.5 pl-6 text-[15px] leading-relaxed marker:text-[var(--faint)]">{ask.steps.map((step, index) => <li key={index}><Linkify text={step} /></li>)}</ol>}
-      {!!topLinks.length && <div className="my-5 flex flex-wrap gap-2">{topLinks.map((link) => <a key={link.url} className="inline-flex min-h-10 max-w-full items-center rounded-[var(--radius-sm)] border border-[var(--input-border)] bg-[var(--surface2)] px-3 text-[13.5px] font-medium text-[var(--ink)] hover:border-[var(--accent)]" href={link.url} target={/^https?:/i.test(link.url) ? '_blank' : undefined} rel="noreferrer noopener" onClick={/^https?:/i.test(link.url) ? undefined : (event) => { event.preventDefault(); openExternalScheme(link.url) }}><span className="truncate">{link.label}</span><span className="ml-2 text-[var(--accent)]" aria-hidden>↗</span></a>)}</div>}
-      {paged && !reviewing && (
-        <div className="mt-5 flex items-center gap-1.5">
-          {unanswered.map((field, index) => {
-            const shape = dotState(field)
-            return (
-              <button
-                key={field.name}
-                type="button"
-                title={field.label}
-                aria-label={`Question ${index + 1}: ${field.label}`}
-                aria-current={index === stepIndex ? 'step' : undefined}
-                disabled={isBusy}
-                onClick={() => setStep(index)}
-                className={cn(
-                  'h-1.5 flex-1 rounded-full transition-colors duration-200',
-                  shape === 'done' ? 'bg-[var(--ok)]' : shape === 'bounced' ? 'bg-[var(--danger)]' : 'bg-[var(--rule)]',
-                  index === stepIndex && 'ring-2 ring-[var(--ink)] ring-offset-2 ring-offset-[var(--surface)]',
-                )}
-              />
-            )
-          })}
-          <span className="ml-2 shrink-0 font-mono text-[12px] text-[var(--faint)]">{stepIndex + 1}/{unanswered.length}</span>
+    <article className="document">
+      <div className="document-body">
+        <div className="breadcrumb">
+          <span>{groupOf(ask)} / {stateOf(ask).label}</span>
+          <span className="ticket">{ask.ticket}</span>
         </div>
-      )}
-      <div className="mt-4">
-        {showAll ? (
-          unanswered.map((field) => <FieldControl key={field.name} field={field} ticket={ask.ticket} value={values[field.name]} note={notes[field.name]} bounceNote={bounced[field.name]} onChange={onChange} onNoteChange={onNoteChange} onBounce={onBounce} disabled={isBusy} />)
-        ) : stepField ? (
-          // No exit animation on purpose. Waiting for the old question to
-          // leave held its text on screen while the segment bar and counter
-          // had already moved on, so the card visibly disagreed with itself.
-          // The new question mounts at once and animates in.
-          <motion.div
-            key={stepField.name}
-            initial={reduced ? { opacity: 0 } : { opacity: 0, x: 18 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-          >
-            <FieldControl field={stepField} ticket={ask.ticket} value={values[stepField.name]} note={notes[stepField.name]} bounceNote={bounced[stepField.name]} onChange={onChange} onNoteChange={onNoteChange} onBounce={onBounce} disabled={isBusy} />
-          </motion.div>
-        ) : null}
-      </div>
-      {paged && reviewing && (
-        <button type="button" className="mt-1 text-[13px] leading-5 text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} onClick={() => setReviewing(false)}>
-          Back to one at a time
-        </button>
-      )}
-      {!detected && showAll && <div className="border-t border-[var(--rule)] py-5">
-        <label htmlFor={`reply_${ask.ticket}`} className="mb-2 block text-[13.5px] font-semibold leading-5 text-[var(--ink)]">Anything else <span className="font-normal text-[var(--faint)]">· or why you're sending it back</span></label>
-        <Textarea id={`reply_${ask.ticket}`} value={reply} placeholder="Add context the fields don't cover, or say what's wrong with this ask" disabled={isBusy} className="min-h-20" onChange={(event) => onReplyChange(event.target.value)} />
-      </div>}
-      <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-3 rounded-b-[var(--radius-lg)] border-t border-[var(--rule)] bg-[var(--surface)] px-4 py-4 sm:-mx-7 sm:px-7">
-        {paged && !reviewing ? (
+        <h1>{ask.title}</h1>
+        <Properties ask={ask} herdrHref={herdrHref} topLinks={topLinks} />
+        <section className="context"><h2>Why</h2><p><Linkify text={ask.why} /></p></section>
+        {!!ask.tried?.length && (
+          <details className="tried">
+            <summary>What the agent tried ({ask.tried.length})</summary>
+            <ul>{ask.tried.map((item, i) => <li key={i}><Linkify text={item} /></li>)}</ul>
+          </details>
+        )}
+        {!!ask.steps?.length && (
+          <section className="steps">
+            <h2>Do this</h2>
+            <ol>{ask.steps.map((step, i) => <li key={i}><Linkify text={step} /></li>)}</ol>
+          </section>
+        )}
+        {!detected && (
           <>
-            <Button variant="secondary" disabled={stepIndex === 0 || isBusy} onClick={() => setStep((current) => Math.max(current - 1, 0))}>Back</Button>
-            {isLastStep ? (
-              <Button disabled={isBusy} onClick={() => setReviewing(true)}>Review all {unanswered.length}</Button>
-            ) : (
-              <Button disabled={isBusy} onClick={() => setStep((current) => current + 1)}>Next</Button>
-            )}
-            {!isLastStep && <button type="button" className="text-[13.5px] font-medium text-[var(--faint)] hover:text-[var(--ink)]" disabled={isBusy} onClick={() => setReviewing(true)}>See all {unanswered.length}</button>}
-          </>
-        ) : !detected && (
-          <>
-            <Button disabled={hardMissing.length > 0 || isBusy} onClick={() => void submit()}>{ask.gating ? 'Answer & wake' : isDecision ? 'Submit answer' : 'Answer'}</Button>
-            <Button
-              variant="secondary"
-              disabled={isBusy}
-              title="Send the whole ask back unanswered. Every answer on this card is discarded; your note goes with it."
-              className={cn(armed && 'border-[var(--danger)] text-[var(--danger)]')}
-              onClick={() => (armed ? void sendBack() : setArmed(true))}
-            >
-              {armed ? 'Discard all & send back?' : 'Send back'}
-            </Button>
+            <section className="questions">
+              <h2>Your answer</h2>
+              {unanswered.map((field) => (
+                <FieldControl
+                  key={field.name}
+                  field={field}
+                  ticket={ask.ticket}
+                  value={values[field.name]}
+                  note={notes[field.name]}
+                  bounceNote={bounced[field.name]}
+                  onChange={onChange}
+                  onNoteChange={onNoteChange}
+                  onBounce={onBounce}
+                  disabled={isBusy}
+                />
+              ))}
+            </section>
+            <section className="reply">
+              <h2>Anything else</h2>
+              {!showReply && !reply ? (
+                <button className="text-button" type="button" onClick={() => setShowReply(true)}>
+                  Add a reply
+                </button>
+              ) : (
+                <textarea
+                  aria-label="Anything else"
+                  className="control"
+                  value={reply}
+                  placeholder="Add context or say why you're sending it back"
+                  disabled={isBusy}
+                  onChange={(event) => onReplyChange(event.target.value)}
+                />
+              )}
+            </section>
           </>
         )}
-        <span className={cn('min-w-0 text-[13px] leading-5 text-[var(--faint)]', state === 'error' && 'text-[var(--danger)]', state === 'done' && 'text-[var(--ok)]')}>{statusHint}</span>
       </div>
+      {!detected && (
+        <ActionBar
+          isDecision={isDecision}
+          hardMissing={hardMissing}
+          isBusy={isBusy}
+          submit={() => void submit()}
+          hasRecommendations={hasRecommendations}
+          useRecommendations={useRecommendations}
+          armed={armed}
+          onSendBack={onSendBackClick}
+          statusHint={statusHint}
+          hasError={state === 'error'}
+        />
+      )}
     </article>
   )
 }

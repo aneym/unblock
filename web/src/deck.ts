@@ -50,9 +50,12 @@ export interface Ask {
   project?: string
   fields: Field[]
   steps?: string[]
+  tried?: string[]
+  only_you?: string | null
   links?: { label: string; url: string }[]
   origin: {
     agent?: string
+    session_id?: string
     workspace_name?: string
     pane_id?: string
     tab_id?: string

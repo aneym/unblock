@@ -1,165 +1,317 @@
-import { useEffect, useRef, useState } from 'react'
-import { Button } from './components/ui/button'
-import { Checkbox } from './components/ui/checkbox'
-import { Input } from './components/ui/input'
-import { RadioGroup, RadioGroupItem } from './components/ui/radio-group'
-import { Textarea } from './components/ui/textarea'
-import { cn } from './lib/utils'
+import { useState } from 'react'
 import { Linkify } from './lib/linkify'
+import { Icon } from './icons'
 import { isMissing, type Field, type FieldValue } from './deck'
 
-export function CopyBlock({ text }: { text: string }) {
-  const [label, setLabel] = useState('copy')
-  const resetRef = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(resetRef.current), [])
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setLabel('copied')
-    } catch {
-      setLabel('select it')
+type ChangeFn = (name: string, value: FieldValue, isSecret?: boolean) => void
+
+function recommendLabel(field: Field): string {
+  const value = field.recommend?.value
+  if (field.type === 'confirm') return value === true ? 'Done' : 'leave it undone'
+  return String(value)
+}
+
+function isRecommended(field: Field, choice: string): boolean {
+  if (field.must_decide || !field.recommend) return false
+  const value = field.recommend.value
+  return Array.isArray(value) ? value.includes(choice) : value === choice
+}
+
+function ChoiceControl({ field, value, onChange, disabled, showOther }: {
+  field: Field; value: FieldValue | undefined; onChange: ChangeFn; disabled: boolean; showOther: boolean
+}) {
+  const choices = field.choices || []
+  const declared = new Set(choices.map((choice) => choice.value))
+  const selected = Array.isArray(value) ? value : []
+  const other = selected.find((item) => !declared.has(item)) || ''
+  const isOther = typeof value === 'string' && !!value && !declared.has(value)
+  const useOther = (text: string) => {
+    if (field.multi) {
+      const kept = selected.filter((item) => declared.has(item))
+      onChange(field.name, [...kept, ...(text.trim() ? [text] : [])])
+    } else {
+      onChange(field.name, text)
     }
-    window.clearTimeout(resetRef.current)
-    resetRef.current = window.setTimeout(() => setLabel('copy'), 1600)
+  }
+  const toggle = (choiceValue: string, checked: boolean) => {
+    if (field.multi) {
+      const next = checked ? selected.filter((item) => item !== choiceValue) : [...selected, choiceValue]
+      onChange(field.name, next)
+    } else {
+      onChange(field.name, choiceValue)
+    }
   }
   return (
-    <div className="flex items-start gap-2">
-      <pre className="min-w-0 flex-1 select-all whitespace-pre-wrap break-all rounded-[var(--radius-sm)] border border-[var(--rule)] bg-[var(--surface2)] px-3 py-2 font-mono text-[13px] leading-5 text-[var(--ink)]">{text}</pre>
-      <Button variant="ghost" className="h-9" onClick={copy}>{label}</Button>
+    <div className="choice-list" role="group" aria-label={field.label}>
+      {choices.map((choice) => {
+        const checked = field.multi ? selected.includes(choice.value) : value === choice.value
+        const recommended = isRecommended(field, choice.value)
+        return (
+          <label key={choice.value} className={`choice${checked ? ' checked' : ''}`}>
+            <input
+              type={field.multi ? 'checkbox' : 'radio'}
+              name={field.name}
+              checked={checked}
+              disabled={disabled}
+              onChange={() => toggle(choice.value, checked)}
+            />
+            <span className="choice-content">
+              <span className="choice-line">
+                <span><Linkify text={choice.label} /></span>
+                {recommended && <span className="recommend-badge">Recommended</span>}
+              </span>
+              {recommended && field.recommend?.why && (
+                <span className="recommend-why"><Linkify text={field.recommend.why} /></span>
+              )}
+            </span>
+          </label>
+        )
+      })}
+      {showOther && (
+        <input
+          className="control"
+          aria-label={`Other answer for ${field.label}`}
+          placeholder="Your own answer"
+          value={field.multi ? other : isOther ? value : ''}
+          disabled={disabled}
+          onChange={(event) => useOther(event.target.value)}
+        />
+      )}
     </div>
   )
 }
 
-export function RecommendedBadge() {
+function SecretControl({ id, value, onChange, disabled }: {
+  id: string; value: FieldValue | undefined; onChange: ChangeFn; disabled: boolean
+}) {
+  const [showSecret, setShowSecret] = useState(false)
   return (
-    <span className="ml-2 inline-block rounded-full border border-[var(--accent)] px-2 py-[2px] align-[2px] text-[11px] font-medium leading-none text-[var(--accent)]">
-      Recommended
-    </span>
+    <>
+      <form className="secret-row" onSubmit={(event) => event.preventDefault()}>
+        <Icon name="lock" />
+        <input
+          id={id}
+          type={showSecret ? 'text' : 'password'}
+          value={typeof value === 'string' ? value : ''}
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          placeholder="Paste it here"
+          disabled={disabled}
+          onChange={(event) => onChange(id, event.target.value, true)}
+        />
+        <button type="button" className="text-button" onClick={() => setShowSecret(!showSecret)}>
+          {showSecret ? 'Hide' : 'Show'}
+        </button>
+      </form>
+      <p className="secret-hint">Stored on this machine. The agent gets a reference, never the value.</p>
+    </>
   )
 }
 
-interface FieldControlProps {
+function PasteControl({ id, name, command, value, onChange, disabled }: {
+  id: string; name: string; command: string; value: FieldValue | undefined
+  onChange: ChangeFn; disabled: boolean
+}) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <>
+      <div className="command">
+        <code>{command}</code>
+        <button
+          type="button"
+          className="text-button"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(command)
+              setCopied(true)
+            } catch {
+              setCopied(false)
+            }
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <textarea
+        id={id}
+        className="control"
+        value={typeof value === 'string' ? value : ''}
+        placeholder="Paste the output here"
+        spellCheck={false}
+        disabled={disabled}
+        onChange={(event) => onChange(name, event.target.value)}
+      />
+    </>
+  )
+}
+
+function QuietActions({
+  field, value, note, bounced, onChange, onToggleNote, onToggleOther, onBounce, disabled,
+}: {
+  field: Field; value: FieldValue | undefined; note: boolean; bounced: boolean
+  onChange: ChangeFn; onToggleNote: () => void; onToggleOther: () => void
+  onBounce: (name: string, note: string | null) => void; disabled: boolean
+}) {
+  return (
+    <div className="quiet-actions">
+      {field.type === 'choice' && (
+        <button type="button" onClick={onToggleOther}>Other answer</button>
+      )}
+      {!field.must_decide && (
+        <button type="button" onClick={() => onChange(field.name, value === null ? '' : null)}>
+          {value === null ? 'Keep the question' : 'Skip'}
+        </button>
+      )}
+      <button type="button" onClick={onToggleNote}>{note ? 'Hide note' : 'Add a note'}</button>
+      <button type="button" disabled={disabled} onClick={() => onBounce(field.name, bounced ? null : '')}>
+        {bounced ? 'Keep the question' : 'Send back'}
+      </button>
+    </div>
+  )
+}
+
+export function FieldControl({
+  field,
+  ticket,
+  value,
+  note,
+  bounceNote,
+  onChange,
+  onNoteChange,
+  onBounce,
+  disabled,
+}: {
   field: Field
   ticket: string
   value: FieldValue | undefined
   note: string | undefined
   bounceNote: string | undefined
-  onChange: (name: string, value: FieldValue, isSecret?: boolean) => void
+  onChange: ChangeFn
   onNoteChange: (name: string, note: string) => void
   onBounce: (name: string, note: string | null) => void
   disabled: boolean
-}
-
-export function FieldControl({ field, ticket, value, note, bounceNote, onChange, onNoteChange, onBounce, disabled }: FieldControlProps) {
+}) {
   const id = `f_${ticket}_${field.name}`
-  const [isVisible, setIsVisible] = useState(false)
-  const isBounced = bounceNote !== undefined
-  const isRecommendedChoice = (choiceValue: string) => {
-    if (!field.recommend || field.must_decide) return false
-    const target = field.recommend.value
-    return Array.isArray(target) ? target.includes(choiceValue) : target === choiceValue
-  }
-  const label = (
-    <label htmlFor={id} className="mb-2 block text-[13.5px] font-semibold leading-5 text-[var(--ink)]">
-      <Linkify text={field.label} />
-      {field.required ? <span className="text-[var(--accent)]"> *</span> : <span className="font-normal text-[var(--faint)]"> · optional</span>}
-    </label>
-  )
-
-  // Sending a question back does not have to mean refusing to answer it. When
-  // something is typed, that value rides along as a draft and the control
-  // stays editable — "this is right, but come back to me before you use it".
-  const hasValue = !isMissing(value)
-
-  let control
-  if (field.type === 'secret') {
-    // A real <form> keeps password managers and the browser's own heuristics
-    // calm about a bare password input; submit is neutered.
-    control = (
-      <form className="flex items-stretch gap-2" onSubmit={(event) => event.preventDefault()}>
-        <Input id={id} type={isVisible ? 'text' : 'password'} value={typeof value === 'string' ? value : ''} autoComplete="off" autoCapitalize="off" spellCheck={false} placeholder="paste it here" className="min-w-0 flex-1 font-mono text-[13.5px]" disabled={disabled} onChange={(event) => onChange(field.name, event.target.value, true)} />
-        <Button variant="ghost" onClick={() => setIsVisible((current) => !current)} disabled={disabled}>{isVisible ? 'hide' : 'show'}</Button>
-      </form>
-    )
-  } else if (field.type === 'choice' && field.multi) {
-    const selected = Array.isArray(value) ? value : []
-    const declared = new Set((field.choices || []).map((choice) => choice.value))
-    const otherValue = selected.find((item) => !declared.has(item)) ?? ''
-    const withOther = (next: string[], other: string) => {
-      const kept = next.filter((item) => declared.has(item))
-      return other.trim() ? [...kept, other] : kept
-    }
-    control = <div className="grid gap-1.5">
-      {(field.choices || []).map((choice) => {
-        const checked = selected.includes(choice.value)
-        return <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', checked && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><Checkbox checked={checked} disabled={disabled} onCheckedChange={(next) => onChange(field.name, withOther(next === true ? [...selected, choice.value] : selected.filter((item) => item !== choice.value), otherValue))} /><span><Linkify text={choice.label} />{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>
-      })}
-      <div className={cn('flex items-center gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-2.5 text-[15px]', otherValue && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
-        <span className="text-[var(--dim)]">Other:</span>
-        <Input value={otherValue} placeholder="your own answer" disabled={disabled} className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-[16px]" onChange={(event) => onChange(field.name, withOther(selected, event.target.value))} />
-      </div>
-    </div>
-  } else if (field.type === 'choice') {
-    const declared = new Set((field.choices || []).map((choice) => choice.value))
-    const isOther = typeof value === 'string' && value !== '' && !declared.has(value)
-    const radioValue = value === null ? '__skip__' : isOther ? '__other__' : typeof value === 'string' ? value : ''
-    control = <div className="grid gap-1.5">
-      <RadioGroup value={radioValue} onValueChange={(next) => onChange(field.name, next === '__skip__' ? null : next === '__other__' ? (isOther ? value : '') : next)} disabled={disabled}>
-        {(field.choices || []).map((choice) => <label key={choice.value} className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-3 text-[15px] leading-snug', value === choice.value && 'border-[var(--accent)] bg-[var(--accent-soft)]')}><RadioGroupItem value={choice.value} /><span><Linkify text={choice.label} />{isRecommendedChoice(choice.value) && <RecommendedBadge />}</span></label>)}
-        <label className={cn('flex cursor-pointer items-center gap-3 rounded-[var(--radius)] border border-[var(--input-border)] bg-[var(--surface)] px-3.5 py-2.5 text-[15px]', isOther && 'border-[var(--accent)] bg-[var(--accent-soft)]')}>
-          <RadioGroupItem value="__other__" />
-          <span className="text-[var(--dim)]">Other:</span>
-          <Input value={isOther ? value : ''} placeholder="your own answer" disabled={disabled} className="h-8 min-w-0 flex-1 border-0 bg-transparent px-1 text-[16px]" onFocus={() => { if (!isOther) onChange(field.name, '') }} onChange={(event) => onChange(field.name, event.target.value)} />
-        </label>
-        <label className={cn('flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-dashed border-[var(--input-border)] px-3.5 py-2.5 text-[14px] text-[var(--dim)]', value === null && 'border-solid border-[var(--accent)] bg-[var(--accent-soft)]')}>
-          <RadioGroupItem value="__skip__" />
-          <span>Skip — no answer{field.recommend ? ' (the agent proceeds on its recommendation)' : ''}</span>
-        </label>
-      </RadioGroup>
-    </div>
-  } else if (field.type === 'confirm') {
-    control = <label className="flex cursor-pointer items-start gap-3 text-[15px]"><Checkbox id={id} checked={value === true} disabled={disabled} onCheckedChange={(next) => onChange(field.name, next === true)} /><span><Linkify text={field.help || 'Done'} /></span></label>
-  } else if (field.type === 'paste') {
-    control = <div className="grid gap-2"><CopyBlock text={field.command || ''} /><Textarea id={id} value={typeof value === 'string' ? value : ''} placeholder="paste the output here" spellCheck={false} disabled={disabled} className="font-mono" onChange={(event) => onChange(field.name, event.target.value)} /></div>
-  } else if (field.multiline) {
-    control = <Textarea id={id} value={typeof value === 'string' ? value : ''} spellCheck={false} disabled={disabled} onChange={(event) => onChange(field.name, event.target.value)} />
-  } else {
-    control = <Input id={id} type="text" value={typeof value === 'string' ? value : ''} placeholder={field.placeholder || ''} disabled={disabled} onChange={(event) => onChange(field.name, event.target.value)} />
-  }
-  if (isBounced) {
-    return (
-      <div className="border-t border-[var(--rule)] py-5 first:border-t">
-        {label}
-        {hasValue && control}
-        <div className="mt-2 rounded-[var(--radius)] border border-dashed border-[var(--danger)] px-3.5 py-3">
-          <p className="text-[13.5px] leading-5 text-[var(--danger)]">
-            {hasValue
-              ? 'Your answer goes with it as a draft. The agent will come back to you on this question before acting on it.'
-              : 'Going back unanswered — the agent will rework this question.'}
-          </p>
-          <Textarea value={bounceNote} placeholder={hasValue ? 'What should change before it uses this? (optional)' : "What's wrong with this question? (optional)"} spellCheck={false} disabled={disabled} className="mt-2 min-h-14" onChange={(event) => onBounce(field.name, event.target.value)} />
-          <button type="button" className="mt-2 block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--accent)]" disabled={disabled} onClick={() => onBounce(field.name, null)}>{hasValue ? 'Never mind — take my answer as final' : 'Keep the question'}</button>
-        </div>
-      </div>
-    )
-  }
+  const [showNote, setShowNote] = useState(!!note)
+  const declared = new Set((field.choices || []).map((choice) => choice.value))
+  const [showOther, setShowOther] = useState(() => Array.isArray(value)
+    ? value.some((item) => !declared.has(item))
+    : typeof value === 'string' && !!value && !declared.has(value))
+  const bounced = bounceNote !== undefined
 
   return (
-    <div className="border-t border-[var(--rule)] py-5 first:border-t">
-      {label}{control}
-      {field.url && <a className="mt-2 block break-all text-[15px] text-[var(--ink)] underline decoration-[var(--accent)] underline-offset-[3px] hover:text-[var(--accent)]" href={field.url} target="_blank" rel="noreferrer noopener">{field.url}</a>}
-      {field.help && field.type !== 'confirm' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><Linkify text={field.help} /></p>}
-      {field.type === 'secret' && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">Stored on your machine. The agent receives a reference, never the value.</p>}
-      {field.recommend && !field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]"><span className="font-medium text-[var(--ink)]">Recommended</span>{field.type !== 'choice' && <>: {String(field.recommend.value)}</>} · <Linkify text={field.recommend.why} /></p>}
-      {field.must_decide && <p className="mt-2 text-[13.5px] leading-5 text-[var(--dim)]">This one needs your decision.</p>}
-      {/* The context box is always here, never behind a disclosure. Half of
-          what makes an answer usable is the caveat beside it, and a person
-          typing a value does not stop to go looking for somewhere to say it.
-          One line tall while empty, so an ask of eight fields is still a card. */}
-      <Textarea id={`${id}_ctx`} value={note ?? ''} placeholder="Context for this answer (optional)" spellCheck={false} disabled={disabled} className="mt-2 min-h-10 py-2 text-[15px]" onChange={(event) => onNoteChange(field.name, event.target.value)} />
-      <div className="mt-2 flex flex-wrap gap-x-4">
-        <button type="button" className="block text-[12.5px] leading-5 text-[var(--faint)] hover:text-[var(--danger)]" disabled={disabled} title={hasValue ? 'Your answer still goes through, flagged for the agent to come back on' : 'Reject just this question; the rest of your answers still go through'} onClick={() => onBounce(field.name, '')}>{hasValue ? 'Send back with my answer' : 'Send back this question'}</button>
+    <div className="question">
+      <div className="question-heading">
+        <label htmlFor={id}><Linkify text={field.label} /></label>
+        {!field.required && <span className="muted">optional</span>}
+        {field.must_decide && (
+          <span className="muted decide"><Icon name="diamond" /> You decide</span>
+        )}
+        {field.url && (
+          <a href={field.url} target="_blank" rel="noopener noreferrer" className="screen-link">
+            Open the screen ↗
+          </a>
+        )}
       </div>
+      {field.help && field.type !== 'confirm' && (
+        <p className="field-help"><Linkify text={field.help} /></p>
+      )}
+      {field.type === 'choice' ? (
+        <ChoiceControl
+          field={field}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          showOther={showOther}
+        />
+      ) : field.type === 'confirm' ? (
+        <label className="choice confirm">
+          <input
+            id={id}
+            type="checkbox"
+            checked={value === true}
+            disabled={disabled}
+            onChange={(event) => onChange(field.name, event.target.checked)}
+          />
+          <span>Done</span>
+        </label>
+      ) : field.type === 'secret' ? (
+        <SecretControl id={id} value={value} onChange={onChange} disabled={disabled} />
+      ) : field.type === 'paste' ? (
+        <PasteControl
+          id={id}
+          name={field.name}
+          command={field.command || ''}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      ) : field.multiline ? (
+        <textarea
+          id={id}
+          className="control"
+          value={typeof value === 'string' ? value : ''}
+          disabled={disabled}
+          onChange={(event) => onChange(field.name, event.target.value)}
+        />
+      ) : (
+        <input
+          id={id}
+          className="control"
+          type="text"
+          value={typeof value === 'string' ? value : ''}
+          placeholder={field.placeholder || ''}
+          disabled={disabled}
+          onChange={(event) => onChange(field.name, event.target.value)}
+        />
+      )}
+      {field.recommend && !field.must_decide && field.type !== 'choice' && (
+        <p className="field-help">
+          Recommended: {recommendLabel(field)} · <Linkify text={field.recommend.why} />
+        </p>
+      )}
+      <QuietActions
+        field={field}
+        value={value}
+        note={showNote}
+        bounced={bounced}
+        onChange={onChange}
+        onToggleNote={() => setShowNote(!showNote)}
+        onToggleOther={() => setShowOther(!showOther)}
+        onBounce={onBounce}
+        disabled={disabled}
+      />
+      {showNote && (
+        <textarea
+          className="control note"
+          aria-label={`Note for ${field.label}`}
+          placeholder="Context for this answer (optional)"
+          value={note || ''}
+          disabled={disabled}
+          onChange={(event) => onNoteChange(field.name, event.target.value)}
+        />
+      )}
+      {bounced && (
+        <div className="bounce-box">
+          <p>
+            {isMissing(value)
+              ? 'Going back unanswered — the agent will rework this question.'
+              : 'Your answer goes with it as a draft. The agent will come back to you before acting on it.'}
+          </p>
+          <textarea
+            className="control"
+            aria-label={`Send back note for ${field.label}`}
+            placeholder="What should change? (optional)"
+            value={bounceNote}
+            disabled={disabled}
+            onChange={(event) => onBounce(field.name, event.target.value)}
+          />
+          <button type="button" className="text-button" onClick={() => onBounce(field.name, null)}>
+            Keep the question
+          </button>
+        </div>
+      )}
     </div>
   )
 }
