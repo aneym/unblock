@@ -72,8 +72,13 @@ export async function request(path, body) {
   return data
 }
 
+// A daemon that predates v2 names the unknown purpose or v2-only key in its 400.
+export const NEWER_SHAPE = /(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i
+// Only an unknown purpose: once the daemon knows 'permission', its passkey gate must not be sidestepped.
+export const UNKNOWN_PURPOSE = /^purpose: must be one of/i
+
 /** Fall back only when the daemon does not recognize a newer ask shape. */
-export async function fileFirst(candidates, source) {
+export async function fileFirst(candidates, source, fallback = NEWER_SHAPE) {
   for (let i = 0; i < candidates.length; i++) {
     const ask = candidates[i]
     if (ASK_PURPOSES.includes(ask.purpose)) validateAsk(ask)
@@ -88,7 +93,7 @@ export async function fileFirst(candidates, source) {
       }
       const detail = String(error.data?.error ?? '')
       if (error.status === 400 && i < candidates.length - 1 &&
-        (/(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i.test(detail))) continue
+        fallback.test(detail)) continue
       throw error
     }
   }

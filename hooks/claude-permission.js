@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
-import { entries, eligible, fileFirst, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
+import { entries, eligible, fileFirst, UNKNOWN_PURPOSE, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
 
 const timer = setTimeout(() => process.exit(0), 3800)
 try {
@@ -52,7 +52,7 @@ try {
     }
     source.session_id = `permission:${pane}`
     source.agent = 'claude'
-    const { ticket } = await fileFirst([modern, legacy], source)
+    const { ticket } = await fileFirst([modern, legacy], source, UNKNOWN_PURPOSE)
     if (!readEntry(ticket)) {
       register(ticket, pane, 'permission', { fingerprint })
       watcher(ticket)

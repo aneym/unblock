@@ -84,7 +84,8 @@ async function deliverPermission(ask, entry) {
     await collect()
     return true
   }
-  const value = ask.answers?.verdict ?? ask.answers?.decision
+  // A permission ask's verdict carries the passkey gate; the v1 decision field exists only on a pre-v2 daemon.
+  const value = ask.purpose === 'permission' ? ask.answers?.verdict : ask.answers?.decision
   if (!['allow_once', 'deny'].includes(value) || typeof value !== 'string') {
     log('permission answer is not a valid decision; no keys sent')
     await collect()
