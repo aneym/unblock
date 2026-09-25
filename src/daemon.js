@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -50,6 +50,28 @@ function sendText(res, status, body, contentType = 'text/plain; charset=utf-8') 
     'Cache-Control': 'no-store',
   })
   res.end(body)
+}
+
+const CLIENT_LOG_MAX_BYTES = 1024 * 1024
+
+/**
+ * The page reports its own network failures here once it can reach the daemon
+ * again, so a "Load failed" on a phone leaves a trace on Studio. Only what the
+ * page says about the request: path, attempt, error text, online and
+ * visibility. Never a body or a value. Capped, so a loop cannot fill the disk.
+ */
+function appendClientLog(req, body) {
+  const file = join(stateDir(), 'client-errors.log')
+  try { if (statSync(file).size > CLIENT_LOG_MAX_BYTES) return 0 } catch { /* first write */ }
+  const clip = (value, max = 200) => String(value ?? '').replace(/[\t\r\n]+/g, ' ').slice(0, max)
+  const events = Array.isArray(body.events) ? body.events.slice(0, 20) : []
+  const agent = clip(req.headers['user-agent'])
+  const lines = events.map((event) => [
+    new Date().toISOString(), clip(event.at, 40), clip(event.path, 80), clip(event.outcome, 40),
+    clip(event.attempts, 4), clip(event.message), clip(event.online, 8), clip(event.visibility, 12), agent,
+  ].join('\t') + '\n')
+  if (lines.length) appendFileSync(file, lines.join(''), { mode: 0o600 })
+  return lines.length
 }
 
 async function readJson(req) {
@@ -491,6 +513,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile), profile })
     }
 
+    if (tail === '/api/client-log' && req.method === 'POST') {
+      return sendJson(res, 200, { logged: appendClientLog(req, await readJson(req)) })
+    }
+
     if ((tail === '/api/answer' || tail === '/api/draft') && req.method === 'POST') {
       const body = await readJson(req)
       // The body's ticket is read FIRST so the scope check below can fire.
@@ -742,6 +768,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       emitQueue()
       return sendJson(res, 200, result)
+    }
+    if (pathname === '/api/client-log' && req.method === 'POST') {
+      return sendJson(res, 200, { logged: appendClientLog(req, await readJson(req)) })
     }
     if (pathname === '/api/draft' && req.method === 'POST') {
       const body = await readJson(req)

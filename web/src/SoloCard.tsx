@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Linkify } from './lib/linkify'
 import { Icon, stateOf } from './icons'
-import { api, BASE, FinishedError } from './lib/api'
+import { api, BASE, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { FieldControl } from './FieldControl'
 import { ago, groupOf, isMissing, type Ask, type Bounced, type FieldValue, type Values } from './deck'
@@ -27,14 +27,36 @@ function openExternalScheme(href: string) {
   window.setTimeout(() => frame.remove(), 2000)
 }
 
-function Properties({ ask, herdrHref, topLinks }: {
+/**
+ * Who asked, when, status and links: context, not the decision. It sits below
+ * the question, folded on a phone and open on a wide screen, so the first
+ * screen is always title, why and the question.
+ */
+function Details({ ask, herdrHref, topLinks }: {
   ask: Ask
   herdrHref: string | undefined
   topLinks: { label: string; url: string }[]
 }) {
   const status = stateOf(ask)
+  const [open, setOpen] = useState(() => window.matchMedia('(min-width: 960px)').matches)
+  const summary = [
+    `${ask.origin.agent || 'agent'} · ${ago(ask.created_at)} ago`,
+    topLinks.length ? `${topLinks.length} ${topLinks.length === 1 ? 'link' : 'links'}` : '',
+  ].filter(Boolean).join(' · ')
   return (
+    <details
+      className="details"
+      open={open}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary><span className="details-label">Details</span> <span className="muted">{summary}</span></summary>
     <div className="properties">
+      <div className="property">
+        <span className="property-label">Ask</span>
+        <span className="property-value">
+          {groupOf(ask)} <span className="muted">·</span> <span className="ticket">{ask.ticket}</span>
+        </span>
+      </div>
       <div className="property">
         <span className="property-label">Status</span>
         <span className="property-value">
@@ -92,16 +114,24 @@ function Properties({ ask, herdrHref, topLinks }: {
           </span>
         </div>
       )}
+      {!!ask.tried?.length && (
+        <div className="property">
+          <span className="property-label">Agent tried</span>
+          <ul className="property-value tried-list">
+            {ask.tried.map((item, i) => <li key={i}><Linkify text={item} /></li>)}
+          </ul>
+        </div>
+      )}
     </div>
+    </details>
   )
 }
 
+/** One line on every width: the bar must never grow over the question. */
 function ActionBar({
-  isDecision, hardMissing, isBusy, submit, hasRecommendations, useRecommendations,
-  armed, onSendBack, statusHint, hasError,
+  isDecision, hardMissing, isBusy, submit, armed, onSendBack, statusHint, hasError,
 }: {
   isDecision: boolean; hardMissing: string[]; isBusy: boolean; submit: () => void
-  hasRecommendations: boolean; useRecommendations: () => void
   armed: boolean; onSendBack: () => void; statusHint: string; hasError: boolean
 }) {
   return (
@@ -109,19 +139,20 @@ function ActionBar({
       <button className="primary" disabled={hardMissing.length > 0 || isBusy} onClick={submit}>
         {isDecision ? 'Send decision' : 'Send answer'}
       </button>
-      <div className="action-secondary">
-        {hasRecommendations && (
-          <button className="secondary" disabled={isBusy} onClick={useRecommendations}>
-            Use recommendations
-          </button>
-        )}
-        <button className="text-button" disabled={isBusy} onClick={onSendBack}>
-          {armed ? 'Confirm send back?' : 'Send back…'}
-        </button>
-      </div>
+      <button className="text-button send-back" disabled={isBusy} onClick={onSendBack}>
+        {armed ? 'Confirm send back?' : 'Send back…'}
+      </button>
       <span className={`action-status${hasError ? ' error' : ''}`} role="status">{statusHint}</span>
     </div>
   )
+}
+
+/** Plain words for a failed send; the full sentence goes in the page, not the bar. */
+function sendFailure(error: unknown, what: string, button: string): string {
+  if (error instanceof NetworkError) {
+    return `Not sent: the connection to unblock dropped, even after retrying. ${what} is still here. Tap ${button} to try again.`
+  }
+  return `Not sent: ${error instanceof Error ? error.message : 'unknown error'}.`
 }
 
 export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
@@ -131,7 +162,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
    * prop but must never clobber what is being typed.
    */
   const seeded = useMemo(() => {
-    const base = {
+    let found = {
       values: { ...(ask.draft || {}) } as Values,
       notes: { ...(ask.field_context || {}) },
       reply: ask.draft_reply || '',
@@ -139,16 +170,29 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     }
     const local = readLocal(ask.ticket)
     if (local && local.t > (ask.draft_updated_at || 0)) {
-      return {
-        values: { ...base.values, ...(local.values || {}) },
-        notes: { ...base.notes, ...(local.notes || {}) },
-        reply: local.reply || base.reply,
+      found = {
+        values: { ...found.values, ...(local.values || {}) },
+        notes: { ...found.notes, ...(local.notes || {}) },
+        reply: local.reply || found.reply,
         bounced: local.bounced || {},
       }
     }
-    return base
+    // The recommendation is the pre-picked answer, so one tap sends it. It
+    // stays out of the draft until touched: an agent reading drafts must never
+    // mistake the page's default for a choice.
+    const prePicked = new Set<string>()
+    for (const field of ask.fields) {
+      if (field.name in (ask.answers || {}) || field.must_decide || !field.recommend) continue
+      if (field.type === 'secret' || field.name in found.bounced) continue
+      if (found.values[field.name] === undefined) {
+        found.values[field.name] = field.recommend.value
+        prePicked.add(field.name)
+      }
+    }
+    return { ...found, prePicked }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
+  const prePicked = useRef(seeded.prePicked)
   const [values, setValues] = useState<Values>(seeded.values)
   const [notes, setNotes] = useState<Record<string, string>>(seeded.notes)
   const [reply, setReply] = useState(seeded.reply)
@@ -192,7 +236,9 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const isDecision = ask.purpose === 'decision'
 
   const safeValues = (raw: Values) =>
-    Object.fromEntries(Object.entries(raw).filter(([key]) => draftNames.has(key)))
+    Object.fromEntries(Object.entries(raw).filter(
+      ([key]) => draftNames.has(key) && !prePicked.current.has(key),
+    ))
 
   /**
    * Every change lands in localStorage synchronously, then the server draft
@@ -254,6 +300,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   }, [ask.ticket])
 
   const onChange = (name: string, value: FieldValue, isSecret = false) => {
+    prePicked.current.delete(name)
     const next = { ...latest.current.values, [name]: value }
     setValues(next)
     setState('idle')
@@ -318,7 +365,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       }
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
-      setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send answer')
+      setState('error'); setMessage(sendFailure(error, 'Your answer', isDecision ? 'Send decision' : 'Send answer'))
     }
   }
   /**
@@ -339,7 +386,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       window.setTimeout(onFinished, 1200)
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
-      setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
+      setState('error'); setMessage(sendFailure(error, 'Your note', 'Send back'))
     }
   }
   /** Cmd/Ctrl+Enter submits this ask; it never changes the selected ask. */
@@ -375,7 +422,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       ? `Pick answers for ${hardMissing.length} questions`
       : ''
   const statusHint = state === 'error'
-    ? message
+    ? 'Not sent'
     : state === 'sending'
       ? 'Sending…'
       : state === 'done'
@@ -391,21 +438,6 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
                   ? `${missing.length} ${missing.length === 1 ? 'question' : 'questions'} left`
                   : ''
           )
-  const hasRecommendations = unanswered.some(
-    (field) => !field.must_decide && field.recommend
-      && isMissing(values[field.name]) && !(field.name in bounced),
-  )
-  const useRecommendations = () => {
-    const next = { ...latest.current.values }
-    for (const field of unanswered) {
-      if (!field.must_decide && field.recommend && isMissing(next[field.name])
-        && !(field.name in bounced) && field.type !== 'secret') {
-        next[field.name] = field.recommend.value
-      }
-    }
-    setValues(next)
-    persist({ values: next })
-  }
   const onSendBackClick = () => {
     if (!armed) { setArmed(true); setShowReply(true) }
     else void sendBack()
@@ -414,19 +446,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   return (
     <article className="document">
       <div className="document-body">
-        <div className="breadcrumb">
-          <span>{groupOf(ask)} / {stateOf(ask).label}</span>
-          <span className="ticket">{ask.ticket}</span>
-        </div>
         <h1>{ask.title}</h1>
-        <Properties ask={ask} herdrHref={herdrHref} topLinks={topLinks} />
         <section className="context"><h2>Why</h2><p><Linkify text={ask.why} /></p></section>
-        {!!ask.tried?.length && (
-          <details className="tried">
-            <summary>What the agent tried ({ask.tried.length})</summary>
-            <ul>{ask.tried.map((item, i) => <li key={i}><Linkify text={item} /></li>)}</ul>
-          </details>
-        )}
         {!!ask.steps?.length && (
           <section className="steps">
             <h2>Do this</h2>
@@ -435,8 +456,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
         )}
         {!detected && (
           <>
-            <section className="questions">
-              <h2>Your answer</h2>
+            <section className="questions" aria-label="Your answer">
               {unanswered.map((field) => (
                 <FieldControl
                   key={field.name}
@@ -469,8 +489,10 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
                 />
               )}
             </section>
+            {state === 'error' && <p className="send-error" role="alert">{message}</p>}
           </>
         )}
+        <Details ask={ask} herdrHref={herdrHref} topLinks={topLinks} />
       </div>
       {!detected && (
         <ActionBar
@@ -478,8 +500,6 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
           hardMissing={hardMissing}
           isBusy={isBusy}
           submit={() => void submit()}
-          hasRecommendations={hasRecommendations}
-          useRecommendations={useRecommendations}
           armed={armed}
           onSendBack={onSendBackClick}
           statusHint={statusHint}
