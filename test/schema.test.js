@@ -110,4 +110,7 @@ test('only-human filing gate accepts real blockers and decisions and rejects inc
   ]) {
     assert.throws(() => validateAsk({ ...base, ...changes }), (error) => error.path === path, path)
   }
+  // A caller on an MCP server started before the gate sends neither key; the
+  // one error must name both and the way through, or it cannot recover.
+  assert.throws(() => validateAsk({ ...base, tried: undefined, only_you: undefined }), /missing tried and only_you.*extra arguments.*unblock file -/)
 })
