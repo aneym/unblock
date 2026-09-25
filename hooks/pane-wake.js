@@ -55,6 +55,8 @@ function answerLine(ask) {
       const note = typeof value.$bounce === 'string' ? value.$bounce : 'no note'
       return `${field.label} -> sent back (${note})${value.value !== undefined ? `, leaning ${value.value}` : ''}`
     }
+    // null is an explicit skip: the human left it to the agent's recommendation.
+    if (value === null) return `${field.label} -> skipped, go with your recommendation${field.recommend ? ` (${field.recommend.value})` : ''}`
     return `${field.label} -> ${Array.isArray(value) ? value.join(', ') : String(value ?? '')}`
   })
   return `[unblock ${ticket}] Alex answered: ${values.join(' | ')}${ask.reply ? ` | Note: ${ask.reply}` : ''}`
