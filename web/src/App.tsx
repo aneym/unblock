@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, FinishedError, VIEWER } from './lib/api'
-import { ago, askKind, groupOf, sortAsks, type Ask, type QueueData } from './deck'
+import { api, BASE, FinishedError, VIEWER } from './lib/api'
+import { ago, askKind, groupOf, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
 import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
 import { SoloCard } from './SoloCard'
+import { dismissBanner, listPasskeys, type BannerEvent } from './lib/passkey'
 
 function pinned() {
   const match = location.hash.match(/#ask=([^&]+)/)
@@ -13,6 +14,30 @@ function pinned() {
 function whyLead(why: string) {
   const sentence = why.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] || why
   return sentence.length > 180 ? `${sentence.slice(0, 179).trimEnd()}…` : sentence
+}
+/**
+ * Sits above everything on the canonical page until dismissed. Every
+ * enrollment — including Alex's own, during the review — raises one of
+ * these, because enrollment is open to whoever reaches the human path
+ * first while zero credentials exist (see SPEC-v2, "Passkey gate").
+ */
+function PasskeyBanner({ events, dismiss }: { events: BannerEvent[]; dismiss: (eventId: string) => void }) {
+  if (!events.length) return null
+  return (
+    <div className="passkey-banner">
+      {events.map((event) => (
+        <div className="passkey-banner-row" key={event.event_id}>
+          <Icon name="shield" size={16} />
+          <span>
+            A passkey was added{' '}
+            {new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
+            If that wasn't you, stop and check before approving anything.
+          </span>
+          <button className="text-button" type="button" onClick={() => dismiss(event.event_id)}>Dismiss</button>
+        </div>
+      ))}
+    </div>
+  )
 }
 function QueueRow({ ask, active, choose }: { ask: Ask; active: boolean; choose: (ticket: string) => void }) {
   return (
@@ -98,6 +123,27 @@ export default function App() {
   const [selectedTicket, setSelectedTicket] = useState<string | null>(pinned)
   const [showAnswered, setShowAnswered] = useState(false)
   const [doneTickets, setDoneTickets] = useState<ReadonlySet<string>>(new Set())
+  // A share link (BASE = `/u/<token>`) has no human path to the passkey
+  // routes; only the canonical, trusted-proxy page can enroll or approve.
+  const passkeyAvailable = !BASE
+  const [passkeyCount, setPasskeyCount] = useState(0)
+  const [passkeyBanner, setPasskeyBanner] = useState<BannerEvent[]>([])
+  const refreshPasskeys = useCallback(async () => {
+    if (!passkeyAvailable) return
+    try {
+      const result = await listPasskeys()
+      setPasskeyCount(result.credentials.length)
+      setPasskeyBanner(result.banner)
+    } catch { /* best effort; the page still works without this */ }
+  }, [passkeyAvailable])
+  useEffect(() => { void refreshPasskeys() }, [refreshPasskeys])
+  const dismissPasskeyBanner = useCallback((eventId: string) => {
+    void dismissBanner(eventId).catch(() => undefined).then(refreshPasskeys)
+  }, [refreshPasskeys])
+  const passkeys: PasskeyState = useMemo(
+    () => ({ available: passkeyAvailable, count: passkeyCount, refresh: refreshPasskeys }),
+    [passkeyAvailable, passkeyCount, refreshPasskeys],
+  )
   const load = useCallback(async () => {
     try { setData(await api<QueueData>('/api/queue')); setError('') }
     catch (cause) {
@@ -154,6 +200,7 @@ export default function App() {
   }, [asks, selected, choose])
   return (
     <>
+      <PasskeyBanner events={passkeyBanner} dismiss={dismissPasskeyBanner} />
       <header className="topbar">
         <div className="top-inner">
           <span className="wordmark">unblock</span>
@@ -181,7 +228,7 @@ export default function App() {
               ← All asks
             </button>
             <SoloCard
-              key={selected.ticket} ask={selected}
+              key={selected.ticket} ask={selected} passkeys={passkeys}
               onFinished={() => finish(selected.ticket)} onReload={load}
             />
           </section>

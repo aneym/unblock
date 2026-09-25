@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, BASE, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
-import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type Values } from './deck'
+import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type PasskeyState, type Values } from './deck'
 import { FieldControl } from './FieldControl'
 import { Icon } from './icons'
 import { Chip, ChipText, PlainText } from './ChipText'
+import { approveAssertion, enroll, type Assertion } from './lib/passkey'
 
 const afterDefaults: Record<ReturnType<typeof askKind>, string> = {
   key: 'the agent picks it up and keeps going', click: 'the agent picks it up and keeps going',
@@ -33,6 +34,20 @@ function sendFailure(error: unknown, what: string, button: string): string {
     return `Not sent: the connection to unblock dropped, even after retrying. ${what} is still here. Tap ${button} to try again.`
   }
   return `Not sent: ${error instanceof Error ? error.message : 'unknown error'}.`
+}
+/** Plain words for a failed Touch ID ceremony (enroll or approve), before an answer ever reaches the server. */
+function passkeyFailure(error: unknown, button: string): string {
+  if (error instanceof ApiError && error.code === 'PASSKEY_INVALID') {
+    return 'That Touch ID check did not match this version of the ask. Try again.'
+  }
+  if (error instanceof ApiError && error.code === 'PASSKEY_REQUIRED') {
+    return 'Enroll a passkey first.'
+  }
+  const name = error instanceof Error ? error.name : undefined
+  if (name === 'NotAllowedError' || name === 'AbortError') {
+    return 'Touch ID was cancelled. Nothing was sent.'
+  }
+  return sendFailure(error, 'Your answer', button)
 }
 function StepList({ ticket, steps, fields, values, renderField, checked, setChecked }: {
   ticket: string; steps: string[]; fields: Ask['fields']; values: Values
@@ -180,11 +195,16 @@ function Details({ ask, answered, herdrHref, topLinks }: {
   )
 }
 
-export function SoloCard({ ask, onFinished, onReload }: {
-  ask: Ask; onFinished: () => void; onReload: () => Promise<void>
+export function SoloCard({ ask, onFinished, onReload, passkeys }: {
+  ask: Ask; onFinished: () => void; onReload: () => Promise<void>; passkeys: PasskeyState
 }) {
   const kind = askKind(ask)
   const approvalKind = kind === 'consent' || kind === 'spend' || kind === 'message' || kind === 'permission'
+  // The daemon's PASSKEY_VERDICTS (src/store.js): only these three verdicts
+  // need a WebAuthn assertion. Spend stays one tap — Link's own push to
+  // Alex's phone is spend's outside check.
+  const passkeyGated = kind === 'consent' || kind === 'message' || kind === 'permission'
+  const gatedVerdict = kind === 'permission' ? 'allow_once' : 'approve'
   const draftNames = useMemo(
     () => new Set(ask.fields.filter((field) => field.type !== 'secret'
       && (!approvalKind || (field.name !== 'verdict' && field.name !== 'edited_text')))
@@ -243,7 +263,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
   const focalRef = useRef<HTMLElement>(null)
   const [sendBackOpen, setSendBackOpen] = useState(false)
   const [backNote, setBackNote] = useState('')
-  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
+  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error' | 'passkey'>('idle')
   const [status, setStatus] = useState('')
   const [errorText, setErrorText] = useState('')
   const [draftState, setDraftState] = useState('')
@@ -277,7 +297,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
     (field) => field.must_decide && !(field.name in bounced) && isMissing(values[field.name]),
   )
   const detected = ask.origin.detected === true
-  const isBusy = state === 'sending' || state === 'done'
+  const isBusy = state === 'sending' || state === 'done' || state === 'passkey'
   const answered = ask.status === 'answered'
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}`
@@ -376,8 +396,10 @@ export function SoloCard({ ask, onFinished, onReload }: {
     clearLocal(ask.ticket)
     window.setTimeout(onFinished, 1200)
   }
-  const submit = async (verdict?: string) => {
-    if (isBusy || detected || answered || (!verdict && hardMissing.length)) return
+  const submit = async (verdict?: string, assertion?: Assertion) => {
+    // Not isBusy: a passkey-gated submit is called while state is already
+    // 'passkey' (the ceremony that produced `assertion`), and must proceed.
+    if (state === 'sending' || state === 'done' || detected || answered || (!verdict && hardMissing.length)) return
     if (approvalKind && !verdict) return
     if (kind === 'consent' && planNote.trim() && verdict === 'approve') return
     const payload: Values = { ...latest.current.values }
@@ -402,6 +424,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
         reply: kind === 'consent' ? '' : latest.current.reply,
         field_context: kind === 'consent' ? {} : latest.current.notes,
         field_bounce: approvalKind ? {} : bounced,
+        ...(assertion ? { assertion } : {}),
       })
       setState('done'); setStatus(result.complete ? 'Sent' : 'Saved, still incomplete')
       if (result.complete) finish()
@@ -420,7 +443,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
         return
       }
       setState('error'); setStatus('Not sent')
-      setErrorText(sendFailure(error, 'Your answer', approvalKind ? primaryLabel : 'Send'))
+      setErrorText(passkeyFailure(error, approvalKind ? primaryLabel : 'Send'))
     }
   }
   const sendBack = async (note = backNote) => {
@@ -462,8 +485,31 @@ export function SoloCard({ ask, onFinished, onReload }: {
     latest.current = { ...latest.current, values: next }
     void submit()
   }
+  /**
+   * The Touch ID ceremony for a passkey-gated verdict: enroll first when
+   * there is no credential yet, then get an assertion and submit it
+   * alongside the verdict. `submit` does its own busy/answered/detected
+   * checks, but they gate on `sending`/`done`, not `passkey`, so this can
+   * call it once the assertion is in hand.
+   */
+  const onPasskeyApprove = async () => {
+    if (isBusy || detected || answered) return
+    setSafetyNotice(''); setErrorText('')
+    setState('passkey'); setStatus('Confirm with Touch ID or your passkey…')
+    try {
+      if (!passkeys.count) {
+        await enroll()
+        void passkeys.refresh()
+      }
+      const assertion = await approveAssertion(ask.ticket)
+      await submit(gatedVerdict, assertion)
+    } catch (error) {
+      setState('error'); setStatus('Not sent')
+      setErrorText(passkeyFailure(error, primaryLabel))
+    }
+  }
   const onPrimary = () => {
-    if (kind === 'permission') void submit('allow_once')
+    if (passkeyGated) void onPasskeyApprove()
     else if (approvalKind) void submit('approve')
     else if (allRecommended) onRecommend()
     else void submit()
@@ -472,8 +518,11 @@ export function SoloCard({ ask, onFinished, onReload }: {
     ? `${topLink?.label || ''} ↗`
     : kind === 'decision' || kind === 'question' ? 'Accept the recommendations'
       : kind === 'spend' ? `Approve payment ${ask.spend ? money(ask.spend.amount_cents, ask.spend.currency) : ''}`
-        : kind === 'permission' ? 'Allow once'
-          : kind === 'consent' ? 'Approve: do it for me' : 'Approve and send'
+        : !passkeyGated ? 'Approve and send' // unreachable: passkeyGated covers every remaining kind
+          : !passkeys.available
+            ? (kind === 'permission' ? 'Allow once' : kind === 'consent' ? 'Approve: do it for me' : 'Approve and send')
+            : !passkeys.count ? 'Enroll a passkey to approve'
+              : kind === 'permission' ? 'Allow once with Touch ID' : 'Approve with Touch ID'
   const onSelf = () => {
     if (ask.plan?.start_url) window.open(ask.plan.start_url, '_blank', 'noopener,noreferrer')
     void submit('self')
@@ -482,7 +531,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
       event.preventDefault()
-      if (kind === 'permission') void submit('allow_once')
+      if (passkeyGated) void onPasskeyApprove()
       else if (approvalKind) void submit('approve')
       else void submit()
     }
@@ -519,6 +568,7 @@ export function SoloCard({ ask, onFinished, onReload }: {
   const after = ask.after || afterDefaults[kind]
   const primaryAvailable = (kind !== 'key' && kind !== 'click') || !!topLink
   const primaryDisabled = isBusy || (kind === 'consent' && !!planNote.trim())
+    || (passkeyGated && !passkeys.available)
   const actionButtons = () => (
     <>
       {primaryAvailable && (kind === 'key' || kind === 'click' ? (
@@ -530,6 +580,9 @@ export function SoloCard({ ask, onFinished, onReload }: {
           <PlainText text={primaryLabel} />
         </button>
       ))}
+      {passkeyGated && !passkeys.available && (
+        <p className="passkey-hint">Approve on the unblock page; it needs Touch ID.</p>
+      )}
       {kind === 'consent' && (
         <>
           <button className="secondary" type="button" onClick={() => setManual(!manual)} disabled={isBusy}>
@@ -650,6 +703,11 @@ export function SoloCard({ ask, onFinished, onReload }: {
         )}
         {!answered && !detected && (
           <div className="focal-actions">
+            {state === 'passkey' && (
+              <p className="passkey-pending">
+                <Icon name="fingerprint" size={16} /> Confirm with Touch ID or your passkey…
+              </p>
+            )}
             {actionButtons()}
             {approvalKind && (
               <div className="menu-anchor focal-menu">

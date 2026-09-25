@@ -232,6 +232,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 }
 @media (max-width: 600px) {
   .top-inner { padding: 0 16px; }
+  .passkey-banner-row { padding: 10px 16px; }
   .shell, .list-page { padding: 20px 16px 64px; }
   .card-body, .next-card { padding: 22px 20px 8px; }
   .next-card { padding-bottom: 24px; }
@@ -314,6 +315,15 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .receipt-card h2 { display: flex; align-items: center; gap: 6px; margin: 0;
   color: var(--green-text); font-size: 16px; }
 .receipt-card p { font-size: 13px; color: var(--dim); }
+.passkey-banner { background: var(--yellow-bg); border-bottom: 1px solid var(--yellow-text); }
+.passkey-banner-row { max-width: 1200px; margin: 0 auto; padding: 10px 24px;
+  display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.passkey-banner-row .state-icon { flex-shrink: 0; color: var(--yellow-text); }
+.passkey-banner-row span { flex: 1; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.passkey-banner-row .text-button { flex-shrink: 0; }
+.passkey-pending { display: flex; align-items: center; gap: 8px; flex-basis: 100%;
+  margin: 0; color: var(--dim); font-size: 13px; }
+.passkey-hint { flex-basis: 100%; margin: 0; color: var(--dim); font-size: 13px; }
 .list-entry { border-bottom: 1px solid var(--border); }
 .list-entry.expanded { background: var(--kind-bg); border-left: 3px solid var(--kind-text);
   border-radius: 8px; border-bottom: 0; }

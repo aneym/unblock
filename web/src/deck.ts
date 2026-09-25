@@ -93,6 +93,18 @@ export interface Ask {
 
 export interface QueueData { asks: Ask[]; hidden: number; profile: string }
 
+/**
+ * Passkey state as the canonical page knows it: whether enrollment and
+ * approval are reachable at all (false on a share link), how many
+ * credentials exist, and a way to pull a fresh count after enrolling or
+ * dismissing the banner.
+ */
+export interface PasskeyState {
+  available: boolean
+  count: number
+  refresh: () => Promise<void>
+}
+
 export interface DeckItem {
   key: string
   project: string
