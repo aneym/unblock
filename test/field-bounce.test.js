@@ -15,10 +15,14 @@ function freshStore() {
   return { store, dbPath, cleanup: () => { store.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
+const gate = { only_you: 'message', tried: ['Checked the CLI and API; neither can message this contact.'] }
+
 const decisionAsk = () =>
   validateAsk({
     kind: 'park',
     purpose: 'decision',
+    ...gate,
+    only_you: 'judgment',
     title: 'Grill round',
     why: 'Three decisions shape the plan.',
     fields: [
@@ -73,6 +77,9 @@ test('bouncing a secret field never stores the typed value', () => {
     const ask = store.create(
       validateAsk({
         kind: 'file',
+        ...gate,
+        only_you: 'credential',
+        links: [{ url: 'https://example.com/settings/keys' }],
         title: 'Key needed',
         why: 'Deploy is blocked on the API key.',
         fields: [{ name: 'api_key', type: 'secret' }],
@@ -179,6 +186,9 @@ test('a bounced secret never keeps its value, typed or not', () => {
   try {
     const body = validateAsk({
       kind: 'park',
+      ...gate,
+      only_you: 'credential',
+      links: [{ url: 'https://example.com/settings/keys' }],
       title: 'Need the key',
       why: 'Deploy is blocked without it.',
       fields: [{ name: 'api_key', type: 'secret' }],

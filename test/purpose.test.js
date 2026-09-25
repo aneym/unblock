@@ -10,8 +10,11 @@ import { Store } from '../src/store.js'
 const ask = (over = {}) => ({
   title: 'Something',
   why: 'It unblocks the thing.',
+  only_you: 'message',
+  tried: ['Checked the CLI and API; neither can message the human contact.'],
   fields: [{ name: 'a', type: 'text' }],
   ...over,
+  only_you: over.only_you ?? (over.purpose === 'decision' ? 'judgment' : 'message'),
 })
 
 /*
@@ -181,7 +184,7 @@ test('only a parked ask can be orphaned', () => {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'unblock-orphan-')), 'queue.db'))
   const mk = (kind, session) =>
     store.create(
-      validateAsk(ask({ kind, purpose: 'blocker', fields: [{ name: 'done', type: 'confirm' }] })),
+      validateAsk(ask({ kind, purpose: 'blocker', title: `Done for ${session}`, fields: [{ name: 'done', type: 'confirm' }] })),
       normalizeOrigin({ agent: 'claude', session_id: session }),
     )
 

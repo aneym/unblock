@@ -29,7 +29,7 @@ async function json(base, pathname, options = {}) {
 }
 
 function ask(kind, title, fields, extras = {}) {
-  return { kind, title, why: `Human input unblocks ${title}.`, fields, ...extras }
+  return { kind, title, why: `Human input unblocks ${title}.`, fields, only_you: 'message', tried: ['Checked the CLI and API; only the human can send this message.'], ...extras }
 }
 
 const textField = (name) => ({ name, type: 'text', label: name, required: true })
@@ -179,6 +179,31 @@ test('daemon API contract', async (t) => {
     })
     assert.equal(answered.body.complete, true)
     assert.equal(answered.body.ask.field_context.host, 'only until Friday')
+  })
+
+  await t.test('one open blocker per project and title, with editable instructions', async () => {
+    const first = await json(base, '/api/asks', {
+      method: 'POST',
+      body: JSON.stringify({ ask: ask('file', 'Approve the message!', [textField('done')], { project: 'launch' }), origin: { session_id: 'unique-one' } }),
+    })
+    assert.equal(first.response.status, 201)
+    const duplicate = await json(base, '/api/asks', {
+      method: 'POST',
+      body: JSON.stringify({ ask: ask('park', 'approve THE message', [textField('done')], { project: 'launch' }), origin: { session_id: 'unique-two' } }),
+    })
+    assert.equal(duplicate.response.status, 409)
+    assert.equal(duplicate.body.ticket, first.body.ticket)
+    const updated = await json(base, `/api/asks/${first.body.ticket}/update`, {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Send the message', steps: ['Open the contact page'], links: [{ url: 'https://example.com/contacts/123' }] }),
+    })
+    assert.equal(updated.response.status, 200)
+    const fetched = await json(base, `/api/asks/${first.body.ticket}`)
+    assert.equal(fetched.body.title, 'Send the message')
+    assert.deepEqual(fetched.body.steps, ['Open the contact page'])
+    assert.deepEqual(fetched.body.links, [{ url: 'https://example.com/contacts/123', label: 'https://example.com/contacts/123' }])
+    assert.deepEqual(fetched.body.tried, first.body.tried)
+    assert.equal(fetched.body.only_you, 'message')
   })
 
   await daemon.close()

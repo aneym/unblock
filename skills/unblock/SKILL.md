@@ -1,209 +1,149 @@
 ---
 name: unblock
-description: Ask the human for something only they can give — a credential, a console click, an approval (a blocker), or a decision only they should make (a grill). Use whenever you hit a wall you cannot clear yourself, instead of stalling or asking in chat.
+description: Ask the human for something only they can give: their sign-in or key, a click in their own account, spend, a message to a real person, or a product call. Use only after you have tried the CLI, the API, computer use and the docs yourself.
 ---
 
 # unblock
 
-Two kinds of ask, and getting the kind right is most of the job.
+The queue is for real blockers. Everything on it costs the human attention, so
+everything on it must be something only they can do. The daemon enforces this:
+an ask without proof that you tried is rejected.
 
-## Which one is this?
+## First, try to clear it yourself
 
-Ask yourself: **do I already know what should happen?**
+Before you file anything, work the problem:
 
-**Yes, but I cannot do it** → `purpose: "blocker"`.
-The answer exists. What is missing is the human's *action*. They hold a key, they
-must click something in a console, they must approve a spend. There is nothing to
-recommend, because there is nothing you could have guessed.
+1. **CLI and API.** Is there a command, an API call or a token already on this
+   machine that does it? Railway, GitHub, Cloudflare, Google Cloud and most
+   consoles have one.
+2. **Computer use.** Can you do it in a browser or app you are allowed to
+   drive? Never drive the human's own signed-in accounts, sessions or browser
+   without their explicit yes. That is a real blocker, so file it.
+3. **Docs and code.** Is the answer in the config, the repo, the docs or an
+   earlier answer? `unblock list --all` shows recent asks. Do not re-ask what
+   is already decided.
+4. **Standing permission.** Merges, deploys, infra fixes and keys the human
+   already set up need no ask. Do them and report.
 
-**No, and I should not guess** → `purpose: "decision"`.
-You have done the work and formed a view. What is missing is their *judgement*.
-**Every field must carry your recommendation.** Their job is to ratify, not to author.
+Only if all of that fails, and the reason is one of these, file an ask:
 
-> Blocker = do something. Decision = decide something.
+| `only_you` | means |
+| --- | --- |
+| `credential` | their sign-in, password, key or 2FA code |
+| `their_account` | a click in a console or app signed in as them |
+| `spend` | money, a paid plan or a new account |
+| `message` | a message sent to a real person, as them |
+| `judgment` | a product or taste call only they should make |
 
-The schema enforces this. A blocker needs at least one `secret`, `confirm` or
-`paste` field — something only the human can supply or perform. If your ask is all
-choices and free text, it is a question, and it will be rejected until you make it
-a decision with recommendations. A decision may not ask for a `secret` or a
-`paste`: deliberation never touches credentials, and running a command to find
-something out is your job.
+## What the gate checks
 
-## Presenting to the User
+Every ask needs:
 
-- **Do not echo the questions:** When linking or notifying the user about an unblocked ask in chat, do NOT reiterate the questions, fields, or choice options. 
-- **Be minimal:** Simply present the authenticated link directly (e.g., `http://127.0.0.1:4488/u/...`) along with the briefest label or title so they can click and interact with the UI directly.
+- `only_you`: one reason from the table. A decision allows `judgment`, `spend`
+  or `message`. A blocker allows anything but `judgment`.
+- `tried`: 1 to 8 lines, 20 to 400 characters each. Say what you ran or
+  attempted and why it could not clear this: "railway variables set failed:
+  project token lacks the backups scope", "opened console.cloud.google.com in
+  the agent browser: it needs Alex's Google sign-in".
+- A deep link to the exact screen when the human has to click something
+  (`credential`, `their_account`). A home page or dashboard does not count. Use
+  the console URL of the exact page, an app scheme (`codex://settings/...`) or
+  a macOS settings pane (`x-apple.systempreferences:...`). Put it in `links`
+  and name it in the step.
+- Plain words in the title, labels and choices. The gate rejects `v1`, `ADR 12`,
+  "rung", lane ids, ticket ids and file paths there. Write for someone who has
+  never opened the repo: "the first version we ship", not "v1".
+- One ask per blocker. Filing a second open ask with the same project and title
+  is refused with the existing ticket. Revise that one instead.
 
-## Gating: do you stop?
+## Blocker or decision
 
-Separate axis from purpose. Either kind can be either.
+**Do I already know what should happen?**
+
+- **Yes, but I cannot do it:** `purpose: "blocker"`. What is missing is their
+  action. No recommendation, because there is nothing to guess.
+- **No, and I should not guess:** `purpose: "decision"`. You did the work and
+  formed a view. Every field carries `recommend: {value, why}`; their job is to
+  ratify, not to author. A decision cannot ask for a `secret` or `paste`.
+
+A blocker made only of choices is a question in disguise and is rejected.
+
+## Filing
 
 | call | blocks? | how many open |
 | --- | --- | --- |
-| `unblock_file` | no — returns a ticket, keep working | unlimited |
-| `unblock_park` | yes — holds until answered | **one per agent** |
+| `unblock_file` | no. Returns a ticket; keep working | unlimited |
+| `unblock_park` | yes. Holds until answered | one per agent |
 
-One park per agent, because you can only be stopped in one place. If you need
-three things before you can move, that is **one park with three fields**, not
-three parks. Call `unblock_check` when you resume to collect anything you filed.
+If you need three things before you can move, that is one park with three
+fields. Call `unblock_check` when you resume. From a shell, `unblock file` takes
+the same JSON on stdin.
 
-## The ask is live while they answer it
+Writing it:
 
-An ask is not a form you post and walk away from. Every keystroke they make
-drafts to the daemon, so you can watch someone think and ask the obvious
-follow-up while they are still on the page.
+- `title`: verb first for a blocker ("Add the callback URL to the Google
+  client"), noun phrase for a decision. Under 90 characters.
+- `why`: one or two sentences. What is stuck, and what starts working when this
+  lands. No history, no "as discussed".
+- `project`: one short workstream name, the same on every ask from it.
+- `steps`: the shortest path, each step naming the exact screen and link.
+- `fields`: one per thing you need back. `secret` for keys (never `text`),
+  `confirm` for "I did it", `choice` for real options, `text` for names and
+  URLs, `paste` for output only their machine can produce.
 
-**file → watch the drafts → `unblock_update` → `unblock_check`.**
+When you tell the human about an ask, send the title and its one link, nothing
+else. Do not repeat the questions in chat.
 
-| tool | for |
-| --- | --- |
-| `unblock_peek {ticket}` | what they have typed so far. Consumes nothing |
-| `unblock_update {ticket, why?, add_fields?, remove_fields?, replace_fields?}` | revise an OPEN ask in place |
+## While they answer
 
-`unblock_update` keeps the ticket, the page they already have open, and every
-draft on a field it does not touch. Removing a field takes that field's draft
-with it. Adding a field whose name already exists rewords that question in
-place. It goes through the same schema as `unblock_file`, and it is refused once
-the ask is answered, sent back or cancelled — by then the questions they
-answered have to stay the questions they answered.
+Every keystroke drafts to the daemon. `unblock_peek {ticket}` (or `unblock peek
+<ticket>`) shows what they have typed without consuming it. A draft is not an
+answer: use it to decide what to ask next, never to act on.
 
-Use it instead of `unblock_cancel` + a fresh `unblock_file`, which throws away
-the ticket, the link and everything they had typed.
-
-To watch a filed ask without burning turns, poll `draft_updated_at` — it only
-moves when a human types:
-
-```bash
-curl -s -H "Authorization: Bearer $(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.local/state/unblock/daemon.json")))["auth"])')" \
-  http://127.0.0.1:4488/api/asks/<ticket> | jq .draft_updated_at
-```
-
-or take the push stream, which emits `draft`, `updated`, `answered`,
-`sent_back` and `cancelled`:
-
-```bash
-curl -sN -H "Authorization: Bearer $UNBLOCK_AUTH" \
-  http://127.0.0.1:4488/api/asks/<ticket>/events
-```
-
-`unblock_check` reports open asks that are part way filled in, so you can see
-what someone is in the middle of instead of re-asking it.
-
-**A draft is not an answer.** They are mid-thought, they can still change it,
-and they have not pressed the button. Read it to decide what to *ask* next,
-never to act on as though it were decided. Secret fields never draft at all.
-
-## Before you ask anything
-
-1. **Can I do this myself?** Read the config, check the docs, run the command.
-   Parking on work you could have done is the most common failure.
-2. **Have I asked this before?** A repeat question gets the previous answer
-   handed straight back. Do not re-ask what is already decided.
-3. **What exactly do I need back?** Name each value.
-4. **What turns green when it lands?** If you cannot say, they cannot prioritise.
-
-## Writing it
-
-`title` — verb first for a blocker ("Add the callback URI"), noun phrase for a
-decision ("Migration strategy for the user table"). Under 90 characters.
-
-`why` — one or two sentences: what is stuck, what starts working. State the
-payoff, not the history. Never "as discussed above" — there is no above. The
-human is not reading your transcript.
-
-`project` — the workstream this ask files under. One short name, reused on
-every ask from the same project ("homebase", "night-vision"), so the queue
-page can group and filter by it. Set it on every ask. Without it the queue
-falls back to guessing from workspace or repo.
-
-`fields` — one per thing you need:
-
-| type | for | blocker | decision |
-| --- | --- | --- | --- |
-| `secret` | keys, tokens, passwords | yes | **rejected** |
-| `paste` | output only their machine can produce | yes | **rejected** |
-| `confirm` | "I did the console thing" | yes | yes |
-| `choice` | pick between real options | yes | yes |
-| `text` | names, URLs, free answers | yes | yes |
-
-`steps` — the shortest path to done. Console paths as `Product → Page → Field`.
-`links` — bare action URLs only. Never a link to a repo file; inline that instead.
-
-Every field gets its own context box, and the whole ask gets a free-text reply
-box. You declare neither, and both sit open on the page rather than behind a
-disclosure — so expect per-field notes back on most asks (`their context: …`),
-and treat each as part of that field's answer, not decoration.
+`unblock_update {ticket, ...}` revises an open ask in place and keeps the
+ticket, the open page and drafts on untouched fields. It takes `title`, `why`,
+`steps`, `links`, `tried`, `only_you`, `add_fields`, `remove_fields` and
+`replace_fields`. `replace_fields` swaps the whole list; to reword one question,
+send it in `add_fields` under the same name. An ask filed before the gate
+existed must include `tried` and `only_you` in its first update.
 
 ## Reading what comes back
-
-Four shapes, and they mean different things:
 
 | you get | it means |
 | --- | --- |
 | a value | answered; act on it |
-| `(skipped — they chose not to answer)` | a real response. Proceed; do not re-ask |
-| `SENT BACK, not answered` | the question was wrong. Rework it, do not repeat it |
-| a value **plus** `SENT BACK for rework` | the value is a draft. Use it, then re-ask with their note addressed before you commit |
-
-That last one is the common case on writing and planning asks: "this is
-roughly right, but show me before you use it." Treat their value as your new
-starting point, not as approval.
-
-## Recommendations (decisions only)
-
-```json
-{ "name": "strategy", "type": "choice",
-  "choices": [{"value": "expand", "label": "Expand and contract"},
-              {"value": "big_bang", "label": "One migration"}],
-  "recommend": { "value": "expand", "why": "Reversible at every step; the table is hot." } }
-```
-
-`recommend.why` is one line, under 200 characters, and it is the reason — not a
-restatement of the option. A recommendation you cannot justify in one line means
-you have not finished thinking.
-
-Nothing is pre-selected: the human clicks every answer themselves, and your
-recommendation shows as a badge on the option it names (plus your one-line
-why). Accept-all stays an explicit button.
-
-Set `must_decide: true` on a field the human must actually engage with. Its
-recommendation is hidden entirely and it is excluded from accept-all. Use it
-sparingly — at most 3 per ask, and the schema rejects more. It is the only thing
-standing between a twelve-question round and a rubber stamp.
+| `(skipped: they chose not to answer)` | a real response. Proceed; do not re-ask |
+| `SENT BACK, not answered` | the question was wrong. Rework it |
+| a value plus `SENT BACK for rework` | a draft answer. Use it, and re-ask with their note addressed before you commit |
 
 ## Secrets
 
-You never receive a secret value. You get `{ref, store, env_name, resolve, hint}`.
-Use `resolve` at the point of need and never print it:
-
-```bash
-op run --env STRIPE_KEY=op://Private/abc/credential -- ./deploy.sh   # masks it if printed
-security find-generic-password -a unblock -s ub_x-key -w | base64 -d | tool --key-stdin
-```
-
-Never `echo $KEY`, never `env`, never `cat` a secrets file. That puts the value in
-your own context, which is the exact thing this exists to prevent.
+You never receive a secret value, only a reference with a `resolve` command.
+Resolve it at the point of use and never print it: no `echo`, no `env`, no
+`cat` of a secrets file. `unblock reveal` is for a human at a terminal.
 
 ## Good
 
 ```json
-{ "purpose": "blocker", "kind": "park",
-  "title": "Add the Supabase callback to the Google OAuth client",
-  "why": "Sign-in fails at the redirect. Nothing behind auth can be tested until this is registered.",
-  "steps": ["Credentials page below, project prove-it-447000",
-            "Client 5397…4kso → Authorized redirect URIs → Add URI",
-            "Paste: https://<ref>.supabase.co/auth/v1/callback",
-            "Save. Propagation takes about 5 minutes."],
-  "links": [{"label": "Google Cloud credentials", "url": "https://console.cloud.google.com/apis/credentials"}],
-  "fields": [{"name": "registered", "type": "confirm", "label": "URI registered"}] }
+{ "purpose": "blocker", "kind": "file", "project": "billing",
+  "only_you": "their_account",
+  "tried": ["gcloud has no command to add a redirect URL to an OAuth web client",
+            "the agent browser has no Google sign-in for this project, and Alex's own session is off limits"],
+  "title": "Add the sign-in callback to the Google OAuth client",
+  "why": "Sign-in fails at the redirect. Everything behind sign-in waits on this.",
+  "steps": ["Open the client page (link below) and pick the web client",
+            "Authorized redirect URIs → Add URI → https://app.example.com/auth/callback",
+            "Save. It takes about five minutes to apply."],
+  "links": [{"label": "Google OAuth clients", "url": "https://console.cloud.google.com/auth/clients"}],
+  "fields": [{"name": "registered", "type": "confirm", "label": "Callback added"}] }
 ```
 
 ## Bad
 
-- `{"title": "Need credentials", "why": "blocked"}` — nothing to act on.
-- A `blocker` whose only field is a `choice` — that is a question. Make it a decision.
-- A `decision` with no recommendation — you have not finished thinking.
-- Three parks in a row instead of one ask with three fields.
-- "See the earlier discussion" — there is no earlier discussion.
-- A secret asked as `type: "text"` — it lands in your context in plain view.
+- A question you could answer by reading the code, the docs or running a
+  command. Answer it yourself.
+- Asking approval for a merge, a deploy or an infra fix. Do it and report.
+- `tried: ["n/a"]`, or a link to a dashboard home page.
+- Three asks for one blocker, or three parks in a row.
+- A `secret` asked as `text`: it lands in your context in plain view.
 - Filing an ask and then stopping anyway. If you file it, keep working.

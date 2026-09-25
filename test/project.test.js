@@ -11,6 +11,8 @@ const raw = (overrides = {}) => ({
   kind: 'file',
   title: 'Need the staging hostname',
   why: 'Deploy config needs it before anything can ship.',
+  only_you: 'message',
+  tried: ['Checked the CLI and API; neither can contact the owner directly.'],
   fields: [{ name: 'hostname', type: 'text', label: 'Hostname' }],
   ...overrides,
 })

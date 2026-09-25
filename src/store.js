@@ -31,6 +31,7 @@ function newTicket() {
 }
 
 const nowMs = () => Date.now()
+const normalizeTitle = (title) => title.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim()
 
 /** Agents are identified for the one-park-at-a-time rule by the most specific id they gave us. */
 function agentKey(origin) {
@@ -132,6 +133,8 @@ export class Store {
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
+    this.#addColumn('asks', 'tried_json', "TEXT NOT NULL DEFAULT '[]'")
+    this.#addColumn('asks', 'only_you', 'TEXT')
     // Set when an agent revises a live ask in place. A client that is already
     // rendering the ask watches this to know the QUESTIONS changed, which
     // draft_updated_at cannot tell it — that one only moves when the human types.
@@ -159,6 +162,16 @@ export class Store {
   create(body, origin) {
     const key = agentKey(origin)
 
+    const duplicate = this.#db.prepare("SELECT ticket, title FROM asks WHERE status = 'open' AND project IS ?")
+      .all(body.project ?? null)
+      .find((ask) => normalizeTitle(ask.title) === normalizeTitle(body.title))
+    if (duplicate) {
+      const err = new Error(`already open as ${duplicate.ticket}; use unblock_update to revise it`)
+      err.code = 'ALREADY_OPEN'
+      err.ticket = duplicate.ticket
+      throw err
+    }
+
     if (body.kind === 'park') {
       const existing = this.#db
         .prepare(`SELECT ticket FROM asks WHERE agent_key = ? AND kind = 'park' AND status = 'open'`)
@@ -182,8 +195,8 @@ export class Store {
     this.#db
       .prepare(
         `INSERT INTO asks (id, ticket, kind, purpose, project, status, title, why, fields_json, steps_json,
-                           links_json, origin_json, agent_key, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -196,6 +209,8 @@ export class Store {
         JSON.stringify(body.fields),
         JSON.stringify(body.steps),
         JSON.stringify(body.links),
+        JSON.stringify(body.tried),
+        body.only_you,
         JSON.stringify(origin),
         key,
         created,
@@ -217,7 +232,7 @@ export class Store {
    * the record holds their work and the questions they answered must stay the
    * questions they answered.
    */
-  update(idOrTicket, { why, fields }) {
+  update(idOrTicket, { title, why, fields, steps, links, tried, only_you }) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
     if (ask.status !== 'open') {
@@ -230,8 +245,8 @@ export class Store {
     }
     const at = nowMs()
     this.#db
-      .prepare('UPDATE asks SET why = ?, fields_json = ?, updated_at = ? WHERE id = ?')
-      .run(why, JSON.stringify(fields), at, ask.id)
+      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, updated_at = ? WHERE id = ?')
+      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you, at, ask.id)
 
     // Drafts and notes for fields that no longer exist would hydrate into an
     // ask with nowhere to show them. Everything else is left alone on purpose:
@@ -289,6 +304,8 @@ export class Store {
       fields: JSON.parse(row.fields_json),
       steps: JSON.parse(row.steps_json),
       links: JSON.parse(row.links_json),
+      tried: JSON.parse(row.tried_json),
+      only_you: row.only_you ?? null,
       origin: JSON.parse(row.origin_json),
       note: row.note ?? undefined,
       reply: row.reply ?? undefined,

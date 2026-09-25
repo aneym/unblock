@@ -32,6 +32,7 @@ export const ASK_KINDS = ['file', 'park']
  * Either may be parked or filed; that is a separate axis.
  */
 export const ASK_PURPOSES = ['blocker', 'decision']
+export const ONLY_YOU_REASONS = ['credential', 'their_account', 'spend', 'message', 'judgment']
 
 /**
  * open      registered, unanswered
@@ -59,6 +60,26 @@ const MAX_TITLE = 90
 const MAX_FIELDS = 12
 const ACTION_URL_RE = /^(?:https?:\/\/[^\s]+|codex:\/\/[^\s]+|x-apple\.systempreferences:[^\s]+)$/i
 const isActionUrl = (url) => ACTION_URL_RE.test(url)
+const PLAIN_WORDS_RE = /\bADR[ -]?\d+|\bv\d+(\.\d+)?\b|\brung\b|\blane[\/:-]|\bub_[a-z0-9]{6}\b|(^|\s)(~\/|\/Users\/|\/Volumes\/|\/home\/)/i
+
+function plainWords(value, path) {
+  if (PLAIN_WORDS_RE.test(value)) {
+    throw new ValidationError(`"${value}": write it for someone who has never opened the repo`, path)
+  }
+  return value
+}
+
+function isDeepLink(url) {
+  if (/^(codex:\/\/|x-apple\.systempreferences:)/i.test(url)) return true
+  try {
+    const parsed = new URL(url)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false
+    const path = parsed.pathname.replace(/\/+$/, '').toLowerCase()
+    return !['', '/dashboard', '/home', '/console'].includes(path)
+  } catch {
+    return false
+  }
+}
 
 class ValidationError extends Error {
   constructor(message, path) {
@@ -126,7 +147,7 @@ function validateField(raw, index, seen, purpose = 'blocker') {
   const field = {
     name,
     type,
-    label: str(raw.label ?? name, `${path}.label`, { max: 120 }),
+    label: plainWords(str(raw.label ?? name, `${path}.label`, { max: 120 }), `${path}.label`),
     required: raw.required === undefined ? true : Boolean(raw.required),
     help: optionalStr(raw.help, `${path}.help`, { max: 600 }),
     url: optionalStr(raw.url, `${path}.url`, { max: 2000 }),
@@ -145,10 +166,10 @@ function validateField(raw, index, seen, purpose = 'blocker') {
     }
     field.choices = raw.choices.map((choice, i) => {
       const cpath = `${path}.choices[${i}]`
-      if (typeof choice === 'string') return { value: str(choice, cpath), label: str(choice, cpath) }
+      if (typeof choice === 'string') return { value: str(choice, cpath), label: plainWords(str(choice, cpath), cpath) }
       if (!isPlainObject(choice)) throw new ValidationError('must be a string or object', cpath)
       const value = str(choice.value, `${cpath}.value`, { max: 200 })
-      return { value, label: str(choice.label ?? value, `${cpath}.label`, { max: 200 }) }
+      return { value, label: plainWords(str(choice.label ?? value, `${cpath}.label`, { max: 200 }), `${cpath}.label`) }
     })
     field.multi = Boolean(raw.multi)
   }
@@ -241,8 +262,23 @@ export function validateAsk(raw) {
     throw new ValidationError(`must be one of ${ASK_PURPOSES.join(', ')}`, 'purpose')
   }
 
-  const title = str(raw.title, 'title', { max: MAX_TITLE })
+  const title = plainWords(str(raw.title, 'title', { max: MAX_TITLE }), 'title')
   const why = str(raw.why, 'why', { max: 1200 })
+  if (!Array.isArray(raw.tried) || raw.tried.length === 0) {
+    throw new ValidationError('say what you already tried (commands, computer use, docs) and why it could not clear this — only file what only the human can do', 'tried')
+  }
+  if (raw.tried.length > 8) throw new ValidationError('at most 8 attempts', 'tried')
+  const tried = raw.tried.map((entry, i) => str(entry, `tried[${i}]`, { min: 20, max: 400 }))
+  if (new Set(tried.map((entry) => entry.toLowerCase())).size !== tried.length) {
+    throw new ValidationError('duplicate attempts', 'tried')
+  }
+  const only_you = str(raw.only_you, 'only_you')
+  if (!ONLY_YOU_REASONS.includes(only_you)) {
+    throw new ValidationError(`must be one of ${ONLY_YOU_REASONS.join(', ')}`, 'only_you')
+  }
+  if (purpose === 'decision' ? !['judgment', 'spend', 'message'].includes(only_you) : only_you === 'judgment') {
+    throw new ValidationError('decisions allow judgment, spend or message; blockers require an action other than judgment', 'only_you')
+  }
 
   // The project this ask belongs to, declared by the agent. The queue page
   // groups and filters on it. Optional: an ask without one falls back to its
@@ -291,21 +327,29 @@ export function validateAsk(raw) {
   const links = raw.links === undefined ? [] : raw.links
   if (!Array.isArray(links)) throw new ValidationError('must be an array', 'links')
 
+  const normalizedLinks = links.map((l, i) => {
+    const path = `links[${i}]`
+    if (!isPlainObject(l)) throw new ValidationError('must be an object', path)
+    const url = str(l.url, `${path}.url`, { max: 2000 })
+    if (!isActionUrl(url)) throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
+    return { url, label: str(l.label ?? url, `${path}.label`, { max: 160 }) }
+  })
+  if (['credential', 'their_account'].includes(only_you) &&
+      ![...normalizedLinks.map((link) => link.url), ...fields.map((field) => field.url)].some((url) => url && isDeepLink(url))) {
+    throw new ValidationError('a manual step needs a deep link to the exact screen, not a home page', 'links')
+  }
+
   return {
     kind,
     purpose,
+    only_you,
+    tried,
     project,
     title,
     why,
     fields,
     steps: steps.map((s, i) => str(s, `steps[${i}]`, { max: 600 })),
-    links: links.map((l, i) => {
-      const path = `links[${i}]`
-      if (!isPlainObject(l)) throw new ValidationError('must be an object', path)
-      const url = str(l.url, `${path}.url`, { max: 2000 })
-      if (!isActionUrl(url)) throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
-      return { url, label: str(l.label ?? url, `${path}.label`, { max: 160 }) }
-    }),
+    links: normalizedLinks,
     ttl_seconds: normalizeTtl(raw.ttl_seconds),
   }
 }
@@ -319,17 +363,21 @@ export function validateAsk(raw) {
  * name keep their existing definition — which is exactly what lets the drafts
  * already typed against them survive the edit.
  *
- * Returns { why, fields }; the store writes those and bumps updated_at.
+ * Returns the revised properties; the store writes them and bumps updated_at.
  */
 export function validateUpdate(ask, patch) {
   if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
-  const named = ['why', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'add_fields', 'remove_fields', 'replace_fields'].filter(
     (key) => patch[key] !== undefined,
   )
   if (named.length === 0) {
     throw new ValidationError(
-      'nothing to update — pass why, add_fields, remove_fields or replace_fields',
+      'nothing to update — pass a changed ask property or fields',
     )
+  }
+
+  if ((!ask.tried?.length || !ask.only_you) && (patch.tried === undefined || patch.only_you === undefined)) {
+    throw new ValidationError('this ask predates the filing gate; include tried and only_you in the update')
   }
 
   let fields = ask.fields
@@ -375,13 +423,15 @@ export function validateUpdate(ask, patch) {
     kind: ask.kind,
     purpose: ask.purpose,
     project: ask.project,
-    title: ask.title,
+    title: patch.title ?? ask.title,
     why: patch.why ?? ask.why,
     fields,
-    steps: ask.steps,
-    links: ask.links,
+    steps: patch.steps ?? ask.steps,
+    links: patch.links ?? ask.links,
+    tried: patch.tried ?? ask.tried,
+    only_you: patch.only_you ?? ask.only_you,
   })
-  return { why: merged.why, fields: merged.fields }
+  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you }
 }
 
 function normalizeTtl(value) {

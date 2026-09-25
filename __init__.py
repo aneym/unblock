@@ -6,6 +6,13 @@ ASK_SCHEMA = {
     "type": "object",
     "properties": {
         "purpose": {"type": "string", "enum": ["blocker", "decision"]},
+        # The filing gate: why only the human can do this, and what the agent
+        # already tried. The daemon rejects an ask without both.
+        "only_you": {
+            "type": "string",
+            "enum": ["credential", "their_account", "spend", "message", "judgment"],
+        },
+        "tried": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8},
         "project": {"type": "string", "maxLength": 64},
         "title": {"type": "string", "maxLength": 90},
         "why": {"type": "string", "maxLength": 1200},
@@ -53,7 +60,7 @@ ASK_SCHEMA = {
         },
         "ttl_seconds": {"type": "number", "exclusiveMinimum": 0},
     },
-    "required": ["title", "why", "fields"],
+    "required": ["title", "why", "fields", "only_you", "tried"],
 }
 
 
@@ -63,7 +70,7 @@ def register(ctx):
         toolset="unblock",
         schema=ASK_SCHEMA,
         handler=unblock_file,
-        description="File a nonblocking ask in the standalone Unblock queue.",
+        description="File a nonblocking ask in the standalone Unblock queue. Only for what only the human can do; list what you tried first.",
         emoji="🟠",
     )
     ctx.register_tool(

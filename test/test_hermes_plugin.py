@@ -115,11 +115,16 @@ class HermesPluginTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
+    @staticmethod
+    def gated(args):
+        return {"only_you": "judgment" if args.get("purpose") == "decision" else "message",
+                "tried": ["Checked the CLI and API; only the human can contact the person."], **args}
+
     def test_file_uses_dynamic_hermes_origin_and_returns_native_url(self):
         import hermes
 
         raw = hermes.unblock_file(
-            {
+            self.gated({
                 "purpose": "decision",
                 "title": "Founder direction",
                 "why": "The pre-read needs Alex's judgment.",
@@ -131,7 +136,7 @@ class HermesPluginTests(unittest.TestCase):
                         "recommend": {"value": "Start with buyer calls", "why": "Fastest paid evidence."},
                     }
                 ],
-            }
+            })
         )
 
         # Hermes' registry accepts a str or the multimodal envelope, nothing
@@ -191,7 +196,7 @@ class HermesPluginTests(unittest.TestCase):
             "created_at": 1,
         }
         for name, call in (
-            ("unblock_file", lambda: hermes.unblock_file({"title": "T", "why": "W", "fields": [{"name": "k", "type": "secret"}]})),
+            ("unblock_file", lambda: hermes.unblock_file(self.gated({"title": "T", "why": "W", "fields": [{"name": "k", "type": "secret"}]}))),
             ("unblock_check", lambda: hermes.unblock_check({})),
             ("unblock_cancel", lambda: hermes.unblock_cancel({"ticket": "ub_open", "note": "superseded"})),
         ):

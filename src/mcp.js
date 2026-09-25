@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
 import { daemonRoot } from './config.js'
+import { ONLY_YOU_REASONS } from './schema.js'
 
 const PROTOCOL_VERSION = '2025-06-18'
 const SERVER_INFO = { name: 'unblock', version: '0.1.0' }
@@ -137,6 +138,8 @@ const askProperties = {
   // $UNBLOCK_PROJECT when unset.
   project: { type: 'string', maxLength: 64 },
   title: { type: 'string', maxLength: 90 },
+  only_you: { type: 'string', enum: ONLY_YOU_REASONS, description: 'What only the human can do: credential, their own account click, spend, message to a real person, or product judgment.' },
+  tried: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 20, maxLength: 400 }, description: 'What you already tried using CLI, API, computer use or docs and why that did not clear the blocker.' },
   why: { type: 'string', maxLength: 1200 },
   fields: {
     type: 'array',
@@ -184,17 +187,17 @@ const askProperties = {
   ttl_seconds: { type: 'number', exclusiveMinimum: 0 },
 }
 
-const askSchema = { type: 'object', properties: askProperties, required: ['title', 'why', 'fields'] }
+const askSchema = { type: 'object', properties: askProperties, required: ['title', 'why', 'fields', 'only_you', 'tried'] }
 
 const TOOLS = [
   {
     name: 'unblock_file',
-    description: 'File a non-gating request for a human and continue working.',
+    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
     inputSchema: askSchema,
   },
   {
     name: 'unblock_park',
-    description: 'Park on a human request, open its answer page, and wait for a complete answer.',
+    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
     inputSchema: askSchema,
   },
   {
@@ -221,7 +224,12 @@ const TOOLS = [
       type: 'object',
       properties: {
         ticket: { type: 'string' },
+        title: askProperties.title,
         why: askProperties.why,
+        steps: askProperties.steps,
+        links: askProperties.links,
+        tried: askProperties.tried,
+        only_you: askProperties.only_you,
         // Same field shape as unblock_file, validated by the same schema — a
         // revision can never reach a shape a fresh ask could not.
         add_fields: askProperties.fields,
@@ -354,7 +362,16 @@ export class McpConnection {
 
   async callTool(name, args, request) {
     if (name === 'unblock_file') {
-      const ask = await createAsk('file', args)
+      let ask
+      try {
+        ask = await createAsk('file', args)
+      } catch (error) {
+        if (error.status === 409 && error.data?.ticket) {
+          const link = await answerLink(error.data.ticket)
+          error.message = `${error.message} ${link.url}`
+        }
+        throw error
+      }
       return textResult(`Filed ${ask.ticket}. Keep working; call unblock_check later.`, { ticket: ask.ticket })
     }
 
@@ -375,7 +392,12 @@ export class McpConnection {
       const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/update`, {
         method: 'POST',
         body: JSON.stringify({
+          title: args.title,
           why: args.why,
+          steps: args.steps,
+          links: args.links,
+          tried: args.tried,
+          only_you: args.only_you,
           add_fields: args.add_fields,
           remove_fields: args.remove_fields,
           replace_fields: args.replace_fields,
@@ -432,7 +454,16 @@ export class McpConnection {
     }
 
     if (name === 'unblock_park') {
-      const ask = await createAsk('park', args)
+      let ask
+      try {
+        ask = await createAsk('park', args)
+      } catch (error) {
+        if (error.status === 409 && error.data?.ticket) {
+          const link = await answerLink(error.data.ticket)
+          error.message = `${error.message} ${link.url}`
+        }
+        throw error
+      }
       const link = await answerLink(ask.ticket)
       if (this.clientCapabilities.elicitation) {
         try {

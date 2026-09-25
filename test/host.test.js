@@ -88,6 +88,7 @@ const viaTailnet = (extra = {}) => ({
 const textField = (name, extras = {}) => ({ name, type: 'text', label: name, required: true, ...extras })
 
 async function createAsk(ask, origin = { session_id: `s-${Math.random()}` }) {
+  ask = { only_you: ask.purpose === 'decision' ? 'judgment' : 'message', tried: ['Checked the CLI and API; neither can contact the owner directly.'], ...ask }
   const { status, json } = await raw('/api/asks', { method: 'POST', headers: authed(), body: { ask, origin } })
   assert.equal(status, 201, JSON.stringify(json))
   return json
@@ -259,6 +260,8 @@ test('decision vs secret: a decision may not carry a secret, a blocker secret co
       ask: {
         kind: 'file',
         purpose: 'decision',
+        only_you: 'judgment',
+        tried: ['Checked the CLI and API; neither can reach the human contact.'],
         title: 'Which key',
         why: 'why',
         fields: [{ name: 'api_key', type: 'secret', label: 'key', recommend: { value: 'x', why: 'y' } }],
@@ -294,6 +297,8 @@ test('decision vs secret: a decision may not carry a secret, a blocker secret co
     title: 'Add the key',
     why: 'why',
     fields: [{ name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'HOST_TEST_KEY' }],
+    only_you: 'credential',
+    links: [{ url: 'https://example.com/settings/keys' }],
   })
   const needle = `needle-${Date.now()}`
   const link = await raw('/api/links', { method: 'POST', headers: authed(), body: { ticket: blocker.ticket } })
@@ -320,6 +325,8 @@ test('decision vs secret: a decision may not carry a secret, a blocker secret co
     title: 'Smuggle',
     why: 'why',
     fields: [{ name: 'token', type: 'secret', label: 't', required: true }],
+    only_you: 'credential',
+    links: [{ url: 'https://example.com/settings/keys' }],
   })
   const refused = await raw(`/api/asks/${smuggled.ticket}/answer`, {
     method: 'POST',

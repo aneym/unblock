@@ -34,11 +34,12 @@ async function json(base, pathname, options = {}) {
 
 const textField = (name) => ({ name, type: 'text', label: name, required: true })
 
+let nextAsk = 0
 function file(base, fields, extras = {}) {
   return json(base, '/api/asks', {
     method: 'POST',
     body: JSON.stringify({
-      ask: { kind: 'file', title: 'Live ask', why: 'Someone has to answer this.', fields, ...extras },
+      ask: { kind: 'file', title: `Live ask ${++nextAsk}`, why: 'Someone has to answer this.', fields, only_you: 'message', tried: ['Checked the CLI and API; neither can send the message as the human.'], ...extras },
       origin: { session_id: 'live-session' },
     }),
   })
