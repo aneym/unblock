@@ -66,7 +66,7 @@ const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve,
  * repeat (an answer overwrites until the agent collects it; after that the
  * daemon says 410 and the page moves on).
  */
-async function send(path: string, init: RequestInit): Promise<Response> {
+async function send(path: string, retries: number, init: RequestInit): Promise<Response> {
   let lastError: unknown
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -75,7 +75,7 @@ async function send(path: string, init: RequestInit): Promise<Response> {
       return response
     } catch (error) {
       lastError = error
-      if (attempt > RETRY_DELAYS_MS.length) {
+      if (attempt > retries) {
         note(path, 'failed', attempt, error)
         throw new NetworkError(error instanceof Error ? error.message : 'network error')
       }
@@ -84,8 +84,13 @@ async function send(path: string, init: RequestInit): Promise<Response> {
   }
 }
 
-export async function api<T>(path: string, body?: unknown): Promise<T> {
-  const response = await send(path, {
+/**
+ * `retry: false` for drafts: each one carries the whole latest state, so a
+ * late retry of an older draft would overwrite a newer one. The local mirror
+ * and the next keystroke cover a lost draft.
+ */
+export async function api<T>(path: string, body?: unknown, { retry = true } = {}): Promise<T> {
+  const response = await send(path, retry ? RETRY_DELAYS_MS.length : 0, {
     method: body ? 'POST' : 'GET',
     headers: body ? { 'content-type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,

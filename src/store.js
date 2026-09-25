@@ -43,7 +43,10 @@ function agentKey(origin) {
  * page retries a send whose reply it lost, and when the first try landed and
  * the agent collected it, "gone" is the truth the page acts on.
  */
-function finished(ask) {
+/** Statuses an answer can no longer change. A sent-back ask is done too: the agent re-asks. */
+export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced']
+
+export function finished(ask) {
   const error = new Error(`ask ${ask.ticket} is ${ask.status}`)
   error.status = 410
   return error
@@ -406,7 +409,7 @@ export class Store {
   answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce } = {}) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
-    if (['collected', 'cancelled', 'expired'].includes(ask.status)) throw finished(ask)
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
 
     const known = new Set(ask.fields.map((f) => f.name))
     const secretFields = new Set(ask.fields.filter((f) => f.type === 'secret').map((f) => f.name))

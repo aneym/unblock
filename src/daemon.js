@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyConfig } from './config.js'
 import { normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { Store } from './store.js'
+import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -418,6 +418,9 @@ function scrubFieldBounce(raw) {
 async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     const ask = store.get(ticket)
     if (!ask) return null
+    // Before any secret is stored: a page retrying a send whose reply it lost
+    // must not write the secret again once the agent already has the answer.
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
     const records = []
     for (const field of ask.fields) {
       const value = values?.[field.name]

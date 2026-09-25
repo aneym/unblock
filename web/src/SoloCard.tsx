@@ -270,7 +270,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
         values: safeValues(merged.values),
         field_context: merged.notes,
         reply: merged.reply,
-      })
+      }, { retry: false })
         .then(() => setDraftState('saved'))
         .catch(() => setDraftState('offline'))
     }, 300)
@@ -349,6 +349,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     // bounce note as a draft, so "right, but ask me again" is expressible.
     const payload: Values = { ...values }
     for (const field of unanswered) {
+      // A sent-back question keeps only what the human typed, never the page's default.
+      if (field.name in bounced && prePicked.current.has(field.name)) delete payload[field.name]
       if (field.name in bounced) continue
       if (field.required && !field.must_decide && isMissing(payload[field.name])) payload[field.name] = null
     }

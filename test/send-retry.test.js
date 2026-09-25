@@ -63,6 +63,32 @@ test('a repeated send is safe and ends in 410 once the agent has it', async (t) 
     assert.equal(retry.status, 410)
   })
 
+  await t.test('a retry after collection stores no secret', async () => {
+    const created = await post(base, '/api/asks', {
+      ask: {
+        kind: 'file', title: 'secret-after-collect', why: 'Human input unblocks the key.', only_you: 'credential',
+        tried: ['Checked everything an agent can check before asking the human.'],
+        fields: [{ name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'RETRY_TEST_KEY' }],
+        links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
+      },
+      origin: { session_id: 'retry-secret' },
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.body))
+    const ticket = created.body.ticket
+    assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'first-value-1234' } })).status, 200)
+    assert.equal((await post(base, `/api/asks/${ticket}/collect`, {})).status, 200)
+    const late = `late-value-${Date.now()}`
+    assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: late } })).status, 410)
+    const envFile = readFileSync(join(stateDir, 'config', 'secrets.env'), 'utf8')
+    assert.doesNotMatch(envFile, new RegExp(Buffer.from(late).toString('base64')))
+  })
+
+  await t.test('an answer arriving after a send-back is 410', async () => {
+    const ticket = await fileAsk(base, 'answer-after-bounce')
+    assert.equal((await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })).status, 200)
+    assert.equal((await post(base, '/api/answer', { ticket, values: { verdict: 'keep' } })).status, 410)
+  })
+
   await t.test('a retried send-back after the first one landed is 410', async () => {
     const ticket = await fileAsk(base, 'bounce-twice')
     assert.equal((await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })).status, 200)
