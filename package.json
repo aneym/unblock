@@ -21,6 +21,7 @@
     "bin/",
     "web/dist/",
     "plugin/",
+    "hooks/",
     "plugin.yaml",
     "__init__.py",
     "hermes.py",

@@ -173,6 +173,21 @@ npx skills add aneym/unblock --skill unblock -g
 herdr plugin install aneym/unblock --yes
 ```
 
+### Claude Code in herdr panes
+
+Add these hooks to `~/.claude/settings.json` (replace `/path/to/unblock` with your installed package path):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node /path/to/unblock/hooks/claude-ask.js" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "node /path/to/unblock/hooks/claude-permission.js" }] }]
+  }
+}
+```
+
+In herdr panes, questions go to unblock; permission prompts stay visible until you answer. Set `UNBLOCK_ALLOW_DIALOG=1` to use Claude's dialogs instead. Outside herdr panes the hooks do nothing.
+
 ### Hermes
 
 From a canonical checkout, install the live source into one Hermes profile:
