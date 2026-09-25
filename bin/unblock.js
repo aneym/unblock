@@ -232,7 +232,7 @@ async function receipt(args) {
   if (rest.length !== 1) fail('usage: unblock receipt <ticket> [--before a.png] [--after b.png] [--url U] [--json]')
   const ticket = rest[0]
   const ask = await request(`/api/asks/${encodeURIComponent(ticket)}`)
-  if (ask.purpose !== 'consent' || ask.status !== 'answered' || ask.answers.verdict !== 'approve') fail('receipt not allowed', 5)
+  if (ask.purpose !== 'consent' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve') fail('receipt not allowed', 5)
   const result = await request(`/api/asks/${encodeURIComponent(ticket)}/receipt`, {
     ...(opts['--before'] ? { before: resolve(opts['--before']) } : {}),
     ...(opts['--after'] ? { after: resolve(opts['--after']) } : {}),
@@ -246,16 +246,17 @@ async function pay(args) {
   if (rest.length !== 1) fail('usage: unblock pay <ticket> [--payment-method <id>] [--json]')
   const ticket = rest[0]
   const ask = await request(`/api/asks/${encodeURIComponent(ticket)}`)
-  if (ask.purpose !== 'spend' || ask.status !== 'answered' || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) fail('payment not allowed', 5)
+  if (ask.purpose !== 'spend' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) fail('payment not allowed', 5)
   if (ask.spend.amount_cents > ask.spend.cap_cents || ask.spend.amount_cents > 50000) fail('amount exceeds cap or Link limit', 4)
+  if (opts['--payment-method'] && !/^[A-Za-z0-9_]+$/.test(opts['--payment-method'])) fail('invalid payment method', 4)
   const { pay_key } = await request(`/api/asks/${encodeURIComponent(ticket)}/pay-claim`, {})
   const details = ask.spend
   const context = `Payment for ${details.item} at ${details.vendor}: ${details.why}. Requested through Unblock ticket ${ticket}. Human approval is required in the Link app before the payment can proceed.`
-  const parameters = ['spend-request', 'create', '--merchant-name', details.vendor, '--merchant-url', details.vendor_url,
-    '--amount', String(details.amount_cents), '--currency', details.currency, '--context', context,
-    '--line-item', `name:${details.item},unit_amount:${details.amount_cents},quantity:1`, '--request-approval',
-    '--idempotency-key', pay_key, '--format', 'json']
-  if (opts['--payment-method']) parameters.push('--payment-method-id', opts['--payment-method'])
+  const parameters = ['spend-request', 'create', `--merchant-name=${details.vendor}`, `--merchant-url=${details.vendor_url}`,
+    `--amount=${details.amount_cents}`, `--currency=${details.currency}`, `--context=${context}`,
+    `--line-item=name:${details.item},unit_amount:${details.amount_cents},quantity:1`, '--request-approval',
+    `--idempotency-key=${pay_key}`, '--format=json']
+  if (opts['--payment-method']) parameters.push(`--payment-method-id=${opts['--payment-method']}`)
   let data
   try {
     const result = await promisify(execFile)(process.env.UNBLOCK_LINK_CLI || 'link-cli', parameters, { maxBuffer: 256 * 1024 })

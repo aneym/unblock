@@ -142,6 +142,7 @@ export class Store {
     for (const [name, type] of [['plan_json', 'TEXT'], ['spend_json', 'TEXT'], ['message_json', 'TEXT'],
       ['consent_blocked_by', 'TEXT'], ['receipt_json', 'TEXT'], ['revision', 'INTEGER NOT NULL DEFAULT 1']]) this.#addColumn('asks', name, type)
     this.#addColumn('answers', 'answered_via', 'TEXT')
+    this.#addColumn('links', 'minted_by', "TEXT NOT NULL DEFAULT 'local'")
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -293,7 +294,7 @@ export class Store {
       // '__reply__' is a reserved row: the whole-ask free-text drafted alongside
       // the fields, so a half-written reply survives a reload too.
       if (d.field_name === '__reply__') draftReply = JSON.parse(d.value_json)
-      else draft[d.field_name] = JSON.parse(d.value_json)
+      else if (!(APPROVAL_PURPOSES.includes(row.purpose) && d.field_name === 'verdict')) draft[d.field_name] = JSON.parse(d.value_json)
     }
     const fieldContext = {}
     for (const n of this.#db
@@ -424,10 +425,14 @@ export class Store {
       const error = (code, message, status) => { const err = new Error(message); err.code = code; err.status = status; throw err }
       if (revision === undefined || revision !== ask.revision) error('STALE_REVISION', 'The agent changed this ask. Check it again.', 409)
       if (ask.status !== 'open') error('ASK_NOT_OPEN', `ask ${ask.ticket} is ${ask.status}`, 409)
-      if (!answeredVia || answeredVia === 'local') error('HUMAN_ONLY', 'answer this on the page', 403)
+      if (!answeredVia || answeredVia === 'local' || answeredVia === 'share-link:local') error('HUMAN_ONLY', 'answer this on the page', 403)
       if (fieldBounce && Object.keys(fieldBounce).length || values.verdict === null ||
           !ask.fields[0].choices.some((choice) => choice.value === values.verdict)) error('INVALID_VERDICT', 'choose a verdict', 400)
-      if (ask.purpose === 'consent' && values.verdict === 'approve' && typeof values.note === 'string' && values.note.trim()) error('NOTE_MEANS_CHANGE', 'change the plan before approval', 400)
+      if (ask.purpose === 'consent' && values.verdict === 'approve' && (
+        (typeof values.note === 'string' && values.note.trim()) ||
+        (typeof reply === 'string' && reply.trim()) ||
+        (fieldContext && Object.values(fieldContext).some((note) => typeof note === 'string' && note.trim()))
+      )) error('NOTE_MEANS_CHANGE', 'change the plan before approval', 400)
       if (values.edited_text != null && typeof values.edited_text !== 'string') error('INVALID_VERDICT', 'edited text must be text', 400)
     }
     if (['collected', 'cancelled', 'expired'].includes(ask.status)) {
@@ -521,7 +526,7 @@ export class Store {
     this.#db.exec('BEGIN IMMEDIATE')
     try {
       const ask = this.get(ticket)
-      if (!ask || ask.purpose !== 'spend' || ask.status !== 'answered' || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) {
+      if (!ask || ask.purpose !== 'spend' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) {
         const err = new Error('payment not allowed'); err.code = 'PAY_NOT_ALLOWED'; throw err
       }
       const key = ask.receipt?.pay_key ?? `unblock-${ask.ticket}-r${ask.revision}`
@@ -534,7 +539,7 @@ export class Store {
 
   receipt(ticket, data) {
     const ask = this.get(ticket)
-    const approved = ask && ask.status === 'answered' && ask.answers.verdict === 'approve'
+    const approved = ask && ['answered', 'collected', 'orphaned'].includes(ask.status) && ask.answers.verdict === 'approve'
     const spend = data.spend_request_id !== undefined || data.spend_status !== undefined
     if (!approved || (spend ? ask.purpose !== 'spend' || !ask.receipt?.pay_key || Boolean(ask.receipt?.spend_request_id) : ask.purpose !== 'consent')) {
       const err = new Error('receipt not allowed'); err.code = 'RECEIPT_NOT_ALLOWED'; throw err
@@ -559,7 +564,7 @@ export class Store {
       if (!known.has(name)) continue
       // A draft never holds a secret. Half-typed keys stay in the browser.
       const field = ask.fields.find((f) => f.name === name)
-      if (field.type === 'secret') continue
+      if (field.type === 'secret' || (APPROVAL_PURPOSES.includes(ask.purpose) && name === 'verdict')) continue
       stmt.run(ask.id, name, JSON.stringify(value), at)
     }
     // The whole-ask reply drafts too, under a reserved name no field can use
@@ -706,15 +711,15 @@ export class Store {
    * whole-queue link. Stolen from one-time-secret services: a stale tab in a
    * pocket should not still be live tomorrow.
    */
-  mintLink({ askId = null, scope = 'queue', ttlSeconds = 900 } = {}) {
+  mintLink({ askId = null, scope = 'queue', ttlSeconds = 900, mintedBy = 'local' } = {}) {
     // Clamp, because an unvalidated TTL from a request body minted links that
     // expire in the year 33715. A link is a capability; it must always die.
     const ttl = Math.min(Math.max(Math.round(Number(ttlSeconds) || 900), 30), 60 * 60 * 24)
     const token = randomBytes(24).toString('base64url')
     const at = nowMs()
     this.#db
-      .prepare('INSERT INTO links (token, ask_id, scope, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .run(token, askId, scope, at, at + ttl * 1000)
+      .prepare('INSERT INTO links (token, ask_id, scope, created_at, expires_at, minted_by) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(token, askId, scope, at, at + ttl * 1000, mintedBy)
     return { token, expires_at: at + ttl * 1000 }
   }
 

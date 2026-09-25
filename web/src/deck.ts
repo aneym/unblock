@@ -41,6 +41,7 @@ export interface Field {
 
 export interface Ask {
   ticket: string
+  revision: number
   kind: 'file' | 'park'
   purpose: 'blocker' | 'decision' | 'consent' | 'spend' | 'message'
   gating: boolean

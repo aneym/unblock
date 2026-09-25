@@ -182,7 +182,10 @@ export default function App() {
             >
               ← All asks
             </button>
-            <SoloCard key={selected.ticket} ask={selected} onFinished={() => finish(selected.ticket)} />
+            <SoloCard
+              key={selected.ticket} ask={selected}
+              onFinished={() => finish(selected.ticket)} onReload={load}
+            />
           </section>
         </main>
       ) : showAnswered ? (

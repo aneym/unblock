@@ -65,6 +65,11 @@ test('filing validation and generated fields through HTTP', async () => {
   ]) { const response = await post('/api/asks', { ask }); assert.equal(response.status, 400, JSON.stringify(response.json)); assert.match(response.json.error, match) }
   const blocker = await create({ ...base, title: `Block ${++number}`, only_you: 'their_account', consent_blocked_by: 'sign_in', fields: [{ name: 'ok', type: 'confirm' }], links: [{ url: 'https://example.com/settings/new' }] })
   assert.equal(blocker.consent_blocked_by, 'sign_in')
+  for (const [key, value] of [['item', '-merchant-name=Evil'], ['item', 'One,quantity:50'], ['vendor', '--include'], ['vendor', 'Acme:other']]) {
+    const invalidSpend = await post('/api/asks', { ask: { ...shape('spend'), spend: { ...spend, [key]: value } } })
+    assert.equal(invalidSpend.status, 400)
+    assert.equal(invalidSpend.json.path, `spend.${key}`)
+  }
   for (const purpose of ['consent', 'spend', 'message']) {
     const ask = await create(shape(purpose))
     assert.equal(ask.revision, 1)
@@ -90,7 +95,29 @@ test('human-only, strict verdict, revision, immutable answered ask', async () =>
   const path = `/api/asks/${ask.ticket}`
   assert.equal((await post(`${path}/answer`, { revision: 1, values: { verdict: 'approve' } })).json.code, 'HUMAN_ONLY')
   assert.equal((await cli('answer', ask.ticket, 'approve')).status, 4)
-  await post(`${path}/draft`, { values: { note: 'typed' } })
+  for (const draftPath of [`${path}/draft`, '/api/draft']) {
+    const denied = await post(draftPath, { ticket: ask.ticket, values: { verdict: 'approve' } })
+    assert.equal(denied.status, 403)
+    assert.equal(denied.json.code, 'HUMAN_ONLY')
+  }
+  const drafted = await post('/api/draft', { ticket: ask.ticket, values: { verdict: 'approve', note: 'typed' } }, human)
+  assert.equal(drafted.status, 200)
+  assert.equal(drafted.json.ask.draft.verdict, undefined)
+  assert.equal(drafted.json.ask.draft.note, 'typed')
+  const localLink = await post('/api/links', { ticket: ask.ticket })
+  assert.equal(localLink.status, 201)
+  const deniedLink = await post(`/u/${localLink.json.token}/api/answer`, { ticket: ask.ticket, revision: 1, values: { verdict: 'approve' } }, {})
+  assert.equal(deniedLink.status, 403)
+  assert.equal(deniedLink.json.code, 'HUMAN_ONLY')
+  const deniedLinkDraft = await post(`/u/${localLink.json.token}/api/draft`, { ticket: ask.ticket, values: { note: 'draft' } }, {})
+  assert.equal(deniedLinkDraft.status, 403)
+  assert.equal(deniedLinkDraft.json.code, 'HUMAN_ONLY')
+  const shared = await create(shape('message'))
+  const sharedLink = await post('/api/links', { ticket: shared.ticket }, human)
+  const sharedAnswer = await post(`/u/${sharedLink.json.token}/api/answer`, { ticket: shared.ticket, revision: 1, values: { verdict: 'approve' } }, {})
+  assert.equal(sharedAnswer.status, 200)
+  assert.equal(sharedAnswer.json.ask.answered_via, 'share-link:tailnet:alex@example.test')
+
   const updated = await post(`${path}/update`, { plan: { ...plan, changes: 'Different setting' } })
   assert.equal(updated.status, 200)
   assert.equal(updated.json.ask.revision, 2)
@@ -100,21 +127,25 @@ test('human-only, strict verdict, revision, immutable answered ask', async () =>
     [{ revision: 2, values: { verdict: null } }, 400, 'INVALID_VERDICT'],
     [{ revision: 2, values: { verdict: 'maybe' } }, 400, 'INVALID_VERDICT'],
     [{ revision: 2, values: { verdict: 'approve', note: 'change it' } }, 400, 'NOTE_MEANS_CHANGE'],
+    [{ revision: 2, values: { verdict: 'approve' }, reply: 'change it' }, 400, 'NOTE_MEANS_CHANGE'],
+    [{ revision: 2, values: { verdict: 'approve' }, field_context: { note: 'change it' } }, 400, 'NOTE_MEANS_CHANGE'],
   ]) { const result = await post('/api/answer', { ticket: ask.ticket, ...body }, human); assert.equal(result.status, status); assert.equal(result.json.code, code) }
-  assert.equal((await post(`${path}/update`, { add_fields: [] })).status, 400)
+  const rejectedFields = await post(`${path}/update`, { add_fields: [] }); assert.equal(rejectedFields.status, 400); assert.equal(rejectedFields.json.path, 'fields')
   const approved = await approve(updated.json.ask)
   assert.equal(approved.status, 200, JSON.stringify(approved.json))
   assert.equal(approved.json.ask.answered_via, 'tailnet:alex@example.test')
-  assert.equal((await approve(updated.json.ask)).status, 409)
-  assert.equal((await post(`${path}/update`, { title: 'Altered' })).status, 409)
+  const secondAnswer = await approve(updated.json.ask); assert.equal(secondAnswer.status, 409); assert.equal(secondAnswer.json.code, 'ASK_NOT_OPEN')
+  const answeredUpdate = await post(`${path}/update`, { title: 'Altered' }); assert.equal(answeredUpdate.status, 409); assert.equal(answeredUpdate.json.code, 'ASK_NOT_OPEN')
 })
 
 test('receipts enforce scope, file bounds, and authenticated reads', async () => {
   const ask = await create(shape('consent'))
   const path = `/api/asks/${ask.ticket}/receipt`
   assert.equal((await post(path, {})).json.code, 'RECEIPT_NOT_ALLOWED')
-  assert.equal((await post('/api/asks/ub_INVALID/receipt', {})).status, 400)
+  const badTicket = await post('/api/asks/ub_INVALID/receipt', {}); assert.equal(badTicket.status, 400); assert.equal(badTicket.json.error, 'invalid ticket')
   await approve(ask)
+  const collected = await post(`/api/asks/${ask.ticket}/collect`, {})
+  assert.equal(collected.json.ask.status, 'collected')
   const png = join(state, 'source.png')
   writeFileSync(png, Buffer.from([137,80,78,71,13,10,26,10,0]))
   const symlink = join(state, 'symlink.png')
@@ -122,16 +153,16 @@ test('receipts enforce scope, file bounds, and authenticated reads', async () =>
   const invalid = join(state, 'invalid.png')
   writeFileSync(invalid, 'not png')
   const huge = join(state, 'huge.png')
-  writeFileSync(huge, Buffer.alloc(5 * 1024 * 1024 + 1))
-  for (const file of [symlink, invalid, huge]) assert.equal((await post(path, { before: file })).status, 400)
+  writeFileSync(huge, Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(5 * 1024 * 1024)]))
+  for (const file of [symlink, invalid, huge]) { const rejected = await post(path, { before: file }); assert.equal(rejected.status, 400); assert.equal(rejected.json.error, 'invalid PNG file') }
   const result = await post(path, { before: png, final_url: 'https://example.com/settings/new' })
   assert.equal(result.status, 200, JSON.stringify(result.json))
   assert.equal(result.json.ask.receipt.before, true)
   const served = await raw(`${path}/before.png`)
   assert.equal(served.status, 200)
   assert.deepEqual(served.bytes, readFileSync(png))
-  assert.equal((await raw(`${path}/before.png`, { headers: {} })).status, 401)
-  assert.equal((await raw(`${path}/before.png`, { headers: { Host: 'evil.example' } })).status, 403)
+  const unauthenticated = await raw(`${path}/before.png`, { headers: {} }); assert.equal(unauthenticated.status, 401); assert.equal(unauthenticated.json.error, 'unauthorized')
+  const wrongHost = await raw(`${path}/before.png`, { headers: { Host: 'evil.example' } }); assert.equal(wrongHost.status, 403); assert.equal(wrongHost.json.error, 'invalid host')
 })
 
 test('pay claims and CLI mask card output and errors', async () => {
@@ -139,13 +170,19 @@ test('pay claims and CLI mask card output and errors', async () => {
   const waiting = await create(shape('spend'))
   assert.equal((await cli('pay', waiting.ticket)).status, 5)
   await approve(waiting)
-  const paid = await cli('pay', waiting.ticket)
+  const collected = await post(`/api/asks/${waiting.ticket}/collect`, {})
+  assert.equal(collected.json.ask.status, 'collected')
+  const rejectedMethod = await cli('pay', waiting.ticket, '--payment-method', '--include')
+  assert.equal(rejectedMethod.status, 4)
+  assert.match(rejectedMethod.stderr, /invalid payment method/)
+  const paid = await cli('pay', waiting.ticket, '--payment-method', 'pm_safe_1')
   assert.equal(paid.status, 0, paid.stderr)
   assert.match(paid.stdout, /sr_test.*pending/)
   assert.doesNotMatch(paid.stdout + paid.stderr, /4242424242424242/)
   const args = readFileSync(join(state, 'args'), 'utf8')
-  assert.match(args, new RegExp(`--idempotency-key\\nunblock-${waiting.ticket}-r1`))
+  assert.match(args, new RegExp(`--idempotency-key=unblock-${waiting.ticket}-r1`))
   assert.doesNotMatch(args, /--include|--output-file/)
+  assert.match(args, /--payment-method-id=pm_safe_1/)
   assert.equal((await cli('pay', waiting.ticket)).status, 5)
   const retry = await create(shape('spend'))
   await approve(retry)
@@ -153,7 +190,7 @@ test('pay claims and CLI mask card output and errors', async () => {
   assert.equal(first.json.is_new, true)
   const second = await cli('pay', retry.ticket)
   assert.equal(second.status, 0, second.stderr)
-  assert.match(readFileSync(join(state, 'args'), 'utf8'), new RegExp(`unblock-${retry.ticket}-r1`))
+  assert.match(readFileSync(join(state, 'args'), 'utf8'), new RegExp(`--idempotency-key=unblock-${retry.ticket}-r1`))
   const failing = await create(shape('spend'))
   await approve(failing)
   writeFileSync(join(state, 'fail'), '')

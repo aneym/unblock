@@ -1,6 +1,6 @@
 ---
 name: unblock
-description: Ask the human for something only they can give: their sign-in or key, a click in their own account, spend, a message to a real person, or a product call. Use only after you have tried the CLI, the API, computer use and the docs yourself.
+description: Ask the human for something only they can give: their sign-in or key, consent for a click in their own signed-in account, a payment, a message to a real person, or a product call. Use only after you have tried the CLI, the API, the browser and the docs yourself.
 ---
 
 # unblock
@@ -16,9 +16,11 @@ Before you file anything, work the problem:
 1. **CLI and API.** Is there a command, an API call or a token already on this
    machine that does it? Railway, GitHub, Cloudflare, Google Cloud and most
    consoles have one.
-2. **Computer use.** Can you do it in a browser or app you are allowed to
-   drive? Never drive the human's own signed-in accounts, sessions or browser
-   without their explicit yes. That is a real blocker, so file it.
+2. **The browser, with consent.** If the job is a click or a form in a site
+   the human is already signed in to in Aside, do not hand them the clicks. File
+   a `consent` ask with your plan (below). Once they approve, you run it
+   yourself through `aside repl` in a regular tab. Never drive their signed-in
+   accounts without that approval.
 3. **Docs and code.** Is the answer in the config, the repo, the docs or an
    earlier answer? `unblock list --all` shows recent asks. Do not re-ask what
    is already decided.
@@ -30,9 +32,9 @@ Only if all of that fails, and the reason is one of these, file an ask:
 | `only_you` | means |
 | --- | --- |
 | `credential` | their sign-in, password, key or 2FA code |
-| `their_account` | a click in a console or app signed in as them |
-| `spend` | money, a paid plan or a new account |
-| `message` | a message sent to a real person, as them |
+| `their_account` | a click in a console or app signed in as them. Ask for consent first |
+| `spend` | money or a paid plan: a `spend` ask |
+| `message` | a message sent to a real person, as them: a `message` ask |
 | `judgment` | a product or taste call only they should make |
 
 ## What the gate checks
@@ -55,6 +57,81 @@ Every ask needs:
   never opened the repo: "the first version we ship", not "v1".
 - One ask per blocker. Filing a second open ask with the same project and title
   is refused with the existing ticket. Revise that one instead.
+
+## Consent first, for clicks in their accounts
+
+A `consent` ask lets you do the clicking after one approval. Use it whenever the
+site is already signed in to in Aside and the job is clicks or form fields.
+
+```json
+{ "purpose": "consent", "only_you": "their_account", "project": "agent-rails",
+  "tried": ["The GitHub CLI token lacks admin:org, so the API refuses this setting"],
+  "title": "Turn on two-step sign-in enforcement for the Rails GitHub org",
+  "why": "GitHub blocks members without it next month. You are signed in, so I can flip it.",
+  "plan": { "site": "github.com",
+            "start_url": "https://github.com/organizations/acme/settings/authentication_security",
+            "steps": ["Tick Require two-factor authentication", "Save and confirm", "Screenshot the saved setting"],
+            "changes": "Members without two-step sign-in lose access until they turn it on.",
+            "untouched": "No members, repositories, billing or other settings." } }
+```
+
+Rules:
+
+- The approval covers that plan only, on that site. If the screen differs from
+  the plan, or you need one more step, stop and file a new ask. Do not improvise.
+- Signing in or out, switching accounts, creating accounts and "Continue with
+  Google" are never consent. They stay the human's own click. The gate rejects
+  a plan that contains them, and aside-guard blocks them at run time. File a
+  blocker with `consent_blocked_by: "sign_in"` and a deep link instead.
+- A message to a real person is never consent. It is a `message` ask.
+- On approve, run the plan with `aside-tab <start_url>` and `aside repl`. Take a
+  screenshot before the first step and one after the last. Then attach them:
+  `unblock receipt <ticket> --before before.png --after after.png --url <final url>`.
+- "I'll do it myself" means they did it. "No" means leave it. A send-back
+  carries their note: revise the plan and file it again.
+
+A blocker with `only_you: "their_account"` must say why consent will not work,
+in `consent_blocked_by`: `sign_in` (it needs a sign-in or account change),
+`not_signed_in` (Aside is not signed in to that site), `no_browser` (you have no
+Aside access), `types_secret` (they must type a secret or card) or `device` (a
+phone, a key or a physical step).
+
+## Payments
+
+A `spend` ask carries the item, the vendor, the amount in cents (USD, at most
+$500), a cap and why. The daemon adds the Approve payment / No choice.
+
+```json
+{ "purpose": "spend", "only_you": "spend", "project": "recruiter",
+  "tried": ["The free tier stops at 50 lookups; this search needs about 400"],
+  "title": "Pay for FullEnrich's monthly plan so Recruiter can find emails",
+  "why": "Email lookups run out on the free tier after 50 contacts.",
+  "spend": { "item": "FullEnrich Starter monthly plan", "vendor": "FullEnrich",
+             "vendor_url": "https://fullenrich.com/pricing", "amount_cents": 5500,
+             "currency": "usd", "cap_cents": 6000, "why": "1,000 lookups a month" } }
+```
+
+Nothing is bought without an approved spend ask. Once it is approved, run
+`unblock pay <ticket>`. That asks Link (Stripe's `link-cli`) for a one-time
+card, and Link also asks the human to confirm on their phone. When Link says
+approved, get the card with `link-cli spend-request retrieve <id> --include card
+--output-file <path>`. Only ever do that with `--output-file`, and never print,
+log or commit the file's contents. Delete the file after checkout. Never run
+`link-cli auth status` without `--filter-output authenticated`: its full output
+holds a token. If Link needs signing in again, that is one blocker for the
+human, with a link.
+
+## Messages to real people
+
+A `message` ask carries `to`, `via`, an optional `subject` and the exact
+`text`. The human approves it as written, or edits it. When the answer includes
+`edited_text`, send exactly that text. Send only what was approved, once.
+
+## Only a person approves
+
+Approvals for consent, spend and message count only when they come from the
+human's own signed-in page. Answering one yourself, drafting a verdict or
+minting a link to approve it is refused. Do not try.
 
 ## Blocker or decision
 
@@ -101,7 +178,9 @@ Every keystroke drafts to the daemon. `unblock_peek {ticket}` (or `unblock peek
 answer: use it to decide what to ask next, never to act on.
 
 `unblock_update {ticket, ...}` revises an open ask in place and keeps the
-ticket, the open page and drafts on untouched fields. It takes `title`, `why`,
+ticket, the open page and drafts on untouched fields. For consent, spend and
+message it takes `plan`, `spend` or `message`; changing them makes the page ask
+the human to look again. It takes `title`, `why`,
 `steps`, `links`, `tried`, `only_you`, `add_fields`, `remove_fields` and
 `replace_fields`. `replace_fields` swaps the whole list; to reword one question,
 send it in `add_fields` under the same name. An ask filed before the gate
@@ -126,9 +205,9 @@ Resolve it at the point of use and never print it: no `echo`, no `env`, no
 
 ```json
 { "purpose": "blocker", "kind": "file", "project": "billing",
-  "only_you": "their_account",
+  "only_you": "their_account", "consent_blocked_by": "not_signed_in",
   "tried": ["gcloud has no command to add a redirect URL to an OAuth web client",
-            "the agent browser has no Google sign-in for this project, and Alex's own session is off limits"],
+            "Aside is not signed in to this Google Cloud project, so a consent ask cannot run"],
   "title": "Add the sign-in callback to the Google OAuth client",
   "why": "Sign-in fails at the redirect. Everything behind sign-in waits on this.",
   "steps": ["Open the client page (link below) and pick the web client",

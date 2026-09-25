@@ -124,6 +124,8 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .consent-hero > .url-chip { margin-bottom: 16px; }
 .consent-hero p { margin: 12px 0; overflow-wrap: anywhere; }
 .consent-hero .control, .spend-hero .control { margin-top: 10px; }
+.plan-change .secondary { margin-top: 8px; }
+.safety-notice { margin: 12px 0 20px; font-size: 13px; color: var(--ink); }
 .amount { font-size: 40px; line-height: 44px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .amount span { font-size: 13px; line-height: 20px; font-weight: 400; color: var(--dim); margin-left: 10px; }
 .spend-hero p, .message-hero p { margin: 14px 0; overflow-wrap: anywhere; }

@@ -26,6 +26,9 @@ export const BASE = BOOT.token ? `/u/${BOOT.token}` : ''
 export const VIEWER = BOOT.viewer
 
 export class FinishedError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, public readonly code?: string) { super(message) }
+}
 
 export async function api<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(BASE + path, {
@@ -36,8 +39,8 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   })
   if (response.status === 410) throw new FinishedError('finished')
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(payload.error || `HTTP ${response.status}`)
+    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string }
+    throw new ApiError(payload.error || `HTTP ${response.status}`, payload.code)
   }
   return response.json() as Promise<T>
 }

@@ -78,7 +78,12 @@ function approvalData(raw, purpose) {
     if (currency !== 'usd') throw new ValidationError('only usd is supported', 'spend.currency')
     const vendor_url = str(data.vendor_url, 'spend.vendor_url', { max: 2000 })
     try { if (new URL(vendor_url).protocol !== 'https:') throw new Error() } catch { throw new ValidationError('must be https', 'spend.vendor_url') }
-    return { spend: { item: plainWords(str(data.item, 'spend.item'), 'spend.item'), vendor: str(data.vendor, 'spend.vendor'),
+    const item = plainWords(str(data.item, 'spend.item'), 'spend.item')
+    const vendor = str(data.vendor, 'spend.vendor')
+    for (const [value, path] of [[item, 'spend.item'], [vendor, 'spend.vendor']]) {
+      if (value.startsWith('-') || /[,:]/.test(value)) throw new ValidationError('cannot start with - or contain , or :', path)
+    }
+    return { spend: { item, vendor,
       vendor_url, amount_cents: amount, currency, cap_cents: cap, why: str(data.why, 'spend.why', { max: 300 }) } }
   }
   const via = str(data.via, 'message.via')

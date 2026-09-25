@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, renameSync, constants } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -342,7 +342,12 @@ export async function startDaemon({ port } = {}) {
   }
 
   /** One path for every draft write, so every transport emits the same event. */
-  function applyDraft(ticket, body) {
+  function applyDraft(ticket, body, answeredVia) {
+    const existing = store.get(ticket)
+    if (APPROVAL_PURPOSES.includes(existing?.purpose) &&
+        (!answeredVia || answeredVia === 'local' || answeredVia === 'share-link:local')) {
+      const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error
+    }
     const ask = store.saveDraft(
       ticket,
       body.values || {},
@@ -400,7 +405,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (APPROVAL_PURPOSES.includes(ask.purpose)) {
       // Reject stale or agent-supplied approvals before processing any values.
       if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
-      if (answeredVia === 'local') { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
+      if (answeredVia === 'local' || answeredVia === 'share-link:local') { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
     }
     const records = []
     for (const field of ask.fields) {
@@ -510,11 +515,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        return sendJson(res, 200, { ask: applyDraft(ticket, body) })
+        return sendJson(res, 200, { ask: applyDraft(ticket, body, `share-link:${link.minted_by}`) })
       }
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, 'share-link')
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
@@ -626,7 +631,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       }
       // Authorize before touching any caller-supplied path.
       const ask = store.get(ticket)
-      if (!ask || ask.purpose !== 'consent' || ask.status !== 'answered' || ask.answers.verdict !== 'approve') {
+      if (!ask || ask.purpose !== 'consent' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve') {
         return sendJson(res, 409, { error: 'receipt not allowed', code: 'RECEIPT_NOT_ALLOWED' })
       }
       const data = { ...(body.final_url === undefined ? {} : { final_url: body.final_url }) }
@@ -639,7 +644,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         if (!info?.isFile() || info.isSymbolicLink() || info.size > 5 * 1024 * 1024) {
           return sendJson(res, 400, { error: 'invalid PNG file' })
         }
-        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
         let bytes
         try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'invalid PNG file' })
           bytes = Buffer.allocUnsafe(5 * 1024 * 1024 + 1); const size = readSync(fd, bytes, 0, bytes.length, 0); bytes = bytes.subarray(0, size) }
@@ -649,10 +654,18 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       }
       const dir = join(stateDir(), 'receipts', ticket)
       mkdirSync(dir, { recursive: true, mode: 0o700 })
+      chmodSync(join(stateDir(), 'receipts'), 0o700)
+      chmodSync(dir, 0o700)
       for (const [name, bytes] of images) {
         const target = join(dir, `${name}.png`)
-        writeFileSync(`${target}.tmp`, bytes, { mode: 0o600 })
-        renameSync(`${target}.tmp`, target)
+        const temporary = `${target}.tmp`
+        try { unlinkSync(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
+        const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600)
+        try {
+          let offset = 0
+          while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+        } finally { closeSync(fd) }
+        renameSync(temporary, target)
       }
       return sendJson(res, 200, { ask: store.receipt(ticket, data) })
     }
@@ -686,7 +699,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     ticket = routeTicket(pathname, '/draft')
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(ticket, await readJson(req)) })
+      return sendJson(res, 200, { ask: applyDraft(ticket, await readJson(req), proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local') })
     }
 
     // Revise a live ask instead of cancelling and refiling it. The ticket, the
@@ -771,6 +784,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         askId: ask?.id || null,
         scope: ask ? 'ask' : 'queue',
         ttlSeconds: body.ttl_seconds || 900,
+        mintedBy: proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local',
       })
       return sendJson(res, 201, {
         url: `http://${HOST}:${actualPort}/u/${link.token}`,
@@ -815,7 +829,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (!store.get(body.ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(body.ticket, body) })
+      return sendJson(res, 200, { ask: applyDraft(body.ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local') })
     }
 
     const tokenMatch = pathname.match(/^\/u\/([^/]+)(.*)$/)

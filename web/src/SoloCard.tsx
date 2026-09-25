@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, BASE, FinishedError } from './lib/api'
+import { api, ApiError, BASE, FinishedError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type Values } from './deck'
 import { FieldControl } from './FieldControl'
@@ -64,19 +64,28 @@ function Checklist({ ticket, steps, readOnly = false, filled = false }: {
   )
 }
 
-export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
+export function SoloCard({ ask, onFinished, onReload }: {
+  ask: Ask; onFinished: () => void; onReload: () => Promise<void>
+}) {
   const kind = askKind(ask)
+  const approvalKind = kind === 'consent' || kind === 'spend' || kind === 'message'
   const draftNames = useMemo(
-    () => new Set(ask.fields.filter((field) => field.type !== 'secret').map((field) => field.name)),
-    [ask.fields],
+    () => new Set(ask.fields.filter((field) => field.type !== 'secret'
+      && (!approvalKind || (field.name !== 'verdict' && field.name !== 'edited_text')))
+      .map((field) => field.name)),
+    [ask.fields, approvalKind],
   )
   const safeValues = (raw: Values): Values =>
     Object.fromEntries(Object.entries(raw).filter(([name]) => draftNames.has(name)))
   const seeded = useMemo(() => {
     const local = readLocal(ask.ticket)
     const useLocal = local && local.t > (ask.draft_updated_at || 0)
+    const values: Values = { ...safeValues(ask.draft || {}), ...(useLocal ? safeValues(local.values || {}) : {}) }
+    if (approvalKind && typeof local?.values?.edited_text === 'string') {
+      values.edited_text = local.values.edited_text
+    }
     return {
-      values: { ...safeValues(ask.draft || {}), ...(useLocal ? safeValues(local.values || {}) : {}) },
+      values,
       notes: { ...(ask.field_context || {}), ...(useLocal ? local.notes : {}) },
       reply: useLocal ? local.reply : ask.draft_reply || '',
     }
@@ -86,17 +95,38 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const [notes] = useState(seeded.notes)
   const [reply, setReply] = useState(seeded.reply)
   const [showReply, setShowReply] = useState(!!seeded.reply)
-  const [showPlanNote, setShowPlanNote] = useState(!!seeded.values.note)
+  const [showPlanNote, setShowPlanNote] = useState(false)
+  const [planNote, setPlanNote] = useState('')
   const [editing, setEditing] = useState(!!seeded.values.edited_text)
+  const [editDraft, setEditDraft] = useState(
+    typeof seeded.values.edited_text === 'string' ? seeded.values.edited_text : ask.message?.text || '',
+  )
   const [menu, setMenu] = useState(false)
   const [sendBackOpen, setSendBackOpen] = useState(false)
   const [backNote, setBackNote] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [status, setStatus] = useState('')
   const [draftState, setDraftState] = useState('')
+  const [safetyNotice, setSafetyNotice] = useState('')
   const timer = useRef<number | undefined>(undefined)
   const completed = useRef(false)
   const latest = useRef({ values: seeded.values, notes: seeded.notes, reply: seeded.reply })
+  const latestRevision = useRef(ask.revision)
+  useEffect(() => {
+    if (latestRevision.current === ask.revision) return
+    latestRevision.current = ask.revision
+    setSafetyNotice('The agent changed this ask. Check it again.')
+    setShowPlanNote(false)
+    setPlanNote('')
+    setEditing(false)
+    setEditDraft(ask.message?.text || '')
+    if (approvalKind) {
+      setValues({})
+      latest.current = { values: {}, notes: {}, reply: '' }
+      // A revised approval must not reuse values from the prior plan.
+      clearLocal(ask.ticket)
+    }
+  }, [ask.revision, ask.ticket, approvalKind])
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
   const hardMissing = unanswered.filter(
     (field) => field.must_decide && isMissing(values[field.name]),
@@ -113,7 +143,11 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
-    writeLocal(ask.ticket, { values: safeValues(merged.values), notes: merged.notes, reply: merged.reply, bounced: {} })
+    const localValues = safeValues(merged.values)
+    if (approvalKind && typeof merged.values.edited_text === 'string') {
+      localValues.edited_text = merged.values.edited_text
+    }
+    writeLocal(ask.ticket, { values: localValues, notes: merged.notes, reply: merged.reply, bounced: {} })
     window.clearTimeout(timer.current)
     setDraftState('Saving draft…')
     timer.current = window.setTimeout(() => {
@@ -151,8 +185,9 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     setValues(next)
     setState('idle')
     setStatus('')
-    if (secret) latest.current = { ...latest.current, values: next }
-    else persist({ values: next })
+    if (secret || (approvalKind && name === 'verdict')) {
+      latest.current = { ...latest.current, values: next }
+    } else persist({ values: next })
   }
   const onReply = (text: string) => {
     setReply(text)
@@ -167,34 +202,65 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   }
   const submit = async (verdict?: string, skip = false) => {
     if (isBusy || detected || answered || (!verdict && !skip && hardMissing.length)) return
+    if (approvalKind && !verdict) return
     const payload: Values = { ...latest.current.values }
     if (verdict) payload.verdict = verdict
+    if (kind === 'consent') delete payload.note
+    if (kind === 'message') {
+      if (editing) payload.edited_text = editDraft
+      else delete payload.edited_text
+    }
     for (const field of unanswered) {
+      if (kind === 'consent' && field.name === 'note') continue
+      if (kind === 'message' && field.name === 'edited_text') continue
       if (skip && !field.must_decide) payload[field.name] = null
       else if (isMissing(payload[field.name]) && !field.must_decide) payload[field.name] = null
     }
     setState('sending'); setStatus('Sending…')
     try {
       const result = await api<{ complete: boolean }>('/api/answer', {
-        ticket: ask.ticket, values: payload, reply: latest.current.reply, field_context: latest.current.notes,
-        field_bounce: {},
+        ticket: ask.ticket, revision: ask.revision, values: payload,
+        reply: kind === 'consent' ? '' : latest.current.reply,
+        field_context: kind === 'consent' ? {} : latest.current.notes, field_bounce: {},
       })
       setState('done'); setStatus(result.complete ? 'Sent' : 'Saved, still incomplete')
       if (result.complete) finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
+      if (error instanceof ApiError && error.code === 'STALE_REVISION') {
+        setSafetyNotice('The agent changed this ask. Check it again.')
+        setState('idle'); setStatus('')
+        await onReload()
+        return
+      }
+      if (error instanceof ApiError && error.code === 'HUMAN_ONLY') {
+        setSafetyNotice('Approvals only count from your own signed-in page. Open this ask from the tailnet link.')
+        setState('idle'); setStatus('')
+        return
+      }
       setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send answer')
     }
   }
-  const sendBack = async () => {
+  const sendBack = async (note = backNote) => {
     if (isBusy) return
     setState('sending'); setStatus('Sending back…')
     try {
-      await api('/api/answer', { ticket: ask.ticket, reply: backNote, bounce: true })
+      await api('/api/answer', { ticket: ask.ticket, revision: ask.revision, reply: note, bounce: true })
       setState('done'); setStatus('Sent back — the agent will rework it')
       finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
+      if (error instanceof ApiError && error.code === 'STALE_REVISION') {
+        setSafetyNotice('The agent changed this ask. Check it again.')
+        setState('idle'); setStatus('')
+        await onReload()
+        return
+      }
+      if (error instanceof ApiError && error.code === 'HUMAN_ONLY') {
+        setSafetyNotice('Approvals only count from your own signed-in page. Open this ask from the tailnet link.')
+        setState('idle'); setStatus('')
+        return
+      }
       setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send it back')
     }
   }
@@ -295,12 +361,19 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
               <button className="text-button" type="button" onClick={() => setShowPlanNote(!showPlanNote)}>
                 Change something in the plan
               </button>
-              {showPlanNote && (
-                <textarea
-                  className="control" aria-label="Anything to change in the plan"
-                  value={typeof values.note === 'string' ? values.note : ''}
-                  onChange={(event) => onChange('note', event.target.value)} disabled={isBusy}
-                />
+              {showPlanNote && !answered && (
+                <div className="plan-change">
+                  <textarea
+                    className="control" aria-label="Anything to change in the plan"
+                    value={planNote} onChange={(event) => setPlanNote(event.target.value)} disabled={isBusy}
+                  />
+                  <button
+                    type="button" className="secondary" disabled={isBusy || !planNote.trim()}
+                    onClick={() => void sendBack(planNote)}
+                  >
+                    Send back
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -333,22 +406,22 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
               {editing ? (
                 <textarea
                   className="control message-edit" aria-label="Your edit"
-                  value={typeof values.edited_text === 'string' ? values.edited_text : ask.message.text}
-                  onChange={(event) => onChange('edited_text', event.target.value)} disabled={isBusy}
+                  value={editDraft} disabled={isBusy}
+                  onChange={(event) => {
+                    setEditDraft(event.target.value)
+                    onChange('edited_text', event.target.value)
+                  }}
                 />
               ) : <blockquote><ChipText text={ask.message.text} /></blockquote>}
               <button
                 className="text-button" type="button"
-                onClick={() => {
-                  if (!editing && isMissing(values.edited_text)) onChange('edited_text', ask.message!.text)
-                  setEditing(!editing)
-                }}
+                onClick={() => setEditing(!editing)}
               >
                 {editing ? 'Show draft' : 'Edit'}
               </button>
             </div>
           )}
-          {showReply && !detected && !answered && (
+          {showReply && kind !== 'consent' && !detected && !answered && (
             <div className="reply-box">
               <label htmlFor={`reply_${ask.ticket}`} className="section-label">Anything else</label>
               <textarea
@@ -357,6 +430,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
               />
             </div>
           )}
+          {safetyNotice && <p className="safety-notice" role="alert">{safetyNotice}</p>}
           {sendBackOpen && (
             <div className="send-back-box">
               <label htmlFor={`back_${ask.ticket}`} className="section-label">Send it back with a note</label>
@@ -417,7 +491,11 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
                       {skipBlocked && <small>Choose a must-decide answer first</small>}
                     </button>
                     <button
-                      type="button" onClick={() => { setShowReply(true); setMenu(false) }}
+                      type="button" onClick={() => {
+                        if (kind === 'consent') setShowPlanNote(true)
+                        else setShowReply(true)
+                        setMenu(false)
+                      }}
                     >
                       Add a note
                     </button>
@@ -447,6 +525,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
         {answered && kind === 'consent' && receipt && (
           <details open>
             <summary>Receipt</summary>
+            <p>Screenshots the agent took</p>
             <div className="receipt-images">
               {receipt.before && (
                 <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/before.png`} alt="Before" />
