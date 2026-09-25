@@ -12,7 +12,12 @@ ASK_SCHEMA = {
             "type": "string",
             "enum": ["credential", "their_account", "spend", "message", "judgment"],
         },
-        "tried": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8},
+        "tried": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 20},
+            "minItems": 1,
+            "maxItems": 8,
+        },
         "project": {"type": "string", "maxLength": 64},
         "title": {"type": "string", "maxLength": 90},
         "why": {"type": "string", "maxLength": 1200},

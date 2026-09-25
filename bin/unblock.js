@@ -84,7 +84,7 @@ async function request(path, body, { start = true } = {}) {
     if (data.code === 'ASK_NOT_OPEN') fail(message, 5)
     if (response.status === 404) fail(message, 3)
     if (response.status === 400 || response.status === 409 || response.status === 422) {
-      if (data.ticket) {
+      if (data.code === 'ALREADY_OPEN' && data.ticket) {
         const health = await request('/api/health')
         fail(`already open as ${data.ticket}${stable(health, data.ticket) ? `\n${stable(health, data.ticket)}` : ''}`, 4)
       }
@@ -123,7 +123,7 @@ async function list(args) {
     // Open asks lead; closed ones under --all are context, not work.
     .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1))
   const health = await request('/api/health')
-  if (json) return output({ asks: shown.map((ask) => ({ ...ask, link: stable(health, ask.ticket) })) })
+  if (json) return output({ asks: shown.map((ask) => ({ ...safe(ask), link: stable(health, ask.ticket) })) })
   const open = shown.filter((ask) => ask.status === 'open').length
   console.log(open ? `${open} waiting on you` : 'Nothing is waiting on you.')
   const groups = new Map()
@@ -211,7 +211,7 @@ async function answer(args) {
   } else {
     for (const pair of pairs) {
       const i = pair.indexOf('=')
-      if (i < 1) fail(`expected name=value, got: ${pair}`)
+      if (i < 1) fail(`expected name=value for every answer after the first; use ${ask.fields.map((f) => f.name).join(', ')}`)
       const name = pair.slice(0, i)
       const field = ask.fields.find((f) => f.name === name)
       if (!field) fail(`unknown question: ${name}; use ${ask.fields.map((f) => f.name).join(', ')}`)

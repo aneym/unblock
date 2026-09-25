@@ -81,8 +81,8 @@ function ChoiceControl({ field, value, onChange, disabled, showOther }: {
   )
 }
 
-function SecretControl({ id, value, onChange, disabled }: {
-  id: string; value: FieldValue | undefined; onChange: ChangeFn; disabled: boolean
+function SecretControl({ id, name, value, onChange, disabled }: {
+  id: string; name: string; value: FieldValue | undefined; onChange: ChangeFn; disabled: boolean
 }) {
   const [showSecret, setShowSecret] = useState(false)
   return (
@@ -98,7 +98,7 @@ function SecretControl({ id, value, onChange, disabled }: {
           spellCheck={false}
           placeholder="Paste it here"
           disabled={disabled}
-          onChange={(event) => onChange(id, event.target.value, true)}
+          onChange={(event) => onChange(name, event.target.value, true)}
         />
         <button type="button" className="text-button" onClick={() => setShowSecret(!showSecret)}>
           {showSecret ? 'Hide' : 'Show'}
@@ -237,7 +237,7 @@ export function FieldControl({
           <span>Done</span>
         </label>
       ) : field.type === 'secret' ? (
-        <SecretControl id={id} value={value} onChange={onChange} disabled={disabled} />
+        <SecretControl id={id} name={field.name} value={value} onChange={onChange} disabled={disabled} />
       ) : field.type === 'paste' ? (
         <PasteControl
           id={id}

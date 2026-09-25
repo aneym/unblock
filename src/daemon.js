@@ -771,7 +771,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
         return sendJson(res, 400, { error: error.message, path: error.path })
       }
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
-        return sendJson(res, 409, { error: error.message, ticket: error.ticket })
+        return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })

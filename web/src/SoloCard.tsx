@@ -172,8 +172,10 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const latest = useRef({
     values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
   })
-  const secretNames = useMemo(
-    () => new Set(ask.fields.filter((field) => field.type === 'secret').map((field) => field.name)),
+  // Only known, non-secret field names ever leave memory: an unexpected key
+  // is dropped rather than trusted, so a mis-keyed secret cannot persist.
+  const draftNames = useMemo(
+    () => new Set(ask.fields.filter((field) => field.type !== 'secret').map((field) => field.name)),
     [ask.fields],
   )
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
@@ -190,7 +192,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const isDecision = ask.purpose === 'decision'
 
   const safeValues = (raw: Values) =>
-    Object.fromEntries(Object.entries(raw).filter(([key]) => !secretNames.has(key)))
+    Object.fromEntries(Object.entries(raw).filter(([key]) => draftNames.has(key)))
 
   /**
    * Every change lands in localStorage synchronously, then the server draft
@@ -354,8 +356,10 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   })
   // A field's own url stays beside that field ("Open the screen"); the
   // Links row is only the ask's links, so a question never reads as a link.
+  const fieldUrls = new Set(ask.fields.map((field) => field.url).filter(Boolean))
   const topLinks = (ask.links || [])
     .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
+    .filter((link) => !fieldUrls.has(link.url))
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
       (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
