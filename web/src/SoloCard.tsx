@@ -352,10 +352,10 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   })
-  const topLinks = [
-    ...(ask.links || []),
-    ...ask.fields.filter((field) => field.url).map((field) => ({ label: field.label, url: field.url! })),
-  ].filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
+  // A field's own url stays beside that field ("Open the screen"); the
+  // Links row is only the ask's links, so a question never reads as a link.
+  const topLinks = (ask.links || [])
+    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
       (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
