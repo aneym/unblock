@@ -141,6 +141,8 @@ export class Store {
     this.#addColumn('asks', 'updated_at', 'INTEGER')
     for (const [name, type] of [['plan_json', 'TEXT'], ['spend_json', 'TEXT'], ['message_json', 'TEXT'],
       ['consent_blocked_by', 'TEXT'], ['receipt_json', 'TEXT'], ['revision', 'INTEGER NOT NULL DEFAULT 1']]) this.#addColumn('asks', name, type)
+    for (const [name, type] of [['summary', 'TEXT'], ['minutes', 'INTEGER'], ['after', 'TEXT'],
+      ['blocks_json', "TEXT NOT NULL DEFAULT '[]'"], ['permission_json', 'TEXT']]) this.#addColumn('asks', name, type)
     this.#addColumn('answers', 'answered_via', 'TEXT')
     this.#addColumn('links', 'minted_by', "TEXT NOT NULL DEFAULT 'local'")
   }
@@ -199,8 +201,8 @@ export class Store {
     this.#db
       .prepare(
         `INSERT INTO asks (id, ticket, kind, purpose, project, status, title, why, fields_json, steps_json,
-                           links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at, plan_json, spend_json, message_json, consent_blocked_by, revision)
-         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                           links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at, plan_json, spend_json, message_json, consent_blocked_by, revision, summary, minutes, after, blocks_json, permission_json)
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -223,6 +225,8 @@ export class Store {
         body.spend ? JSON.stringify(body.spend) : null,
         body.message ? JSON.stringify(body.message) : null,
         body.consent_blocked_by ?? null,
+        body.summary ?? null, body.minutes ?? null, body.after ?? null,
+        JSON.stringify(body.blocks ?? []), body.permission ? JSON.stringify(body.permission) : null,
       )
 
     return this.get(id)
@@ -240,7 +244,7 @@ export class Store {
    * the record holds their work and the questions they answered must stay the
    * questions they answered.
    */
-  update(idOrTicket, { title, why, fields, steps, links, tried, only_you, plan, spend, message, consent_blocked_by }) {
+  update(idOrTicket, { title, why, fields, steps, links, tried, only_you, plan, spend, message, permission, consent_blocked_by, summary, minutes, after, blocks }) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
     if (ask.status !== 'open') {
@@ -253,12 +257,13 @@ export class Store {
     }
     const at = nowMs()
     this.#db
-      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
+      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
       .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you,
         plan ? JSON.stringify(plan) : null, spend ? JSON.stringify(spend) : null, message ? JSON.stringify(message) : null,
-        consent_blocked_by ?? null, at, ask.id)
+        consent_blocked_by ?? null, summary ?? null, minutes ?? null, after ?? null, JSON.stringify(blocks ?? []),
+        permission ? JSON.stringify(permission) : null, at, ask.id)
     if (JSON.stringify(ask.plan) !== JSON.stringify(plan) || JSON.stringify(ask.spend) !== JSON.stringify(spend) ||
-        JSON.stringify(ask.message) !== JSON.stringify(message)) this.#db.prepare('DELETE FROM drafts WHERE ask_id = ?').run(ask.id)
+        JSON.stringify(ask.message) !== JSON.stringify(message) || JSON.stringify(ask.permission) !== JSON.stringify(permission)) this.#db.prepare('DELETE FROM drafts WHERE ask_id = ?').run(ask.id)
 
     // Drafts and notes for fields that no longer exist would hydrate into an
     // ask with nowhere to show them. Everything else is left alone on purpose:
@@ -322,6 +327,11 @@ export class Store {
       spend: row.spend_json ? JSON.parse(row.spend_json) : undefined,
       message: row.message_json ? JSON.parse(row.message_json) : undefined,
       consent_blocked_by: row.consent_blocked_by ?? undefined,
+      permission: row.permission_json ? JSON.parse(row.permission_json) : undefined,
+      summary: row.summary ?? undefined,
+      minutes: row.minutes ?? undefined,
+      after: row.after ?? undefined,
+      blocks: JSON.parse(row.blocks_json),
       receipt: row.receipt_json ? JSON.parse(row.receipt_json) : undefined,
       revision: row.revision ?? 1,
       answered_via: this.#db.prepare('SELECT answered_via FROM answers WHERE ask_id = ? LIMIT 1').get(row.id)?.answered_via ?? undefined,
@@ -426,7 +436,8 @@ export class Store {
       if (revision === undefined || revision !== ask.revision) error('STALE_REVISION', 'The agent changed this ask. Check it again.', 409)
       if (ask.status !== 'open') error('ASK_NOT_OPEN', `ask ${ask.ticket} is ${ask.status}`, 409)
       if (!answeredVia || answeredVia === 'local' || answeredVia === 'share-link:local') error('HUMAN_ONLY', 'answer this on the page', 403)
-      if (fieldBounce && Object.keys(fieldBounce).length || values.verdict === null ||
+      if (fieldBounce && Object.keys(fieldBounce).length) error('WHOLE_ASK_ONLY', 'send the entire ask back', 400)
+      if (values.verdict === null ||
           !ask.fields[0].choices.some((choice) => choice.value === values.verdict)) error('INVALID_VERDICT', 'choose a verdict', 400)
       if (ask.purpose === 'consent' && values.verdict === 'approve' && (
         (typeof values.note === 'string' && values.note.trim()) ||

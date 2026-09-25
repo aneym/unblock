@@ -31,12 +31,18 @@ export const ASK_KINDS = ['file', 'park']
  * Blocker = do something. Decision = decide something.
  * Either may be parked or filed; that is a separate axis.
  */
-export const ASK_PURPOSES = ['blocker', 'decision', 'consent', 'spend', 'message']
-export const APPROVAL_PURPOSES = ['consent', 'spend', 'message']
+export const ASK_PURPOSES = ['blocker', 'decision', 'consent', 'spend', 'message', 'question', 'permission']
+export const APPROVAL_PURPOSES = ['consent', 'spend', 'message', 'permission']
 export const ACCOUNT_ACTION_RE = /accounts\.google\.com|appleid\.apple\.com|login\.(microsoftonline|live)\.com|authenticator\.cursor\.sh|\/auth\/cli\/|\/(log|sign)[-_]?(in|out|up|off)\b|\/oauth2?\/|\b(log|sign)\s?(in|out|off|up)\b|switch\s+accounts?|add\s+(another\s+)?account|use\s+another\s+account|choose\s+an?\s+account|create\s+(an?\s+|new\s+)?account|continue\s+with\s+(google|apple|microsoft|github)/i
 const CONSENT_BLOCKERS = ['sign_in', 'not_signed_in', 'no_browser', 'types_secret', 'device']
 const choices = (values) => values.map(([value, label]) => ({ value, label }))
 function approvalFields(purpose) {
+  const permission = purpose === 'permission'
+  if (permission) return [
+    { name: 'verdict', type: 'choice', label: 'Allow this?', required: true, must_decide: true,
+      choices: choices([['allow_once', 'Allow once'], ['deny', 'Deny']]) },
+    { name: 'note', type: 'text', label: 'Note to the agent', required: false },
+  ]
   const consent = purpose === 'consent'
   const message = purpose === 'message'
   return [
@@ -53,6 +59,12 @@ function approvalData(raw, purpose) {
   const key = purpose === 'consent' ? 'plan' : purpose
   const data = raw[key]
   if (!isPlainObject(data)) throw new ValidationError('must be an object', key)
+  if (purpose === 'permission') return { permission: {
+    tool: str(data.tool, 'permission.tool'),
+    ...(data.command === undefined ? {} : { command: str(data.command, 'permission.command', { max: 2000 }) }),
+    ...(data.path === undefined ? {} : { path: str(data.path, 'permission.path') }),
+    summary: plainWords(str(data.summary, 'permission.summary', { max: 200 }), 'permission.summary'),
+  } }
   if (purpose === 'consent') {
     const site = str(data.site, 'plan.site', { max: 253 }).toLowerCase()
     const start_url = str(data.start_url, 'plan.start_url', { max: 2000 })
@@ -213,6 +225,7 @@ function validateField(raw, index, seen, purpose = 'blocker') {
     help: optionalStr(raw.help, `${path}.help`, { max: 600 }),
     url: optionalStr(raw.url, `${path}.url`, { max: 2000 }),
   }
+  if (raw.step !== undefined) field.step = raw.step
 
   if (field.url && !isActionUrl(field.url)) {
     throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
@@ -230,7 +243,9 @@ function validateField(raw, index, seen, purpose = 'blocker') {
       if (typeof choice === 'string') return { value: str(choice, cpath), label: plainWords(str(choice, cpath), cpath) }
       if (!isPlainObject(choice)) throw new ValidationError('must be a string or object', cpath)
       const value = str(choice.value, `${cpath}.value`, { max: 200 })
-      return { value, label: plainWords(str(choice.label ?? value, `${cpath}.label`, { max: 200 }), `${cpath}.label`) }
+      const description = optionalStr(choice.description, `${cpath}.description`, { max: 200 })
+      return { value, label: plainWords(str(choice.label ?? value, `${cpath}.label`, { max: 200 }), `${cpath}.label`),
+        ...(description ? { description } : {}) }
     })
     field.multi = Boolean(raw.multi)
   }
@@ -259,15 +274,20 @@ function validateField(raw, index, seen, purpose = 'blocker') {
     field.required = true // "I did the thing" is meaningless as an optional field
   }
 
-  if (purpose === 'decision') {
-    // Deliberation never touches the keychain path, and running a command to
-    // find something out is the agent's job, not yours.
-    if (type === 'secret' || type === 'paste') {
+  if (purpose === 'question' && !['choice', 'text'].includes(type)) {
+    throw new ValidationError('a question needs choice or text fields', `${path}.type`)
+  }
+  if (purpose === 'decision' || (purpose === 'question' && raw.recommend !== undefined)) {
+    // A question may carry a recommendation, but unlike a decision it does
+    // not require one. Both kinds validate supplied recommendations alike.
+    if (purpose === 'decision' && (type === 'secret' || type === 'paste')) {
       throw new ValidationError(`a decision cannot ask for a ${type} field`, `${path}.type`)
     }
     if (!isPlainObject(raw.recommend)) {
       throw new ValidationError(
-        'every decision field needs recommend: {value, why} — if you have no recommendation, you have not thought it through yet',
+        purpose === 'decision'
+          ? 'every decision field needs recommend: {value, why} — if you have no recommendation, you have not thought it through yet'
+          : 'recommend must be {value, why}',
         `${path}.recommend`,
       )
     }
@@ -325,20 +345,21 @@ export function validateAsk(raw) {
 
   const title = plainWords(str(raw.title, 'title', { max: MAX_TITLE }), 'title')
   const why = str(raw.why, 'why', { max: 1200 })
-  if (!Array.isArray(raw.tried) || raw.tried.length === 0) {
+  const optionalGate = purpose === 'question' || purpose === 'permission'
+  if ((!optionalGate || raw.tried !== undefined) && (!Array.isArray(raw.tried) || (!optionalGate && raw.tried.length === 0))) {
     throw new ValidationError('say what you already tried (commands, computer use, docs) and why it could not clear this — only file what only the human can do', 'tried')
   }
-  if (raw.tried.length > 8) throw new ValidationError('at most 8 attempts', 'tried')
-  const tried = raw.tried.map((entry, i) => str(entry, `tried[${i}]`, { min: 20, max: 400 }))
+  if (raw.tried?.length > 8) throw new ValidationError('at most 8 attempts', 'tried')
+  const tried = (raw.tried ?? []).map((entry, i) => str(entry, `tried[${i}]`, { min: 20, max: 400 }))
   if (new Set(tried.map((entry) => entry.toLowerCase())).size !== tried.length) {
     throw new ValidationError('duplicate attempts', 'tried')
   }
-  const only_you = str(raw.only_you, 'only_you')
-  if (!ONLY_YOU_REASONS.includes(only_you)) {
+  const only_you = optionalGate && (raw.only_you === undefined || raw.only_you === null) ? undefined : str(raw.only_you, 'only_you')
+  if (only_you !== undefined && !ONLY_YOU_REASONS.includes(only_you)) {
     throw new ValidationError(`must be one of ${ONLY_YOU_REASONS.join(', ')}`, 'only_you')
   }
   if (purpose === 'decision' ? !['judgment', 'spend', 'message'].includes(only_you) :
-    APPROVAL_PURPOSES.includes(purpose) ? only_you !== ({ consent: 'their_account', spend: 'spend', message: 'message' })[purpose] : only_you === 'judgment') {
+    purpose === 'permission' ? false : APPROVAL_PURPOSES.includes(purpose) ? only_you !== ({ consent: 'their_account', spend: 'spend', message: 'message' })[purpose] : purpose === 'question' ? false : only_you === 'judgment') {
     throw new ValidationError('decisions allow judgment, spend or message; blockers require an action other than judgment', 'only_you')
   }
 
@@ -392,6 +413,11 @@ export function validateAsk(raw) {
   const steps = raw.steps === undefined ? [] : raw.steps
   if (!Array.isArray(steps)) throw new ValidationError('must be an array of strings', 'steps')
   if (steps.length > 12) throw new ValidationError('at most 12 steps', 'steps')
+  for (let i = 0; i < fields.length; i++) {
+    if (fields[i].step !== undefined && (!Number.isInteger(fields[i].step) || fields[i].step < 1 || fields[i].step > steps.length)) {
+      throw new ValidationError('must name an existing 1-based step', `fields[${i}].step`)
+    }
+  }
 
   const links = raw.links === undefined ? [] : raw.links
   if (!Array.isArray(links)) throw new ValidationError('must be an array', 'links')
@@ -408,6 +434,15 @@ export function validateAsk(raw) {
     throw new ValidationError('a manual step needs a deep link to the exact screen, not a home page', 'links')
   }
 
+  const summary = optionalStr(raw.summary, 'summary', { max: 140 })
+  const after = optionalStr(raw.after, 'after', { max: 140 })
+  const minutes = raw.minutes
+  if (minutes !== undefined && (!Number.isInteger(minutes) || minutes < 1 || minutes > 120)) {
+    throw new ValidationError('must be an integer from 1 to 120', 'minutes')
+  }
+  const blocks = raw.blocks === undefined ? [] : raw.blocks
+  if (!Array.isArray(blocks) || blocks.length > 5) throw new ValidationError('must have at most 5 items', 'blocks')
+
   return {
     kind,
     purpose,
@@ -422,6 +457,10 @@ export function validateAsk(raw) {
     ttl_seconds: normalizeTtl(raw.ttl_seconds),
     ...approval,
     consent_blocked_by,
+    summary: summary === undefined ? undefined : plainWords(summary, 'summary'),
+    minutes,
+    after: after === undefined ? undefined : plainWords(after, 'after'),
+    blocks: blocks.map((block, i) => plainWords(str(block, `blocks[${i}]`, { max: 60 }), `blocks[${i}]`)),
   }
 }
 
@@ -440,7 +479,7 @@ export function validateUpdate(ask, patch) {
   if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
   if (patch.purpose !== undefined) throw new ValidationError('purpose cannot change', 'purpose')
   if (APPROVAL_PURPOSES.includes(ask.purpose) && ['add_fields', 'remove_fields', 'replace_fields'].some((key) => patch[key] !== undefined)) throw new ValidationError('approval fields cannot change', 'fields')
-  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'consent_blocked_by', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'permission', 'consent_blocked_by', 'summary', 'minutes', 'after', 'blocks', 'add_fields', 'remove_fields', 'replace_fields'].filter(
     (key) => patch[key] !== undefined,
   )
   if (named.length === 0) {
@@ -449,7 +488,7 @@ export function validateUpdate(ask, patch) {
     )
   }
 
-  if ((!ask.tried?.length || !ask.only_you) && (patch.tried === undefined || patch.only_you === undefined)) {
+  if (!['question', 'permission'].includes(ask.purpose) && (!ask.tried?.length || !ask.only_you) && (patch.tried === undefined || patch.only_you === undefined)) {
     throw new ValidationError('this ask predates the filing gate; include tried and only_you in the update')
   }
 
@@ -499,14 +538,16 @@ export function validateUpdate(ask, patch) {
     title: patch.title ?? ask.title,
     why: patch.why ?? ask.why,
     fields: APPROVAL_PURPOSES.includes(ask.purpose) ? undefined : fields,
-    plan: patch.plan ?? ask.plan, spend: patch.spend ?? ask.spend, message: patch.message ?? ask.message,
+    plan: patch.plan ?? ask.plan, spend: patch.spend ?? ask.spend, message: patch.message ?? ask.message, permission: patch.permission ?? ask.permission,
+    summary: patch.summary ?? ask.summary, minutes: patch.minutes ?? ask.minutes, after: patch.after ?? ask.after, blocks: patch.blocks ?? ask.blocks,
     consent_blocked_by: patch.consent_blocked_by ?? ask.consent_blocked_by,
     steps: patch.steps ?? ask.steps,
     links: patch.links ?? ask.links,
     tried: patch.tried ?? ask.tried,
     only_you: patch.only_you ?? ask.only_you,
   })
-  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, consent_blocked_by: merged.consent_blocked_by }
+  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, permission: merged.permission, consent_blocked_by: merged.consent_blocked_by,
+    summary: merged.summary, minutes: merged.minutes, after: merged.after, blocks: merged.blocks }
 }
 
 function normalizeTtl(value) {

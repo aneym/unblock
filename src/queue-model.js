@@ -41,10 +41,10 @@ export function unansweredFields(ask) {
   return (ask.fields || []).filter((field) => !(field.name in answered))
 }
 
-/** Gating first, detected last, oldest first inside each band. */
+/** Parked first, then most dependent work, then oldest. */
 export function sortAsks(asks) {
-  const rank = (ask) => (ask.origin?.detected === true ? 2 : ask.gating ? 0 : 1)
-  return [...asks].sort((a, b) => rank(a) - rank(b) || at(a.created_at) - at(b.created_at))
+  return [...asks].sort((a, b) => Number(Boolean(b.gating)) - Number(Boolean(a.gating)) ||
+    (b.blocks?.length ?? 0) - (a.blocks?.length ?? 0) || at(a.created_at) - at(b.created_at))
 }
 
 /**

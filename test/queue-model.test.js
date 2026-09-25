@@ -10,7 +10,7 @@ const ask = (ticket, created_at, options = {}) => ({
   ...options,
 })
 
-test('sortAsks orders gating, filed, then detected, oldest within groups', () => {
+test('sortAsks orders parked first, then oldest without blocks', () => {
   const input = [
     ask('detected-new', '2026-01-06', { gating: true, origin: { detected: true } }),
     ask('filed-new', '2026-01-05'),
@@ -20,7 +20,7 @@ test('sortAsks orders gating, filed, then detected, oldest within groups', () =>
     ask('gating-old', '2026-01-01', { gating: true }),
   ]
   assert.deepEqual(sortAsks(input).map((item) => item.ticket), [
-    'gating-old', 'gating-new', 'filed-old', 'filed-new', 'detected-old', 'detected-new',
+    'gating-old', 'gating-new', 'detected-new', 'filed-old', 'detected-old', 'filed-new',
   ])
   assert.deepEqual(input.map((item) => item.ticket), [
     'detected-new', 'filed-new', 'gating-new', 'detected-old', 'filed-old', 'gating-old',

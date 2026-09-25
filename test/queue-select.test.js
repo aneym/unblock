@@ -27,7 +27,7 @@ test('groupOf prefers the declared project, then origin, then a fallback', () =>
   assert.equal(groupOf(ask('f')), 'elsewhere')
 })
 
-test('sortAsks puts gating first and detected last, oldest first within each', () => {
+test('sortAsks puts parked first, then oldest when blocks are equal', () => {
   const input = [
     ask('detected', { origin: { detected: true }, created_at: 1 }),
     ask('filed-new', { created_at: 30 }),
@@ -36,7 +36,7 @@ test('sortAsks puts gating first and detected last, oldest first within each', (
     ask('gating-old', { gating: true, created_at: 5 }),
   ]
   assert.deepEqual(sortAsks(input).map((item) => item.ticket), [
-    'gating-old', 'gating-new', 'filed-old', 'filed-new', 'detected',
+    'gating-old', 'gating-new', 'detected', 'filed-old', 'filed-new',
   ])
 })
 

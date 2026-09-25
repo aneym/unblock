@@ -5,7 +5,7 @@ from .hermes import unblock_cancel, unblock_check, unblock_file, unblock_park
 ASK_SCHEMA = {
     "type": "object",
     "properties": {
-        "purpose": {"type": "string", "enum": ["blocker", "decision", "consent", "spend", "message"]},
+        "purpose": {"type": "string", "enum": ["blocker", "decision", "consent", "spend", "message", "question", "permission"]},
         # The filing gate: why only the human can do this, and what the agent
         # already tried. The daemon rejects an ask without both.
         "only_you": {
@@ -21,6 +21,11 @@ ASK_SCHEMA = {
         "project": {"type": "string", "maxLength": 64},
         "title": {"type": "string", "maxLength": 90},
         "why": {"type": "string", "maxLength": 1200},
+        "summary": {"type": "string", "maxLength": 140},
+        "minutes": {"type": "integer", "minimum": 1, "maximum": 120},
+        "after": {"type": "string", "maxLength": 140},
+        "blocks": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 60}},
+        "permission": {"type": "object", "properties": {"tool": {"type": "string"}, "command": {"type": "string", "maxLength": 2000}, "path": {"type": "string"}, "summary": {"type": "string", "maxLength": 200}}, "required": ["tool", "summary"]},
         "consent_blocked_by": {"type": "string", "enum": ["sign_in", "not_signed_in", "no_browser", "types_secret", "device"]},
         "plan": {"type": "object", "properties": {"site": {"type": "string"}, "start_url": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "changes": {"type": "string"}, "untouched": {"type": "string"}}, "required": ["site", "start_url", "steps", "changes", "untouched"]},
         "spend": {"type": "object", "properties": {"item": {"type": "string"}, "vendor": {"type": "string"}, "vendor_url": {"type": "string"}, "amount_cents": {"type": "integer"}, "currency": {"type": "string"}, "cap_cents": {"type": "integer"}, "why": {"type": "string"}}, "required": ["item", "vendor", "vendor_url", "amount_cents", "currency", "cap_cents", "why"]},
@@ -39,6 +44,7 @@ ASK_SCHEMA = {
                     },
                     "label": {"type": "string"},
                     "required": {"type": "boolean"},
+                    "step": {"type": "integer", "minimum": 1},
                     "recommend": {
                         "type": "object",
                         "properties": {"value": {}, "why": {"type": "string", "maxLength": 200}},
@@ -47,7 +53,7 @@ ASK_SCHEMA = {
                     "must_decide": {"type": "boolean"},
                     "help": {"type": "string"},
                     "url": {"type": "string"},
-                    "choices": {"type": "array"},
+                    "choices": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object", "properties": {"value": {"type": "string"}, "label": {"type": "string"}, "description": {"type": "string", "maxLength": 200}}, "required": ["value"]}]}},
                     "multi": {"type": "boolean"},
                     "command": {"type": "string"},
                     "multiline": {"type": "boolean"},
@@ -69,7 +75,7 @@ ASK_SCHEMA = {
         },
         "ttl_seconds": {"type": "number", "exclusiveMinimum": 0},
     },
-    "required": ["title", "why", "only_you", "tried"],
+    "required": ["title", "why"],
 }
 
 

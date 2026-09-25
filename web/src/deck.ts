@@ -21,7 +21,7 @@ export type Values = Record<string, FieldValue>
 /** field name → send-back note ('' = no note yet). */
 export type Bounced = Record<string, string>
 
-export interface Choice { value: string; label: string }
+export interface Choice { value: string; label: string; description?: string }
 
 export interface Field {
   name: string
@@ -37,13 +37,14 @@ export interface Field {
   placeholder?: string
   recommend?: { value: FieldValue; why: string }
   must_decide?: boolean
+  step?: number
 }
 
 export interface Ask {
   ticket: string
   revision: number
   kind: 'file' | 'park'
-  purpose: 'blocker' | 'decision' | 'consent' | 'spend' | 'message'
+  purpose: 'blocker' | 'decision' | 'question' | 'consent' | 'spend' | 'message' | 'permission'
   gating: boolean
   status: string
   title: string
@@ -51,6 +52,11 @@ export interface Ask {
   project?: string
   fields: Field[]
   steps?: string[]
+  summary?: string
+  minutes?: number
+  after?: string
+  blocks?: string[]
+  permission?: { tool: string; command?: string; path?: string; summary: string }
   tried?: string[]
   only_you?: string | null
   links?: { label: string; url: string }[]
@@ -116,7 +122,8 @@ export const selectDeck: (input: {
   doneProjects?: string[]
 }) => Selection = selectDeckJs
 
-export function askKind(ask: Ask): 'key' | 'click' | 'decision' | 'consent' | 'spend' | 'message' {
+export function askKind(ask: Ask): 'key' | 'click' | 'decision' | 'question'
+  | 'consent' | 'spend' | 'message' | 'permission' {
   if (ask.purpose !== 'blocker') return ask.purpose
   return ask.fields.some((field) => field.type === 'secret') ? 'key' : 'click'
 }

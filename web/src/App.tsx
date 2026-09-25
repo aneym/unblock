@@ -18,14 +18,16 @@ function QueueRow({ ask, active, choose }: { ask: Ask; active: boolean; choose: 
   return (
     <button
       id={`ask-tab-${encodeURIComponent(ask.ticket)}`} type="button"
-      className={`queue-row${active ? ' selected' : ''}`}
+      className={`queue-row kind-${askKind(ask)}${active ? ' selected' : ''}`}
       aria-current={active ? 'true' : undefined} onClick={() => choose(ask.ticket)}
     >
       <span className="row-heading">
-        <Icon name={askKind(ask)} size={20} />
+        <span className="kind-label"><Icon name={askKind(ask)} size={16} /> {askKind(ask)}</span>
         <span className="row-title"><PlainText text={ask.title} /></span>
       </span>
-      <span className="row-meta">{groupOf(ask)} · waiting {ago(ask.created_at)}</span>
+      <span className="row-meta">{groupOf(ask)} · {ask.minutes && `~${ask.minutes} min · `}
+        waiting {ago(ask.created_at)}
+      </span>
     </button>
   )
 }
@@ -56,40 +58,36 @@ function AskList({ asks, choose, showAnswered }: {
       <button className="text-button" type="button" onClick={showAnswered}>Show answered</button>
     </main>
   )
-  const [next, ...also] = [...asks].sort((a, b) =>
-    Number(b.kind === 'park') - Number(a.kind === 'park') || a.created_at - b.created_at)
+  const [first, ...others] = asks
+  const renderRow = (ask: Ask, expanded: boolean) => (
+    <div className={`list-entry kind-${askKind(ask)}${expanded ? ' expanded' : ''}`} key={ask.ticket}>
+      <button className="list-row" type="button" onClick={() => choose(ask.ticket)}>
+        <span className="kind-label"><Icon name={askKind(ask)} size={16} /> {askKind(ask)}</span>
+        <span className="list-row-copy">
+          <span className="list-row-title"><PlainText text={ask.title} /></span>
+          <span className="ask-meta">{groupOf(ask)} · {ask.minutes && `~${ask.minutes} min · `}
+            waiting {ago(ask.created_at)}
+          </span>
+          {ask.kind === 'park' ? (
+            <span className="status-pill paused"><Icon name="park" size={14} /> Agent paused</span>
+          ) : !!ask.blocks?.length && (
+            <span className="ask-meta">unblocks: <PlainText text={ask.blocks.join(', ')} /></span>
+          )}
+        </span>
+        <span className="row-answer">Answer →</span>
+      </button>
+      {expanded && (
+        <div className="list-focal">
+          <p>{ask.minutes && `~${ask.minutes} min · `}<ChipText text={ask.summary || whyLead(ask.why)} /></p>
+          <button className="primary" type="button" onClick={() => choose(ask.ticket)}>Answer →</button>
+        </div>
+      )}
+    </div>
+  )
   return (
     <main className="list-page">
-      <h1 className="list-title">Next up</h1>
-      <section className="next-card">
-        <span className="kind-label"><Icon name={askKind(next)} size={20} /> {askKind(next)}</span>
-        <h2><PlainText text={next.title} /></h2>
-        <p><ChipText text={whyLead(next.why)} /></p>
-        <div className="ask-meta">{groupOf(next)} · {ago(next.created_at)} ago · {next.origin.agent || 'agent'}</div>
-        <div className="next-actions">
-          <button className="primary" type="button" onClick={() => choose(next.ticket)}>Answer →</button>
-          {(askKind(next) === 'key' || askKind(next) === 'click') && next.links?.[0] && (
-            <a className="secondary" href={next.links[0].url} target="_blank" rel="noopener noreferrer">
-              <PlainText text={next.links[0].label} /> ↗
-            </a>
-          )}
-        </div>
-      </section>
-      {!!also.length && (
-        <section className="also-waiting">
-          <h2 className="section-label">Also waiting ({also.length})</h2>
-          {also.map((ask) => (
-            <button className="list-row" type="button" key={ask.ticket} onClick={() => choose(ask.ticket)}>
-              <Icon name={askKind(ask)} size={20} />
-              <span className="list-row-copy">
-                <span className="list-row-title"><PlainText text={ask.title} /></span>
-                <span className="ask-meta">{groupOf(ask)} · waiting {ago(ask.created_at)}</span>
-              </span>
-              <span className="row-answer">Answer →</span>
-            </button>
-          ))}
-        </section>
-      )}
+      {renderRow(first, true)}
+      {others.map((ask) => renderRow(ask, false))}
     </main>
   )
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Chip, ChipText, PlainText } from './ChipText'
 import { Icon } from './icons'
-import { isMissing, type Field, type FieldValue } from './deck'
+import { type Field, type FieldValue } from './deck'
 
 type ChangeFn = (name: string, value: FieldValue, isSecret?: boolean) => void
 
@@ -60,6 +60,9 @@ function ChoiceControl({ field, value, onChange, disabled, showOther }: {
                 <span><PlainText text={choice.label} /></span>
                 {recommended && <span className="recommend-badge">Recommended</span>}
               </span>
+              {choice.description && (
+                <span className="choice-description"><ChipText text={choice.description} /></span>
+              )}
               {recommended && field.recommend?.why && (
                 <span className="recommend-why"><ChipText text={field.recommend.why} /></span>
               )}
@@ -153,6 +156,10 @@ export function FieldControl({
   onChange,
   disabled,
   topUrl,
+  onSkip,
+  onBounce,
+  note,
+  onNoteChange,
 }: {
   field: Field
   ticket: string
@@ -160,8 +167,16 @@ export function FieldControl({
   onChange: ChangeFn
   disabled: boolean
   topUrl?: string
+  onSkip: (name: string) => void
+  onBounce: (name: string, note: string) => void
+  note: string
+  onNoteChange: (name: string, note: string) => void
 }) {
   const id = `f_${ticket}_${field.name}`
+  const [menu, setMenu] = useState(false)
+  const [showNote, setShowNote] = useState(!!note)
+  const [showBounce, setShowBounce] = useState(false)
+  const [bounceNote, setBounceNote] = useState('')
 
   const declared = new Set((field.choices || []).map((choice) => choice.value))
   const [showOther, setShowOther] = useState(() => Array.isArray(value)
@@ -178,7 +193,44 @@ export function FieldControl({
           <span className="muted decide"><Icon name="diamond" /> You decide</span>
         )}
         {field.url && field.url !== topUrl && <Chip url={field.url} className="screen-link" />}
+        <div className="field-menu-anchor">
+          <button
+            type="button" className="field-menu-trigger" aria-label={`Options for ${field.label}`}
+            aria-expanded={menu} onClick={() => setMenu(!menu)} disabled={disabled}
+          >⋯</button>
+          {menu && (
+            <div className="menu-popover field-menu">
+              <button
+                type="button" disabled={field.must_decide}
+                title={field.must_decide ? 'This question needs your choice' : undefined}
+                onClick={() => { onSkip(field.name); setMenu(false) }}
+              >Skip</button>
+              <button type="button" onClick={() => { setShowNote(true); setMenu(false) }}>Add a note</button>
+              <button type="button" onClick={() => { setShowBounce(true); setMenu(false) }}>Send back</button>
+            </div>
+          )}
+        </div>
       </div>
+      {showNote && (
+        <textarea
+          className="control field-note" aria-label={`Note for ${field.label}`}
+          value={note} onChange={(event) => onNoteChange(field.name, event.target.value)}
+          disabled={disabled} placeholder="Context for this answer"
+        />
+      )}
+      {showBounce && (
+        <div className="field-bounce">
+          <textarea
+            className="control" aria-label={`Send back ${field.label}`}
+            placeholder="What should change?" value={bounceNote}
+            onChange={(event) => setBounceNote(event.target.value)} disabled={disabled}
+          />
+          <button
+            className="secondary" type="button" disabled={disabled}
+            onClick={() => { onBounce(field.name, bounceNote); setShowBounce(false) }}
+          >Send back</button>
+        </div>
+      )}
       {field.help && field.type !== 'confirm' && (
         <p className="field-help"><ChipText text={field.help} /></p>
       )}

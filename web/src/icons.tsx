@@ -1,13 +1,16 @@
 import type { ReactNode } from 'react'
 import type { Ask } from './deck'
 
-type Name = 'key' | 'click' | 'decision' | 'consent' | 'spend' | 'message'
-  | 'waiting' | 'answered' | 'park' | 'draft' | 'sent' | 'detected' | 'lock' | 'diamond'
+type Name = 'key' | 'click' | 'decision' | 'question' | 'permission' | 'consent' | 'spend' | 'message'
+  | 'waiting' | 'answered' | 'park' | 'draft' | 'sent' | 'detected' | 'lock' | 'diamond' | 'arrow'
 export function Icon({ name, size = 18 }: { name: Name; size?: number }) {
   const paths: Record<Name, ReactNode> = {
     key: <><circle cx="7" cy="8" r="4" /><path d="m10 11 9 9m-3-3 2-2m-5-1 2-2" /></>,
     click: <><path d="m5 3 1 14 3-3 3 6 3-2-3-6 5-.5zM4 1 2 0m8 0 1-2" /></>,
     decision: <><path d="M12 21V4m0 5H5l-2-2 2-2h7m0 1h7l2 2-2 2h-7" /></>,
+    question: <><circle cx="12" cy="12" r="10" /><path d="M9 9a3 3 0 1 1 5 2l-2 2v1m0 3h.01" /></>,
+    permission: <><path d="M12 2 4 5v6c0 5 3 8 8 11 5-3 8-6 8-11V5z" /><path d="M12 8v5m0 3h.01" /></>,
+    arrow: <path d="M4 12h15m-6-6 6 6-6 6" />,
     consent: <><path d="M12 2 4 5v6c0 5 3 8 8 11 5-3 8-6 8-11V5z" /><path d="m8 12 3 3 5-6" /></>,
     spend: <><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 9h20m-16 7h4" /></>,
     message: <path d="M21 15a3 3 0 0 1-3 3H9l-5 4v-4a3 3 0 0 1-2-3V5a3 3 0 0 1 3-3h13a3 3 0 0 1 3 3z" />,

@@ -359,16 +359,20 @@ export async function startDaemon({ port } = {}) {
     return ask
   }
 
-  async function bounceAsk(ticket, reply) {
-  if (APPROVAL_PURPOSES.includes(store.get(ticket)?.purpose)) { const error = new Error("choose a verdict on the page"); error.code = "INVALID_VERDICT"; throw error }
-  // The note is optional. Requiring one greyed out the send-back button until
-  // the human wrote an essay, which made rejecting a bad ask harder than
-  // rubber-stamping it. A bounce with no note still tells the agent the ask
-  // itself was wrong.
-  const ask = store.bounce(ticket, optionalScrub(reply, 1000))
-  emitAsk(ask, 'sent_back')
-  return { ask, complete: true, bounced: true }
-}
+  async function bounceAsk(ticket, reply, answeredVia, revision, fieldBounce) {
+    const ask = store.get(ticket)
+    if (!ask) return null
+    if (APPROVAL_PURPOSES.includes(ask.purpose)) {
+      const error = (code, message, status) => { const err = new Error(message); err.code = code; err.status = status; throw err }
+      if (revision !== ask.revision) error('STALE_REVISION', 'The agent changed this ask. Check it again.', 409)
+      if (!answeredVia || answeredVia === 'local' || answeredVia === 'share-link:local') error('HUMAN_ONLY', 'answer this on the page', 403)
+      if (fieldBounce && Object.keys(fieldBounce).length) error('WHOLE_ASK_ONLY', 'send the entire ask back', 400)
+      if (typeof reply !== 'string' || !reply.trim()) error('WHOLE_ASK_ONLY', 'send the entire ask back with a note', 400)
+    }
+    const bounced = store.bounce(ticket, optionalScrub(reply, 1000))
+    emitAsk(bounced, 'sent_back')
+    return { ask: bounced, complete: true, bounced: true }
+  }
 
 /**
  * Per-field context typed by the human. It arrives outside validateAsk, so it
@@ -518,7 +522,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         return sendJson(res, 200, { ask: applyDraft(ticket, body, `share-link:${link.minted_by}`) })
       }
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply)
+        ? await bounceAsk(ticket, body.reply, `share-link:${link.minted_by}`, body.revision, body.field_bounce)
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
@@ -649,13 +653,18 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'invalid PNG file' })
           bytes = Buffer.allocUnsafe(5 * 1024 * 1024 + 1); const size = readSync(fd, bytes, 0, bytes.length, 0); bytes = bytes.subarray(0, size) }
         finally { closeSync(fd) }
-        if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return sendJson(res, 400, { error: 'invalid PNG file' })
+        if (bytes.length > 5 * 1024 * 1024 || bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return sendJson(res, 400, { error: 'invalid PNG file' })
         images.push([name, bytes]); data[name] = true
       }
       const dir = join(stateDir(), 'receipts', ticket)
-      mkdirSync(dir, { recursive: true, mode: 0o700 })
-      chmodSync(join(stateDir(), 'receipts'), 0o700)
-      chmodSync(dir, 0o700)
+      const root = join(stateDir(), 'receipts')
+      // lstat before chmod or writing: neither directory may redirect to another tree.
+      for (const directory of [root, dir]) {
+        try { mkdirSync(directory, { mode: 0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+        const info = lstatSync(directory)
+        if (info.isSymbolicLink() || !info.isDirectory()) return sendJson(res, 400, { error: 'invalid receipt directory' })
+        chmodSync(directory, 0o700)
+      }
       for (const [name, bytes] of images) {
         const target = join(dir, `${name}.png`)
         const temporary = `${target}.tmp`
@@ -689,7 +698,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply)
+        ? await bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce)
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       if (!result) return notFound(res)
       emitQueue()
@@ -820,7 +829,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
-        ? await bounceAsk(body.ticket, body.reply)
+        ? await bounceAsk(body.ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce)
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       emitQueue()
       return sendJson(res, 200, result)
@@ -855,7 +864,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
-      if (['HUMAN_ONLY', 'STALE_REVISION', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code })
+      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }
