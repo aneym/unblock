@@ -245,6 +245,14 @@ function validateField(raw, index, seen, purpose = 'blocker') {
   return field
 }
 
+function triedFromString(text) {
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed
+  } catch { /* one plain line */ }
+  return text.trim() === '' ? [] : [text]
+}
+
 /**
  * Validate an incoming ask registration. Returns a normalized ask body
  * (without ids or timestamps — the store adds those).
@@ -268,6 +276,10 @@ export function validateAsk(raw) {
   // so its agent never learns these two keys exist. Name every missing one in
   // one error and say how to get them through: that old handler forwards extra
   // arguments unchanged, and the CLI takes the same JSON.
+  // An undeclared argument reaches us as a string: Claude sends `tried` as the
+  // JSON text of the list, or as one plain line. Take either form; the length
+  // and duplicate rules below still apply to every line.
+  if (typeof raw.tried === 'string') raw = { ...raw, tried: triedFromString(raw.tried) }
   const missing = ['tried', 'only_you'].filter((key) => raw[key] === undefined || raw[key] === null || (key === 'tried' && Array.isArray(raw.tried) && raw.tried.length === 0))
   if (missing.length) {
     throw new ValidationError(

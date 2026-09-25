@@ -113,4 +113,7 @@ test('only-human filing gate accepts real blockers and decisions and rejects inc
   // A caller on an MCP server started before the gate sends neither key; the
   // one error must name both and the way through, or it cannot recover.
   assert.throws(() => validateAsk({ ...base, tried: undefined, only_you: undefined }), /missing tried and only_you.*extra arguments.*unblock file -/)
+  // What Claude actually sends through that older tool: the list as JSON text, or one line.
+  const line = 'Ran the CLI and the API; neither can make this call for the human.'
+  for (const tried of [JSON.stringify([line]), line]) assert.deepEqual(validateAsk({ ...base, tried }).tried, [line])
 })
