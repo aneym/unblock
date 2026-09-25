@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { openSync, closeSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { entryPath, log, readEntry, registryDir, remove, request } from './lib.js'
+import { entryPath, log, permissionVerdict, readEntry, registryDir, remove, request } from './lib.js'
 
 const ticket = process.argv[2]
 if (!/^ub_[a-z0-9]+$/.test(ticket || '') || !readEntry(ticket)) process.exit(0)
@@ -84,9 +84,8 @@ async function deliverPermission(ask, entry) {
     await collect()
     return true
   }
-  // A permission ask's verdict carries the passkey gate; the v1 decision field exists only on a pre-v2 daemon.
-  const value = ask.purpose === 'permission' ? ask.answers?.verdict : ask.answers?.decision
-  if (!['allow_once', 'deny'].includes(value) || typeof value !== 'string') {
+  const value = permissionVerdict(ask)
+  if (!value) {
     log('permission answer is not a valid decision; no keys sent')
     await collect()
     return true

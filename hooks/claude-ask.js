@@ -34,8 +34,10 @@ try {
       why: `Claude asked this in ${source.workspace_name || 'a herdr pane'} instead of guessing. It keeps working on anything that does not depend on the answer; your answer is typed into its pane.`,
       ttl_seconds: 86400,
     }
-    const modernFields = fields.map((field, i) => ({
+    // v2 questions take a recommendation only when the agent marked one; v1 decisions always need one.
+    const modernFields = fields.map(({ recommend, ...field }, i) => ({
       ...field,
+      ...(questions[i].options.some((o) => /\s*\(Recommended\)$/i.test(o.label)) ? { recommend } : {}),
       help: field.label !== plainify(questions[i].question) ? cut(plainify(questions[i].question), 600) : undefined,
       choices: field.choices.map((choice, n) => ({
         ...choice,
@@ -43,7 +45,7 @@ try {
       })),
     }))
     const { ticket } = await fileFirst([
-      { ...common, purpose: 'question', summary: cut(plainify(`Claude asks: ${questions[0].question}`), 140), fields: modernFields },
+      { ...common, purpose: 'question', summary: cut(questions.length === 1 ? `Claude asks: ${common.title}` : common.title, 140), fields: modernFields },
       { ...common, purpose: 'decision', only_you: 'judgment',
         tried: ['Claude raised this in its question dialog instead of guessing; the dialog was routed here so it can keep working meanwhile.'], fields },
     ], source)

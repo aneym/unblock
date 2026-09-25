@@ -5,7 +5,7 @@ import { entries, eligible, fileFirst, UNKNOWN_PURPOSE, log, origin, plainify, p
 const timer = setTimeout(() => process.exit(0), 3800)
 try {
   const input = JSON.parse(readFileSync(0, 'utf8'))
-  if (eligible(input)) {
+  if (eligible(input) && input.tool_name) {
     const source = await origin()
     const pane = source.pane_id
     const tool = input.tool_name || ''
@@ -31,7 +31,7 @@ try {
       why: 'Claude stopped at a permission prompt and is waiting. Allow once presses Yes in its terminal; Deny presses Escape and tells it to find another way. Nothing here changes its permission settings.',
       permission: {
         tool,
-        ...(command == null ? {} : { command: cut(redact(String(command)), 2000) }),
+        ...(command == null || !String(command).trim() ? {} : { command: cut(redact(String(command)), 2000) }),
         ...(fileTool && (data.file_path || data.notebook_path) ? { path: data.file_path || data.notebook_path } : {}),
         summary: cut(plainify(`${toolSummary} in ${workspace}`), 200),
       },
