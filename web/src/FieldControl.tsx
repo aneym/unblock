@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Linkify } from './lib/linkify'
+import { Chip, ChipText, PlainText } from './ChipText'
 import { Icon } from './icons'
 import { isMissing, type Field, type FieldValue } from './deck'
 
@@ -57,11 +57,11 @@ function ChoiceControl({ field, value, onChange, disabled, showOther }: {
             />
             <span className="choice-content">
               <span className="choice-line">
-                <span><Linkify text={choice.label} /></span>
+                <span><PlainText text={choice.label} /></span>
                 {recommended && <span className="recommend-badge">Recommended</span>}
               </span>
               {recommended && field.recommend?.why && (
-                <span className="recommend-why"><Linkify text={field.recommend.why} /></span>
+                <span className="recommend-why"><ChipText text={field.recommend.why} /></span>
               )}
             </span>
           </label>
@@ -146,76 +146,41 @@ function PasteControl({ id, name, command, value, onChange, disabled }: {
   )
 }
 
-function QuietActions({
-  field, value, note, bounced, onChange, onToggleNote, onToggleOther, onBounce, disabled,
-}: {
-  field: Field; value: FieldValue | undefined; note: boolean; bounced: boolean
-  onChange: ChangeFn; onToggleNote: () => void; onToggleOther: () => void
-  onBounce: (name: string, note: string | null) => void; disabled: boolean
-}) {
-  return (
-    <div className="quiet-actions">
-      {field.type === 'choice' && (
-        <button type="button" onClick={onToggleOther}>Other answer</button>
-      )}
-      {!field.must_decide && (
-        <button type="button" onClick={() => onChange(field.name, value === null ? '' : null)}>
-          {value === null ? 'Keep the question' : 'Skip'}
-        </button>
-      )}
-      <button type="button" onClick={onToggleNote}>{note ? 'Hide note' : 'Add a note'}</button>
-      <button type="button" disabled={disabled} onClick={() => onBounce(field.name, bounced ? null : '')}>
-        {bounced ? 'Keep the question' : 'Send back'}
-      </button>
-    </div>
-  )
-}
-
 export function FieldControl({
   field,
   ticket,
   value,
-  note,
-  bounceNote,
   onChange,
-  onNoteChange,
-  onBounce,
   disabled,
+  topUrl,
 }: {
   field: Field
   ticket: string
   value: FieldValue | undefined
-  note: string | undefined
-  bounceNote: string | undefined
   onChange: ChangeFn
-  onNoteChange: (name: string, note: string) => void
-  onBounce: (name: string, note: string | null) => void
   disabled: boolean
+  topUrl?: string
 }) {
   const id = `f_${ticket}_${field.name}`
-  const [showNote, setShowNote] = useState(!!note)
+
   const declared = new Set((field.choices || []).map((choice) => choice.value))
   const [showOther, setShowOther] = useState(() => Array.isArray(value)
     ? value.some((item) => !declared.has(item))
     : typeof value === 'string' && !!value && !declared.has(value))
-  const bounced = bounceNote !== undefined
+  const hero = field.type === 'secret'
 
   return (
-    <div className="question">
+    <div className={`question${hero ? ' secret-hero' : ''}`}>
       <div className="question-heading">
-        <label htmlFor={id}><Linkify text={field.label} /></label>
+        <label htmlFor={id}><ChipText text={field.label} /></label>
         {!field.required && <span className="muted">optional</span>}
         {field.must_decide && (
           <span className="muted decide"><Icon name="diamond" /> You decide</span>
         )}
-        {field.url && (
-          <a href={field.url} target="_blank" rel="noopener noreferrer" className="screen-link">
-            Open the screen ↗
-          </a>
-        )}
+        {field.url && field.url !== topUrl && <Chip url={field.url} className="screen-link" />}
       </div>
       {field.help && field.type !== 'confirm' && (
-        <p className="field-help"><Linkify text={field.help} /></p>
+        <p className="field-help"><ChipText text={field.help} /></p>
       )}
       {field.type === 'choice' ? (
         <ChoiceControl
@@ -268,49 +233,13 @@ export function FieldControl({
       )}
       {field.recommend && !field.must_decide && field.type !== 'choice' && (
         <p className="field-help">
-          Recommended: {recommendLabel(field)} · <Linkify text={field.recommend.why} />
+          Recommended: {recommendLabel(field)} · <ChipText text={field.recommend.why} />
         </p>
       )}
-      <QuietActions
-        field={field}
-        value={value}
-        note={showNote}
-        bounced={bounced}
-        onChange={onChange}
-        onToggleNote={() => setShowNote(!showNote)}
-        onToggleOther={() => setShowOther(!showOther)}
-        onBounce={onBounce}
-        disabled={disabled}
-      />
-      {showNote && (
-        <textarea
-          className="control note"
-          aria-label={`Note for ${field.label}`}
-          placeholder="Context for this answer (optional)"
-          value={note || ''}
-          disabled={disabled}
-          onChange={(event) => onNoteChange(field.name, event.target.value)}
-        />
-      )}
-      {bounced && (
-        <div className="bounce-box">
-          <p>
-            {isMissing(value)
-              ? 'Going back unanswered — the agent will rework this question.'
-              : 'Your answer goes with it as a draft. The agent will come back to you before acting on it.'}
-          </p>
-          <textarea
-            className="control"
-            aria-label={`Send back note for ${field.label}`}
-            placeholder="What should change? (optional)"
-            value={bounceNote}
-            disabled={disabled}
-            onChange={(event) => onBounce(field.name, event.target.value)}
-          />
-          <button type="button" className="text-button" onClick={() => onBounce(field.name, null)}>
-            Keep the question
-          </button>
-        </div>
+      {field.type === 'choice' && (
+        <button className="text-button other-link" type="button" onClick={() => setShowOther(!showOther)}>
+          Other answer
+        </button>
       )}
     </div>
   )

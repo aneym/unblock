@@ -1,246 +1,140 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Linkify } from './lib/linkify'
-import { Icon, stateOf } from './icons'
 import { api, BASE, FinishedError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
+import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type Values } from './deck'
 import { FieldControl } from './FieldControl'
-import { ago, groupOf, isMissing, type Ask, type Bounced, type FieldValue, type Values } from './deck'
+import { Icon } from './icons'
+import { Chip, ChipText, PlainText } from './ChipText'
 
 const onlyYou: Record<string, string> = {
-  credential: 'Your sign-in or key',
-  their_account: 'A click in your account',
-  spend: 'Spending or a new account',
-  message: 'A message from you',
-  judgment: 'Your call',
+  credential: 'your sign-in or key', their_account: 'a click in your account',
+  spend: 'money', message: 'a message from you', judgment: 'your call',
 }
-
-/**
- * Navigate to a custom-scheme URL without touching the page. A plain anchor
- * click makes some Chromium shells open an about:blank tab when no OS handler
- * answers; a throwaway iframe fires the handler with no navigation either way.
- */
-function openExternalScheme(href: string) {
+const labels = {
+  key: 'Send', click: 'Send', decision: 'Send decision', consent: 'Approve: do it for me',
+  spend: 'Approve payment', message: 'Approve and send',
+}
+function firstSentence(text: string) {
+  const sentence = text.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] || text
+  return sentence.length > 180 ? `${sentence.slice(0, 179).trimEnd()}…` : sentence
+}
+function money(cents: number, currency: string) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100)
+}
+function openPane(href: string) {
   const frame = document.createElement('iframe')
   frame.style.display = 'none'
   frame.src = href
   document.body.appendChild(frame)
   window.setTimeout(() => frame.remove(), 2000)
 }
-
-function Properties({ ask, herdrHref, topLinks }: {
-  ask: Ask
-  herdrHref: string | undefined
-  topLinks: { label: string; url: string }[]
+function Checklist({ ticket, steps, readOnly = false, filled = false }: {
+  ticket: string; steps: string[]; readOnly?: boolean; filled?: boolean
 }) {
-  const status = stateOf(ask)
+  const key = `ub_steps_${ticket}`
+  const [checked, setChecked] = useState<number[]>(() => {
+    try { return JSON.parse(localStorage.getItem(key) || '[]') as number[] } catch { return [] }
+  })
+  const toggle = (index: number) => {
+    const next = checked.includes(index) ? checked.filter((item) => item !== index) : [...checked, index]
+    setChecked(next)
+    try { localStorage.setItem(key, JSON.stringify(next)) } catch { /* private mode */ }
+  }
   return (
-    <div className="properties">
-      <div className="property">
-        <span className="property-label">Status</span>
-        <span className="property-value">
-          <Icon name={status.name} /> {status.label}{' '}
-          <span className="muted">
-            · {ask.gating ? 'the agent waits for you' : 'the agent keeps working'}
-          </span>
-        </span>
-      </div>
-      {ask.only_you && (
-        <div className="property">
-          <span className="property-label">Needs you for</span>
-          <span className="property-value">{onlyYou[ask.only_you] || ask.only_you}</span>
-        </div>
-      )}
-      <div className="property">
-        <span className="property-label">Asked by</span>
-        <span className="property-value">
-          {ask.origin.agent || 'agent'}{' '}
-          {herdrHref && (
-            <>
-              <span className="muted">·</span>{' '}
-              <a
-                href={herdrHref}
-                className="mono pane-link"
-                onClick={(event) => { event.preventDefault(); openExternalScheme(herdrHref) }}
-              >
-                {ask.origin.pane_id}
-              </a>
-            </>
-          )}{' '}
-          <span className="muted">· {ago(ask.created_at)} ago</span>
-        </span>
-      </div>
-      {!!topLinks.length && (
-        <div className="property">
-          <span className="property-label">Links</span>
-          <span className="property-value links">
-            {topLinks.map((link) => {
-              const isHttp = /^https?:/i.test(link.url)
-              return (
-                <a
-                  key={link.url}
-                  href={link.url}
-                  target={isHttp ? '_blank' : undefined}
-                  rel="noopener noreferrer"
-                  onClick={isHttp ? undefined : (event) => {
-                    event.preventDefault(); openExternalScheme(link.url)
-                  }}
-                >
-                  {link.label} ↗
-                </a>
-              )
-            })}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ActionBar({
-  isDecision, hardMissing, isBusy, submit, hasRecommendations, useRecommendations,
-  armed, onSendBack, statusHint, hasError,
-}: {
-  isDecision: boolean; hardMissing: string[]; isBusy: boolean; submit: () => void
-  hasRecommendations: boolean; useRecommendations: () => void
-  armed: boolean; onSendBack: () => void; statusHint: string; hasError: boolean
-}) {
-  return (
-    <div className="action-bar">
-      <button className="primary" disabled={hardMissing.length > 0 || isBusy} onClick={submit}>
-        {isDecision ? 'Send decision' : 'Send answer'}
-      </button>
-      <div className="action-secondary">
-        {hasRecommendations && (
-          <button className="secondary" disabled={isBusy} onClick={useRecommendations}>
-            Use recommendations
-          </button>
-        )}
-        <button className="text-button" disabled={isBusy} onClick={onSendBack}>
-          {armed ? 'Confirm send back?' : 'Send back…'}
-        </button>
-      </div>
-      <span className={`action-status${hasError ? ' error' : ''}`} role="status">{statusHint}</span>
-    </div>
+    <ol className={`checklist${readOnly ? ' numbered' : ''}`}>
+      {steps.map((step, index) => (
+        <li key={index}>
+          {readOnly ? (
+            <span className={`step-check${filled ? ' ticked' : ''}`} aria-hidden="true">
+              {filled ? <Icon name="answered" size={13} /> : index + 1}
+            </span>
+          ) : (
+            <button
+              type="button" className={`step-check${checked.includes(index) ? ' ticked' : ''}`}
+              aria-label={`Mark step ${index + 1} ${checked.includes(index) ? 'incomplete' : 'complete'}`}
+              aria-pressed={checked.includes(index)} onClick={() => toggle(index)}
+            >
+              {checked.includes(index) && <Icon name="answered" size={13} />}
+            </button>
+          )}
+          <span><ChipText text={step} /></span>
+        </li>
+      ))}
+    </ol>
   )
 }
 
 export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void }) {
-  /**
-   * Seed once per ticket: server draft first, then the local mirror on top
-   * when it is newer than what the daemon has. Later polls replace the `ask`
-   * prop but must never clobber what is being typed.
-   */
-  const seeded = useMemo(() => {
-    const base = {
-      values: { ...(ask.draft || {}) } as Values,
-      notes: { ...(ask.field_context || {}) },
-      reply: ask.draft_reply || '',
-      bounced: {} as Bounced,
-    }
-    const local = readLocal(ask.ticket)
-    if (local && local.t > (ask.draft_updated_at || 0)) {
-      return {
-        values: { ...base.values, ...(local.values || {}) },
-        notes: { ...base.notes, ...(local.notes || {}) },
-        reply: local.reply || base.reply,
-        bounced: local.bounced || {},
-      }
-    }
-    return base
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ask.ticket])
-  const [values, setValues] = useState<Values>(seeded.values)
-  const [notes, setNotes] = useState<Record<string, string>>(seeded.notes)
-  const [reply, setReply] = useState(seeded.reply)
-  const [bounced, setBounced] = useState<Bounced>(seeded.bounced)
-  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
-  const [message, setMessage] = useState('')
-  const [draftState, setDraftState] = useState<'idle' | 'saving' | 'saved' | 'offline'>('idle')
-  // Sending the whole ask back discards every answer on the card and cannot be
-  // undone, and it sits next to the primary button. One click arms it, a
-  // second sends it. Nothing else on the card is destructive enough to need
-  // this, and nothing else gets it.
-  const [armed, setArmed] = useState(false)
-  const [showReply, setShowReply] = useState(!!seeded.reply)
-  useEffect(() => {
-    if (!armed) return
-    const timer = window.setTimeout(() => setArmed(false), 4000)
-    return () => window.clearTimeout(timer)
-  }, [armed])
-  const draftTimer = useRef<number | undefined>(undefined)
-  const completed = useRef(false)
-  const latest = useRef({
-    values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
-  })
-  // Only known, non-secret field names ever leave memory: an unexpected key
-  // is dropped rather than trusted, so a mis-keyed secret cannot persist.
+  const kind = askKind(ask)
   const draftNames = useMemo(
     () => new Set(ask.fields.filter((field) => field.type !== 'secret').map((field) => field.name)),
     [ask.fields],
   )
+  const safeValues = (raw: Values): Values =>
+    Object.fromEntries(Object.entries(raw).filter(([name]) => draftNames.has(name)))
+  const seeded = useMemo(() => {
+    const local = readLocal(ask.ticket)
+    const useLocal = local && local.t > (ask.draft_updated_at || 0)
+    return {
+      values: { ...safeValues(ask.draft || {}), ...(useLocal ? safeValues(local.values || {}) : {}) },
+      notes: { ...(ask.field_context || {}), ...(useLocal ? local.notes : {}) },
+      reply: useLocal ? local.reply : ask.draft_reply || '',
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask.ticket])
+  const [values, setValues] = useState<Values>(seeded.values)
+  const [notes] = useState(seeded.notes)
+  const [reply, setReply] = useState(seeded.reply)
+  const [showReply, setShowReply] = useState(!!seeded.reply)
+  const [showPlanNote, setShowPlanNote] = useState(!!seeded.values.note)
+  const [editing, setEditing] = useState(!!seeded.values.edited_text)
+  const [menu, setMenu] = useState(false)
+  const [sendBackOpen, setSendBackOpen] = useState(false)
+  const [backNote, setBackNote] = useState('')
+  const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
+  const [status, setStatus] = useState('')
+  const [draftState, setDraftState] = useState('')
+  const timer = useRef<number | undefined>(undefined)
+  const completed = useRef(false)
+  const latest = useRef({ values: seeded.values, notes: seeded.notes, reply: seeded.reply })
   const unanswered = ask.fields.filter((field) => !(field.name in (ask.answers || {})))
-  const missing = unanswered
-    .filter((field) => !(field.name in bounced) && field.required && isMissing(values[field.name]))
-    .map((field) => field.label)
-  // Only must_decide fields hard-block the submit — and sending one back
-  // counts as engaging with it. Everything else left blank is sent as an
-  // explicit skip (null), a real "no answer" the agent acts on.
-  const hardMissing = unanswered
-    .filter((field) => field.must_decide && !(field.name in bounced) && isMissing(values[field.name]))
-    .map((field) => field.label)
+  const hardMissing = unanswered.filter(
+    (field) => field.must_decide && isMissing(values[field.name]),
+  )
   const detected = ask.origin.detected === true
-  const isDecision = ask.purpose === 'decision'
-
-  const safeValues = (raw: Values) =>
-    Object.fromEntries(Object.entries(raw).filter(([key]) => draftNames.has(key)))
-
-  /**
-   * Every change lands in localStorage synchronously, then the server draft
-   * follows on a short debounce.
-   *
-   * Short on purpose: an agent watching this ask reads the drafts to decide
-   * what to ask next, so a single choice click has to reach the daemon while
-   * the human is still on the question, not after they have moved on.
-   */
+  const isBusy = state === 'sending' || state === 'done'
+  const answered = ask.status === 'answered'
+  const herdrHref = ask.origin.pane_id
+    ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}`
+      + (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '')
+      + (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
+    : undefined
+  const topLink = ask.links?.[0]
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
-    const safe = safeValues(merged.values)
-    writeLocal(ask.ticket, {
-      values: safe, notes: merged.notes, reply: merged.reply, bounced: merged.bounced,
-    })
-    window.clearTimeout(draftTimer.current)
-    setDraftState('saving')
-    draftTimer.current = window.setTimeout(() => {
-      draftTimer.current = undefined
-      api('/api/draft', {
-        ticket: ask.ticket,
-        values: safeValues(merged.values),
-        field_context: merged.notes,
-        reply: merged.reply,
-      })
-        .then(() => setDraftState('saved'))
-        .catch(() => setDraftState('offline'))
+    writeLocal(ask.ticket, { values: safeValues(merged.values), notes: merged.notes, reply: merged.reply, bounced: {} })
+    window.clearTimeout(timer.current)
+    setDraftState('Saving draft…')
+    timer.current = window.setTimeout(() => {
+      timer.current = undefined
+      void api('/api/draft', {
+        ticket: ask.ticket, values: safeValues(merged.values),
+        field_context: merged.notes, reply: merged.reply,
+      }).then(() => setDraftState('Draft saved')).catch(() => setDraftState('Draft kept in this browser'))
     }, 300)
   }
-
-  /** Leaving the page flushes a pending draft without waiting on the network. */
   useEffect(() => {
     const flush = () => {
-      if (draftTimer.current === undefined || completed.current) return
-      window.clearTimeout(draftTimer.current)
-      draftTimer.current = undefined
+      if (timer.current === undefined || completed.current) return
+      window.clearTimeout(timer.current)
+      timer.current = undefined
       const merged = latest.current
-      const body = new Blob(
-        [JSON.stringify({
-          ticket: ask.ticket,
-          values: safeValues(merged.values),
-          field_context: merged.notes,
-          reply: merged.reply,
-        })],
-        { type: 'application/json' },
-      )
-      try { navigator.sendBeacon(`${BASE}/api/draft`, body) } catch { /* the local mirror already has it */ }
+      const body = new Blob([JSON.stringify({
+        ticket: ask.ticket, values: safeValues(merged.values),
+        field_context: merged.notes, reply: merged.reply,
+      })], { type: 'application/json' })
+      try { navigator.sendBeacon(`${BASE}/api/draft`, body) } catch { /* local mirror remains */ }
     }
     const onVisibility = () => { if (document.visibilityState === 'hidden') flush() }
     window.addEventListener('pagehide', flush)
@@ -252,240 +146,321 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
-
-  const onChange = (name: string, value: FieldValue, isSecret = false) => {
+  const onChange = (name: string, value: FieldValue, secret = false) => {
     const next = { ...latest.current.values, [name]: value }
     setValues(next)
     setState('idle')
-    setMessage('')
-    if (isSecret) {
-      // A secret exists only in this component's memory until submit.
-      latest.current = { ...latest.current, values: next }
-      return
-    }
-    persist({ values: next })
+    setStatus('')
+    if (secret) latest.current = { ...latest.current, values: next }
+    else persist({ values: next })
   }
-  const onNoteChange = (name: string, noteText: string) => {
-    const next = { ...latest.current.notes, [name]: noteText }
-    setNotes(next)
-    setState('idle')
-    setMessage('')
-    persist({ notes: next })
-  }
-  const onReplyChange = (text: string) => {
+  const onReply = (text: string) => {
     setReply(text)
-    setState('idle')
-    setMessage('')
     persist({ reply: text })
   }
-  /** Mark one question as rejected (note may be ''), or null to un-reject it. */
-  const onBounce = (name: string, note: string | null) => {
-    const next = { ...latest.current.bounced }
-    if (note === null) delete next[name]
-    else next[name] = note
-    setBounced(next)
-    setState('idle')
-    setMessage('')
-    persist({ bounced: next })
+  const finish = () => {
+    completed.current = true
+    window.clearTimeout(timer.current)
+    timer.current = undefined
+    clearLocal(ask.ticket)
+    window.setTimeout(onFinished, 1200)
   }
-
-  const submit = async () => {
-    if (hardMissing.length || isBusy || detected) return
-    setState('sending'); setMessage('sending…')
-    // Bounced fields keep their typed value: the store stores it beside the
-    // bounce note as a draft, so "right, but ask me again" is expressible.
-    const payload: Values = { ...values }
+  const submit = async (verdict?: string, skip = false) => {
+    if (isBusy || detected || answered || (!verdict && !skip && hardMissing.length)) return
+    const payload: Values = { ...latest.current.values }
+    if (verdict) payload.verdict = verdict
     for (const field of unanswered) {
-      if (field.name in bounced) continue
-      if (field.required && !field.must_decide && isMissing(payload[field.name])) payload[field.name] = null
+      if (skip && !field.must_decide) payload[field.name] = null
+      else if (isMissing(payload[field.name]) && !field.must_decide) payload[field.name] = null
     }
+    setState('sending'); setStatus('Sending…')
     try {
-      const output = await api<{ complete: boolean }>('/api/answer', {
-        ticket: ask.ticket, values: payload, reply, field_context: notes, field_bounce: bounced,
+      const result = await api<{ complete: boolean }>('/api/answer', {
+        ticket: ask.ticket, values: payload, reply: latest.current.reply, field_context: latest.current.notes,
+        field_bounce: {},
       })
-      setState('done')
-      setMessage(
-        output.complete
-          ? (ask.gating ? `sent · waking ${ask.origin.agent || 'agent'}` : 'sent')
-          : 'saved, still incomplete',
-      )
-      if (output.complete) {
-        completed.current = true
-        window.clearTimeout(draftTimer.current)
-        draftTimer.current = undefined
-        clearLocal(ask.ticket)
-        window.setTimeout(onFinished, 1200)
-      }
+      setState('done'); setStatus(result.complete ? 'Sent' : 'Saved, still incomplete')
+      if (result.complete) finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
-      setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send answer')
+      setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send answer')
     }
   }
-  /**
-   * The third exit, for the whole ask. Sending it back is a real response: it
-   * carries the note (optional), releases the agent, and tells it to ask again
-   * properly. Never disabled.
-   */
   const sendBack = async () => {
-    setState('sending'); setMessage('sending back…')
+    if (isBusy) return
+    setState('sending'); setStatus('Sending back…')
     try {
-      await api('/api/answer', { ticket: ask.ticket, reply, bounce: true })
-      setState('done')
-      setMessage('sent back — the agent will rework it')
-      completed.current = true
-      window.clearTimeout(draftTimer.current)
-      draftTimer.current = undefined
-      clearLocal(ask.ticket)
-      window.setTimeout(onFinished, 1200)
+      await api('/api/answer', { ticket: ask.ticket, reply: backNote, bounce: true })
+      setState('done'); setStatus('Sent back — the agent will rework it')
+      finish()
     } catch (error) {
       if (error instanceof FinishedError) return onFinished()
-      setState('error'); setMessage(error instanceof Error ? error.message : 'Could not send it back')
+      setState('error'); setStatus(error instanceof Error ? error.message : 'Could not send it back')
     }
   }
-  /** Cmd/Ctrl+Enter submits this ask; it never changes the selected ask. */
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
-    if (isBusy || detected) return
-    event.preventDefault()
-    if (hardMissing.length > 0) return
-    void submit()
+  const skipBlocked = hardMissing.length > 0 || (
+    (kind === 'consent' || kind === 'spend' || kind === 'message') && isMissing(values.verdict)
+  )
+  const onPrimary = () => void submit(
+    kind === 'consent' || kind === 'spend' || kind === 'message' ? 'approve' : undefined,
+  )
+  const onSelf = () => {
+    if (ask.plan?.start_url) window.open(ask.plan.start_url, '_blank', 'noopener,noreferrer')
+    void submit('self')
   }
   useEffect(() => {
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  })
-  // A field's own url stays beside that field ("Open the screen"); the
-  // Links row is only the ask's links, so a question never reads as a link.
-  const fieldUrls = new Set(ask.fields.map((field) => field.url).filter(Boolean))
-  const topLinks = (ask.links || [])
-    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
-    .filter((link) => !fieldUrls.has(link.url))
-  const herdrHref = ask.origin.pane_id
-    ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}` +
-      (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '') +
-      (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
-    : undefined
-  const isBusy = state === 'sending' || state === 'done'
-
-  // Field labels can be whole sentences, so naming several of them buries the
-  // bar in prose. Name one, count the rest.
-  const stillNeeds = hardMissing.length === 1
-    ? `Pick an answer for "${hardMissing[0]}"`
-    : hardMissing.length > 1
-      ? `Pick answers for ${hardMissing.length} questions`
-      : ''
-  const statusHint = state === 'error'
-    ? message
-    : state === 'sending'
-      ? 'Sending…'
-      : state === 'done'
-        ? 'Sent'
-        : armed
-          ? 'Send back the whole ask and discard answers?'
-          : stillNeeds || (
-            draftState === 'offline'
-              ? 'Draft kept in this browser'
-              : draftState === 'saved'
-                ? 'Draft saved'
-                : missing.length
-                  ? `${missing.length} ${missing.length === 1 ? 'question' : 'questions'} left`
-                  : ''
-          )
-  const hasRecommendations = unanswered.some(
-    (field) => !field.must_decide && field.recommend
-      && isMissing(values[field.name]) && !(field.name in bounced),
-  )
-  const useRecommendations = () => {
-    const next = { ...latest.current.values }
-    for (const field of unanswered) {
-      if (!field.must_decide && field.recommend && isMissing(next[field.name])
-        && !(field.name in bounced) && field.type !== 'secret') {
-        next[field.name] = field.recommend.value
-      }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+      event.preventDefault()
+      if (kind === 'consent' || kind === 'spend' || kind === 'message') void submit('approve')
+      else void submit()
     }
-    setValues(next)
-    persist({ values: next })
-  }
-  const onSendBackClick = () => {
-    if (!armed) { setArmed(true); setShowReply(true) }
-    else void sendBack()
-  }
-
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+  const questionCount = unanswered.filter((field) => field.name !== 'note' && field.name !== 'edited_text').length
+  const answeredCount = unanswered.filter(
+    (field) => field.name !== 'note' && field.name !== 'edited_text' && !isMissing(values[field.name]),
+  ).length
+  const progress = questionCount > 1
+    ? answeredCount === questionCount ? 'Ready to send' : `Question ${answeredCount + 1} of ${questionCount}`
+    : ''
+  const receipt = ask.receipt
   return (
-    <article className="document">
-      <div className="document-body">
-        <div className="breadcrumb">
-          <span>{groupOf(ask)} / {stateOf(ask).label}</span>
-          <span className="ticket">{ask.ticket}</span>
-        </div>
-        <h1>{ask.title}</h1>
-        <Properties ask={ask} herdrHref={herdrHref} topLinks={topLinks} />
-        <section className="context"><h2>Why</h2><p><Linkify text={ask.why} /></p></section>
-        {!!ask.tried?.length && (
-          <details className="tried">
-            <summary>What the agent tried ({ask.tried.length})</summary>
-            <ul>{ask.tried.map((item, i) => <li key={i}><Linkify text={item} /></li>)}</ul>
-          </details>
-        )}
-        {!!ask.steps?.length && (
-          <section className="steps">
-            <h2>Do this</h2>
-            <ol>{ask.steps.map((step, i) => <li key={i}><Linkify text={step} /></li>)}</ol>
-          </section>
-        )}
-        {!detected && (
-          <>
-            <section className="questions">
-              <h2>Your answer</h2>
-              {unanswered.map((field) => (
+    <article className="ask-article">
+      <div className="ask-card">
+        <div className="card-body">
+          <div className="card-heading">
+            <span className="kind-label"><Icon name={kind} size={18} /> {kind}</span>
+            <span
+              className={`status-pill${answered ? ' answered' : ''}`}
+              title={ask.kind === 'park' ? 'The agent is paused until you answer' : 'The agent keeps working meanwhile'}
+            >
+              <Icon name={answered ? 'answered' : 'waiting'} size={14} />
+              {answered ? 'Answered' : 'Waiting on you'}
+            </span>
+          </div>
+          <h1><PlainText text={ask.title} /></h1>
+          <div className="ask-meta">
+            {groupOf(ask)} · {onlyYou[ask.only_you || ''] || ask.only_you || 'your call'} · asked by{' '}
+            {ask.origin.agent || 'agent'}{' '}
+            {herdrHref && (
+              <a
+                href={herdrHref} className="pane-link"
+                onClick={(event) => { event.preventDefault(); openPane(herdrHref) }}
+              >
+                ({ask.origin.pane_id})
+              </a>
+            )}{' '}· {ago(ask.created_at)} ago
+          </div>
+          <p className="why-lead"><ChipText text={firstSentence(ask.why)} /></p>
+          {(kind === 'key' || kind === 'click') && (
+            <div className="hero-content">
+              {topLink && (
+                <a className="open-link" href={topLink.url} target="_blank" rel="noopener noreferrer">
+                  <PlainText text={topLink.label} /> ↗
+                </a>
+              )}
+              {kind === 'key' && unanswered.filter((field) => field.type === 'secret').map((field) => (
                 <FieldControl
-                  key={field.name}
-                  field={field}
-                  ticket={ask.ticket}
-                  value={values[field.name]}
-                  note={notes[field.name]}
-                  bounceNote={bounced[field.name]}
-                  onChange={onChange}
-                  onNoteChange={onNoteChange}
-                  onBounce={onBounce}
-                  disabled={isBusy}
+                  key={field.name} field={field} ticket={ask.ticket} value={values[field.name]}
+                  onChange={onChange} disabled={isBusy} topUrl={topLink?.url}
                 />
               ))}
-            </section>
-            <section className="reply">
-              <h2>Anything else</h2>
-              {!showReply && !reply ? (
-                <button className="text-button" type="button" onClick={() => setShowReply(true)}>
-                  Add a reply
-                </button>
-              ) : (
+              {!!ask.steps?.length && <Checklist ticket={ask.ticket} steps={ask.steps} />}
+              {unanswered.filter((field) => kind !== 'key' || field.type !== 'secret').map((field) => (
+                <FieldControl
+                  key={field.name} field={field} ticket={ask.ticket} value={values[field.name]}
+                  onChange={onChange} disabled={isBusy} topUrl={topLink?.url}
+                />
+              ))}
+            </div>
+          )}
+          {kind === 'decision' && (
+            <div className="hero-content decision-fields">
+              {unanswered.map((field) => (
+                <FieldControl
+                  key={field.name} field={field} ticket={ask.ticket} value={values[field.name]}
+                  onChange={onChange} disabled={isBusy} topUrl={topLink?.url}
+                />
+              ))}
+            </div>
+          )}
+          {kind === 'consent' && ask.plan && (
+            <div className="hero-content consent-hero">
+              <Chip url={ask.plan.start_url} />
+              <Checklist ticket={ask.ticket} steps={ask.plan.steps} readOnly filled={!!receipt} />
+              <p><strong>What changes:</strong> <ChipText text={ask.plan.changes} /></p>
+              <p><strong>Won't touch:</strong> <ChipText text={ask.plan.untouched} /></p>
+              <button className="text-button" type="button" onClick={() => setShowPlanNote(!showPlanNote)}>
+                Change something in the plan
+              </button>
+              {showPlanNote && (
                 <textarea
-                  aria-label="Anything else"
-                  className="control"
-                  value={reply}
-                  placeholder="Add context or say why you're sending it back"
-                  disabled={isBusy}
-                  onChange={(event) => onReplyChange(event.target.value)}
+                  className="control" aria-label="Anything to change in the plan"
+                  value={typeof values.note === 'string' ? values.note : ''}
+                  onChange={(event) => onChange('note', event.target.value)} disabled={isBusy}
                 />
               )}
-            </section>
-          </>
+            </div>
+          )}
+          {kind === 'spend' && ask.spend && (
+            <div className="hero-content spend-hero">
+              <div className="amount">
+                {money(ask.spend.amount_cents, ask.spend.currency)}
+                <span>{ask.spend.currency.toUpperCase()}</span>
+              </div>
+              <p><ChipText text={ask.spend.item} /> · <Chip url={ask.spend.vendor_url} /> ·{' '}
+                cap {money(ask.spend.cap_cents, ask.spend.currency)}</p>
+              <p><ChipText text={ask.spend.why} /></p>
+              <p className="muted">Paid through your Link wallet. Link asks you to confirm on your phone too.</p>
+              <button className="text-button" type="button" onClick={() => setShowPlanNote(!showPlanNote)}>
+                {showPlanNote ? 'Hide note' : 'Add a payment note'}
+              </button>
+              {showPlanNote && (
+                <textarea
+                  className="control" aria-label="Payment note"
+                  value={typeof values.note === 'string' ? values.note : ''}
+                  onChange={(event) => onChange('note', event.target.value)} disabled={isBusy}
+                />
+              )}
+            </div>
+          )}
+          {kind === 'message' && ask.message && (
+            <div className="hero-content message-hero">
+              <p>To <ChipText text={ask.message.to} /> via {ask.message.via}</p>
+              {ask.message.subject && <p><ChipText text={ask.message.subject} /></p>}
+              {editing ? (
+                <textarea
+                  className="control message-edit" aria-label="Your edit"
+                  value={typeof values.edited_text === 'string' ? values.edited_text : ask.message.text}
+                  onChange={(event) => onChange('edited_text', event.target.value)} disabled={isBusy}
+                />
+              ) : <blockquote><ChipText text={ask.message.text} /></blockquote>}
+              <button
+                className="text-button" type="button"
+                onClick={() => {
+                  if (!editing && isMissing(values.edited_text)) onChange('edited_text', ask.message!.text)
+                  setEditing(!editing)
+                }}
+              >
+                {editing ? 'Show draft' : 'Edit'}
+              </button>
+            </div>
+          )}
+          {showReply && !detected && !answered && (
+            <div className="reply-box">
+              <label htmlFor={`reply_${ask.ticket}`} className="section-label">Anything else</label>
+              <textarea
+                id={`reply_${ask.ticket}`} className="control" value={reply}
+                onChange={(event) => onReply(event.target.value)} disabled={isBusy}
+              />
+            </div>
+          )}
+          {sendBackOpen && (
+            <div className="send-back-box">
+              <label htmlFor={`back_${ask.ticket}`} className="section-label">Send it back with a note</label>
+              <textarea
+                id={`back_${ask.ticket}`} className="control" value={backNote}
+                placeholder="What should change?" onChange={(event) => setBackNote(event.target.value)}
+              />
+              <button className="secondary" type="button" onClick={() => void sendBack()} disabled={isBusy}>
+                Send back
+              </button>
+            </div>
+          )}
+        </div>
+        {!detected && !answered && (
+          <div className="card-footer">
+            <span className="footer-progress" role="status">
+              {state === 'error' ? status : state !== 'idle' ? status : progress || draftState}
+            </span>
+            <div className="footer-actions">
+              <button
+                type="button" className="primary" onClick={onPrimary}
+                disabled={isBusy || (
+                  (kind === 'key' || kind === 'click' || kind === 'decision') && !!hardMissing.length
+                )}
+              >
+                {labels[kind]}
+              </button>
+              {kind === 'consent' && (
+                <button className="secondary" type="button" disabled={isBusy} onClick={onSelf}>
+                  I'll do it myself ↗
+                </button>
+              )}
+              {(kind === 'consent' || kind === 'spend' || kind === 'message') && (
+                <button className="secondary" type="button" disabled={isBusy} onClick={() => void submit('no')}>
+                  No
+                </button>
+              )}
+              <div className="menu-anchor">
+                <button
+                  type="button" className="text-button menu-trigger" aria-expanded={menu}
+                  onClick={() => setMenu(!menu)}
+                >
+                  Can't do this ▾
+                </button>
+                {menu && (
+                  <div className="menu-popover">
+                    <button
+                      type="button" onClick={() => { setSendBackOpen(true); setMenu(false) }}
+                    >
+                      Send it back with a note
+                    </button>
+                    <button
+                      type="button" disabled={isBusy || skipBlocked}
+                      title={skipBlocked ? 'Choose an answer for every must-decide question first' : undefined}
+                      onClick={() => { setMenu(false); void submit(undefined, true) }}
+                    >
+                      Skip for now
+                      {skipBlocked && <small>Choose a must-decide answer first</small>}
+                    </button>
+                    <button
+                      type="button" onClick={() => { setShowReply(true); setMenu(false) }}
+                    >
+                      Add a note
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
-      {!detected && (
-        <ActionBar
-          isDecision={isDecision}
-          hardMissing={hardMissing}
-          isBusy={isBusy}
-          submit={() => void submit()}
-          hasRecommendations={hasRecommendations}
-          useRecommendations={useRecommendations}
-          armed={armed}
-          onSendBack={onSendBackClick}
-          statusHint={statusHint}
-          hasError={state === 'error'}
-        />
-      )}
+      <div className="ask-details">
+        <details><summary>Why</summary><p><ChipText text={ask.why} /></p></details>
+        {!!ask.tried?.length && (
+          <details>
+            <summary>What the agent tried ({ask.tried.length})</summary>
+            <ul>{ask.tried.map((item, index) => <li key={index}><ChipText text={item} /></li>)}</ul>
+          </details>
+        )}
+        {!!ask.links?.slice(1).length && (
+          <details>
+            <summary>More links</summary>
+            <div className="more-links">
+              {ask.links.slice(1).map((link, index) => <Chip key={index} url={link.url} />)}
+            </div>
+          </details>
+        )}
+        {answered && kind === 'consent' && receipt && (
+          <details open>
+            <summary>Receipt</summary>
+            <div className="receipt-images">
+              {receipt.before && (
+                <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/before.png`} alt="Before" />
+              )}
+              {receipt.after && (
+                <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/after.png`} alt="After" />
+              )}
+            </div>
+            {receipt.final_url && <Chip url={receipt.final_url} />}
+            <time dateTime={new Date(receipt.at).toISOString()}>{new Date(receipt.at).toLocaleString()}</time>
+          </details>
+        )}
+        <span className="ticket">{ask.ticket}</span>
+      </div>
     </article>
   )
 }

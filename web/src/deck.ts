@@ -42,7 +42,7 @@ export interface Field {
 export interface Ask {
   ticket: string
   kind: 'file' | 'park'
-  purpose: 'blocker' | 'decision'
+  purpose: 'blocker' | 'decision' | 'consent' | 'spend' | 'message'
   gating: boolean
   status: string
   title: string
@@ -53,6 +53,17 @@ export interface Ask {
   tried?: string[]
   only_you?: string | null
   links?: { label: string; url: string }[]
+  plan?: { site: string; start_url: string; steps: string[]; changes: string; untouched: string }
+  spend?: {
+    item: string; vendor: string; vendor_url: string; amount_cents: number
+    currency: string; cap_cents: number; why: string
+  }
+  message?: { to: string; via: string; subject?: string; text: string }
+  consent_blocked_by?: 'sign_in' | 'not_signed_in' | 'no_browser' | 'types_secret' | 'device'
+  receipt?: {
+    final_url?: string; before?: boolean; after?: boolean
+    spend_request_id?: string; spend_status?: string; at: number
+  }
   origin: {
     agent?: string
     session_id?: string
@@ -103,6 +114,11 @@ export const selectDeck: (input: {
   doneTickets?: ReadonlySet<string>
   doneProjects?: string[]
 }) => Selection = selectDeckJs
+
+export function askKind(ask: Ask): 'key' | 'click' | 'decision' | 'consent' | 'spend' | 'message' {
+  if (ask.purpose !== 'blocker') return ask.purpose
+  return ask.fields.some((field) => field.type === 'secret') ? 'key' : 'click'
+}
 
 export function ago(createdAt: number) {
   const seconds = Math.max(0, Math.round((Date.now() - createdAt) / 1000))
