@@ -326,6 +326,14 @@ function validateField(raw, index, seen, purpose = 'blocker') {
   return field
 }
 
+function triedFromString(text) {
+  try {
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed
+  } catch { /* one plain line */ }
+  return text.trim() === '' ? [] : [text]
+}
+
 /**
  * Validate an incoming ask registration. Returns a normalized ask body
  * (without ids or timestamps — the store adds those).
@@ -345,7 +353,26 @@ export function validateAsk(raw) {
 
   const title = plainWords(str(raw.title, 'title', { max: MAX_TITLE }), 'title')
   const why = str(raw.why, 'why', { max: 1200 })
+  // An MCP server started before this gate still lists the old tool schema,
+  // so its agent never learns these two keys exist. Name every missing one in
+  // one error and say how to get them through: that old handler forwards extra
+  // arguments unchanged, and the CLI takes the same JSON.
+  // An undeclared argument reaches us as a string: Claude sends `tried` as the
+  // JSON text of the list, or as one plain line. Take either form; the length
+  // and duplicate rules below still apply to every line.
+  if (typeof raw.tried === 'string') raw = { ...raw, tried: triedFromString(raw.tried) }
+  // A question or a permission prompt is the agent asking, not a blocker it
+  // failed to clear, so tried is optional for those two.
   const optionalGate = purpose === 'question' || purpose === 'permission'
+  const missing = optionalGate ? [] : ['tried', 'only_you'].filter((key) => raw[key] === undefined || raw[key] === null || (key === 'tried' && Array.isArray(raw.tried) && raw.tried.length === 0))
+  if (missing.length) {
+    throw new ValidationError(
+      `missing ${missing.join(' and ')}. If your unblock tool does not list ${missing.length > 1 ? 'them' : 'it'}, it is an older build: pass ${missing.length > 1 ? 'them' : 'it'} anyway as extra arguments ` +
+        `(tried: 1 to 8 lines, each 20 to 400 characters, on what you ran and why it could not clear this; only_you: one of ${ONLY_YOU_REASONS.join(', ')}, and a decision uses judgment), ` +
+        'or file the same JSON from a shell with: unblock file - < ask.json',
+      missing[0],
+    )
+  }
   if ((!optionalGate || raw.tried !== undefined) && (!Array.isArray(raw.tried) || (!optionalGate && raw.tried.length === 0))) {
     throw new ValidationError('say what you already tried (commands, computer use, docs) and why it could not clear this — only file what only the human can do', 'tried')
   }

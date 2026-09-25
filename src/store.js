@@ -38,6 +38,20 @@ function agentKey(origin) {
   return origin.session_id || origin.pane_id || `${origin.agent}:${origin.cwd || 'unknown'}`
 }
 
+/**
+ * An answer or send-back for an ask that is already past it. 410, not 500: the
+ * page retries a send whose reply it lost, and when the first try landed and
+ * the agent collected it, "gone" is the truth the page acts on.
+ */
+/** Statuses an answer can no longer change. A sent-back ask is done too: the agent re-asks. */
+export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced']
+
+export function finished(ask) {
+  const error = new Error(`ask ${ask.ticket} is ${ask.status}`)
+  error.status = 410
+  return error
+}
+
 export class Store {
   #db
 
@@ -446,9 +460,7 @@ export class Store {
       )) error('NOTE_MEANS_CHANGE', 'change the plan before approval', 400)
       if (values.edited_text != null && typeof values.edited_text !== 'string') error('INVALID_VERDICT', 'edited text must be text', 400)
     }
-    if (['collected', 'cancelled', 'expired'].includes(ask.status)) {
-      throw new Error(`ask ${ask.ticket} is ${ask.status}`)
-    }
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
 
     const known = new Set(ask.fields.map((f) => f.name))
     const secretFields = new Set(ask.fields.filter((f) => f.type === 'secret').map((f) => f.name))
@@ -601,7 +613,7 @@ export class Store {
   bounce(idOrTicket, reply) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
-    if (ask.status !== 'open') throw new Error(`ask ${ask.ticket} is ${ask.status}`)
+    if (ask.status !== 'open') throw finished(ask)
     const at = nowMs()
     this.#db
       .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)

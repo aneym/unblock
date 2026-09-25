@@ -156,6 +156,11 @@ If you need three things before you can move, that is one park with three
 fields. Call `unblock_check` when you resume. From a shell, `unblock file` takes
 the same JSON on stdin.
 
+If `unblock_file` rejects the ask for missing `tried` or `only_you` and its
+schema does not list them, your session started before the gate existed. Pass
+both anyway as extra arguments (the old tool forwards them), or pipe the same
+JSON to `unblock file -`. Do not drop the ask.
+
 Writing it:
 
 - `title`: verb first for a blocker ("Add the callback URL to the Google

@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyConfig } from './config.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { Store } from './store.js'
+import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -50,6 +50,28 @@ function sendText(res, status, body, contentType = 'text/plain; charset=utf-8') 
     'Cache-Control': 'no-store',
   })
   res.end(body)
+}
+
+const CLIENT_LOG_MAX_BYTES = 1024 * 1024
+
+/**
+ * The page reports its own network failures here once it can reach the daemon
+ * again, so a "Load failed" on a phone leaves a trace on Studio. Only what the
+ * page says about the request: path, attempt, error text, online and
+ * visibility. Never a body or a value. Capped, so a loop cannot fill the disk.
+ */
+function appendClientLog(req, body) {
+  const file = join(stateDir(), 'client-errors.log')
+  try { if (statSync(file).size > CLIENT_LOG_MAX_BYTES) return 0 } catch { /* first write */ }
+  const clip = (value, max = 200) => String(value ?? '').replace(/[\t\r\n]+/g, ' ').slice(0, max)
+  const events = Array.isArray(body.events) ? body.events.slice(0, 20) : []
+  const agent = clip(req.headers['user-agent'])
+  const lines = events.map((event) => [
+    new Date().toISOString(), clip(event.at, 40), clip(event.path, 80), clip(event.outcome, 40),
+    clip(event.attempts, 4), clip(event.message), clip(event.online, 8), clip(event.visibility, 12), agent,
+  ].join('\t') + '\n')
+  if (lines.length) appendFileSync(file, lines.join(''), { mode: 0o600 })
+  return lines.length
 }
 
 async function readJson(req) {
@@ -411,6 +433,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
       if (answeredVia === 'local' || answeredVia === 'share-link:local') { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
     }
+    // Before any secret is stored: a page retrying a send whose reply it lost
+    // must not write the secret again once the agent already has the answer.
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
     const records = []
     for (const field of ask.fields) {
       const value = values?.[field.name]
@@ -505,6 +530,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         ? [scopedAsk]
         : store.list({ profile, project, status: ['open', 'answered'] })
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile), profile })
+    }
+
+    if (tail === '/api/client-log' && req.method === 'POST') {
+      return sendJson(res, 200, { logged: appendClientLog(req, await readJson(req)) })
     }
 
     if ((tail === '/api/answer' || tail === '/api/draft') && req.method === 'POST') {
@@ -833,6 +862,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       emitQueue()
       return sendJson(res, 200, result)
+    }
+    if (pathname === '/api/client-log' && req.method === 'POST') {
+      return sendJson(res, 200, { logged: appendClientLog(req, await readJson(req)) })
     }
     if (pathname === '/api/draft' && req.method === 'POST') {
       const body = await readJson(req)
