@@ -31,7 +31,63 @@ export const ASK_KINDS = ['file', 'park']
  * Blocker = do something. Decision = decide something.
  * Either may be parked or filed; that is a separate axis.
  */
-export const ASK_PURPOSES = ['blocker', 'decision']
+export const ASK_PURPOSES = ['blocker', 'decision', 'consent', 'spend', 'message']
+export const APPROVAL_PURPOSES = ['consent', 'spend', 'message']
+export const ACCOUNT_ACTION_RE = /accounts\.google\.com|appleid\.apple\.com|login\.(microsoftonline|live)\.com|authenticator\.cursor\.sh|\/auth\/cli\/|\/(log|sign)[-_]?(in|out|up|off)\b|\/oauth2?\/|\b(log|sign)\s?(in|out|off|up)\b|switch\s+accounts?|add\s+(another\s+)?account|use\s+another\s+account|choose\s+an?\s+account|create\s+(an?\s+|new\s+)?account|continue\s+with\s+(google|apple|microsoft|github)/i
+const CONSENT_BLOCKERS = ['sign_in', 'not_signed_in', 'no_browser', 'types_secret', 'device']
+const choices = (values) => values.map(([value, label]) => ({ value, label }))
+function approvalFields(purpose) {
+  const consent = purpose === 'consent'
+  const message = purpose === 'message'
+  return [
+    { name: 'verdict', type: 'choice', label: consent ? 'Your call' : message ? 'Send it?' : 'Pay this?', required: true, must_decide: true,
+      choices: choices(consent ? [['approve', 'Approve: do it for me'], ['self', "I'll do it myself"], ['no', 'No']] :
+        message ? [['approve', 'Approve and send'], ['no', 'No']] : [['approve', 'Approve payment'], ['no', 'No']]) },
+    message ? { name: 'edited_text', type: 'text', multiline: true, label: 'Your edit', required: false } :
+      { name: 'note', type: 'text', label: consent ? 'Anything to change in the plan' : 'Note', required: false },
+  ]
+}
+function approvalData(raw, purpose) {
+  if (!APPROVAL_PURPOSES.includes(purpose)) return {}
+  if (raw.fields !== undefined) throw new ValidationError('fields are generated for approval asks', 'fields')
+  const key = purpose === 'consent' ? 'plan' : purpose
+  const data = raw[key]
+  if (!isPlainObject(data)) throw new ValidationError('must be an object', key)
+  if (purpose === 'consent') {
+    const site = str(data.site, 'plan.site', { max: 253 }).toLowerCase()
+    const start_url = str(data.start_url, 'plan.start_url', { max: 2000 })
+    let host
+    try { const url = new URL(start_url); if (url.protocol !== 'https:') throw new Error(); host = url.hostname.toLowerCase() } catch { throw new ValidationError('must be an https deep link', 'plan.start_url') }
+    if (host !== site) throw new ValidationError('must match the start_url host', 'plan.site')
+    if (!isDeepLink(start_url)) throw new ValidationError('must be a deep link', 'plan.start_url')
+    if (!Array.isArray(data.steps) || data.steps.length < 1 || data.steps.length > 12) throw new ValidationError('needs 1..12 steps', 'plan.steps')
+    const steps = data.steps.map((step, i) => str(step, `plan.steps[${i}]`, { max: 300 }))
+    if (ACCOUNT_ACTION_RE.test(start_url) || steps.some((step) => ACCOUNT_ACTION_RE.test(step))) {
+      throw new ValidationError("Signing in or out, switching or creating accounts stay Alex's own click. File a blocker with consent_blocked_by: sign_in.", 'plan')
+    }
+    return { plan: { site, start_url, steps: steps.map((step, i) => plainWords(step, `plan.steps[${i}]`)),
+      changes: str(data.changes, 'plan.changes', { max: 300 }), untouched: str(data.untouched, 'plan.untouched', { max: 300 }) } }
+  }
+  if (purpose === 'spend') {
+    const amount = data.amount_cents
+    const cap = data.cap_cents
+    if (!Number.isSafeInteger(amount) || amount < 1) throw new ValidationError('must be a positive integer', 'spend.amount_cents')
+    if (!Number.isSafeInteger(cap) || cap < amount) throw new ValidationError('must be an integer at least amount_cents', 'spend.cap_cents')
+    if (amount > 50000) throw new ValidationError('Link limit is 50000 cents', 'spend.amount_cents')
+    const currency = str(data.currency, 'spend.currency').toLowerCase()
+    if (currency !== 'usd') throw new ValidationError('only usd is supported', 'spend.currency')
+    const vendor_url = str(data.vendor_url, 'spend.vendor_url', { max: 2000 })
+    try { if (new URL(vendor_url).protocol !== 'https:') throw new Error() } catch { throw new ValidationError('must be https', 'spend.vendor_url') }
+    return { spend: { item: plainWords(str(data.item, 'spend.item'), 'spend.item'), vendor: str(data.vendor, 'spend.vendor'),
+      vendor_url, amount_cents: amount, currency, cap_cents: cap, why: str(data.why, 'spend.why', { max: 300 }) } }
+  }
+  const via = str(data.via, 'message.via')
+  if (!['email', 'slack', 'linkedin', 'sms', 'other'].includes(via)) throw new ValidationError('invalid channel', 'message.via')
+  const subject = optionalStr(data.subject, 'message.subject')
+  return { message: { to: str(data.to, 'message.to'), via, ...(subject ? { subject: plainWords(subject, 'message.subject') } : {}),
+    text: str(data.text, 'message.text', { max: 4000 }) } }
+}
+
 export const ONLY_YOU_REASONS = ['credential', 'their_account', 'spend', 'message', 'judgment']
 
 /**
@@ -276,24 +332,32 @@ export function validateAsk(raw) {
   if (!ONLY_YOU_REASONS.includes(only_you)) {
     throw new ValidationError(`must be one of ${ONLY_YOU_REASONS.join(', ')}`, 'only_you')
   }
-  if (purpose === 'decision' ? !['judgment', 'spend', 'message'].includes(only_you) : only_you === 'judgment') {
+  if (purpose === 'decision' ? !['judgment', 'spend', 'message'].includes(only_you) :
+    APPROVAL_PURPOSES.includes(purpose) ? only_you !== ({ consent: 'their_account', spend: 'spend', message: 'message' })[purpose] : only_you === 'judgment') {
     throw new ValidationError('decisions allow judgment, spend or message; blockers require an action other than judgment', 'only_you')
   }
+
+  const consent_blocked_by = raw.consent_blocked_by === undefined ? undefined : str(raw.consent_blocked_by, 'consent_blocked_by')
+  if (consent_blocked_by && !CONSENT_BLOCKERS.includes(consent_blocked_by)) throw new ValidationError('invalid consent blocker', 'consent_blocked_by')
+  if (purpose === 'blocker' && only_you === 'their_account' && !consent_blocked_by) throw new ValidationError('a click in an account needs consent_blocked_by', 'consent_blocked_by')
+  const approval = approvalData(raw, purpose)
 
   // The project this ask belongs to, declared by the agent. The queue page
   // groups and filters on it. Optional: an ask without one falls back to its
   // origin (workspace, repo, cwd) for grouping, so old clients keep working.
   const project = optionalStr(raw.project, 'project', { max: 64 })
 
-  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
+  const inputFields = APPROVAL_PURPOSES.includes(purpose) ? approvalFields(purpose) : raw.fields
+  if (!Array.isArray(inputFields) || inputFields.length === 0) {
     throw new ValidationError('an ask needs at least one field — say what you need', 'fields')
   }
-  if (raw.fields.length > MAX_FIELDS) {
+  if (inputFields.length > MAX_FIELDS) {
     throw new ValidationError(`at most ${MAX_FIELDS} fields; split the ask`, 'fields')
   }
 
   const seen = new Set()
-  const fields = raw.fields.map((f, i) => validateField(f, i, seen, purpose))
+  const fields = inputFields.map((f, i) => validateField(f, i, seen, purpose))
+  if (APPROVAL_PURPOSES.includes(purpose)) fields.splice(0, fields.length, ...approvalFields(purpose))
 
   // Enforce the blocker/decision line instead of trusting the label.
   //
@@ -334,7 +398,7 @@ export function validateAsk(raw) {
     if (!isActionUrl(url)) throw new ValidationError('must be an http(s), codex, or system preferences URL', `${path}.url`)
     return { url, label: str(l.label ?? url, `${path}.label`, { max: 160 }) }
   })
-  if (['credential', 'their_account'].includes(only_you) &&
+  if (purpose === 'blocker' && ['credential', 'their_account'].includes(only_you) &&
       ![...normalizedLinks.map((link) => link.url), ...fields.map((field) => field.url)].some((url) => url && isDeepLink(url))) {
     throw new ValidationError('a manual step needs a deep link to the exact screen, not a home page', 'links')
   }
@@ -351,6 +415,8 @@ export function validateAsk(raw) {
     steps: steps.map((s, i) => str(s, `steps[${i}]`, { max: 600 })),
     links: normalizedLinks,
     ttl_seconds: normalizeTtl(raw.ttl_seconds),
+    ...approval,
+    consent_blocked_by,
   }
 }
 
@@ -367,7 +433,9 @@ export function validateAsk(raw) {
  */
 export function validateUpdate(ask, patch) {
   if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
-  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+  if (patch.purpose !== undefined) throw new ValidationError('purpose cannot change', 'purpose')
+  if (APPROVAL_PURPOSES.includes(ask.purpose) && ['add_fields', 'remove_fields', 'replace_fields'].some((key) => patch[key] !== undefined)) throw new ValidationError('approval fields cannot change', 'fields')
+  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'consent_blocked_by', 'add_fields', 'remove_fields', 'replace_fields'].filter(
     (key) => patch[key] !== undefined,
   )
   if (named.length === 0) {
@@ -425,13 +493,15 @@ export function validateUpdate(ask, patch) {
     project: ask.project,
     title: patch.title ?? ask.title,
     why: patch.why ?? ask.why,
-    fields,
+    fields: APPROVAL_PURPOSES.includes(ask.purpose) ? undefined : fields,
+    plan: patch.plan ?? ask.plan, spend: patch.spend ?? ask.spend, message: patch.message ?? ask.message,
+    consent_blocked_by: patch.consent_blocked_by ?? ask.consent_blocked_by,
     steps: patch.steps ?? ask.steps,
     links: patch.links ?? ask.links,
     tried: patch.tried ?? ask.tried,
     only_you: patch.only_you ?? ask.only_you,
   })
-  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you }
+  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, consent_blocked_by: merged.consent_blocked_by }
 }
 
 function normalizeTtl(value) {

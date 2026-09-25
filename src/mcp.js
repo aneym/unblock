@@ -132,7 +132,7 @@ const askProperties = {
   // Decision = the human must DECIDE; the agent has a view and every field
   // MUST carry recommend {value, why}. The daemon rejects a mismatch, so this
   // is a real contract, not a hint.
-  purpose: { type: 'string', enum: ['blocker', 'decision'], default: 'blocker' },
+  purpose: { type: 'string', enum: ['blocker', 'decision', 'consent', 'spend', 'message'], default: 'blocker' },
   // The project this ask files under — the queue page groups and filters by
   // it. One short name per workstream, reused across asks. Defaults to
   // $UNBLOCK_PROJECT when unset.
@@ -141,6 +141,10 @@ const askProperties = {
   only_you: { type: 'string', enum: ONLY_YOU_REASONS, description: 'What only the human can do: credential, their own account click, spend, message to a real person, or product judgment.' },
   tried: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 20, maxLength: 400 }, description: 'What you already tried using CLI, API, computer use or docs and why that did not clear the blocker.' },
   why: { type: 'string', maxLength: 1200 },
+  consent_blocked_by: { type: 'string', enum: ['sign_in', 'not_signed_in', 'no_browser', 'types_secret', 'device'] },
+  plan: { type: 'object', properties: { site: { type: 'string' }, start_url: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, changes: { type: 'string' }, untouched: { type: 'string' } }, required: ['site', 'start_url', 'steps', 'changes', 'untouched'] },
+  spend: { type: 'object', properties: { item: { type: 'string' }, vendor: { type: 'string' }, vendor_url: { type: 'string' }, amount_cents: { type: 'integer' }, currency: { type: 'string' }, cap_cents: { type: 'integer' }, why: { type: 'string' } }, required: ['item', 'vendor', 'vendor_url', 'amount_cents', 'currency', 'cap_cents', 'why'] },
+  message: { type: 'object', properties: { to: { type: 'string' }, via: { type: 'string', enum: ['email', 'slack', 'linkedin', 'sms', 'other'] }, subject: { type: 'string' }, text: { type: 'string' } }, required: ['to', 'via', 'text'] },
   fields: {
     type: 'array',
     minItems: 1,
@@ -187,17 +191,17 @@ const askProperties = {
   ttl_seconds: { type: 'number', exclusiveMinimum: 0 },
 }
 
-const askSchema = { type: 'object', properties: askProperties, required: ['title', 'why', 'fields', 'only_you', 'tried'] }
+const askSchema = { type: 'object', properties: askProperties, required: ['title', 'why', 'only_you', 'tried'] }
 
 const TOOLS = [
   {
     name: 'unblock_file',
-    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
+    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Clicks in a signed-in site are consent asks; signing in or out is never consent. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
     inputSchema: askSchema,
   },
   {
     name: 'unblock_park',
-    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
+    description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Clicks in a signed-in site are consent asks; signing in or out is never consent. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
     inputSchema: askSchema,
   },
   {
@@ -230,6 +234,8 @@ const TOOLS = [
         links: askProperties.links,
         tried: askProperties.tried,
         only_you: askProperties.only_you,
+        plan: askProperties.plan, spend: askProperties.spend, message: askProperties.message,
+        consent_blocked_by: askProperties.consent_blocked_by,
         // Same field shape as unblock_file, validated by the same schema — a
         // revision can never reach a shape a fresh ask could not.
         add_fields: askProperties.fields,
@@ -398,6 +404,8 @@ export class McpConnection {
           links: args.links,
           tried: args.tried,
           only_you: args.only_you,
+          plan: args.plan, spend: args.spend, message: args.message,
+          consent_blocked_by: args.consent_blocked_by,
           add_fields: args.add_fields,
           remove_fields: args.remove_fields,
           replace_fields: args.replace_fields,

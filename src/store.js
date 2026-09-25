@@ -12,7 +12,7 @@ import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
-import { matchesProfile, missingRequired } from './schema.js'
+import { APPROVAL_PURPOSES, matchesProfile, missingRequired } from './schema.js'
 
 export function defaultDbPath() {
   const base =
@@ -139,6 +139,9 @@ export class Store {
     // rendering the ask watches this to know the QUESTIONS changed, which
     // draft_updated_at cannot tell it — that one only moves when the human types.
     this.#addColumn('asks', 'updated_at', 'INTEGER')
+    for (const [name, type] of [['plan_json', 'TEXT'], ['spend_json', 'TEXT'], ['message_json', 'TEXT'],
+      ['consent_blocked_by', 'TEXT'], ['receipt_json', 'TEXT'], ['revision', 'INTEGER NOT NULL DEFAULT 1']]) this.#addColumn('asks', name, type)
+    this.#addColumn('answers', 'answered_via', 'TEXT')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -195,8 +198,8 @@ export class Store {
     this.#db
       .prepare(
         `INSERT INTO asks (id, ticket, kind, purpose, project, status, title, why, fields_json, steps_json,
-                           links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                           links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at, plan_json, spend_json, message_json, consent_blocked_by, revision)
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       )
       .run(
         id,
@@ -215,6 +218,10 @@ export class Store {
         key,
         created,
         expires,
+        body.plan ? JSON.stringify(body.plan) : null,
+        body.spend ? JSON.stringify(body.spend) : null,
+        body.message ? JSON.stringify(body.message) : null,
+        body.consent_blocked_by ?? null,
       )
 
     return this.get(id)
@@ -232,7 +239,7 @@ export class Store {
    * the record holds their work and the questions they answered must stay the
    * questions they answered.
    */
-  update(idOrTicket, { title, why, fields, steps, links, tried, only_you }) {
+  update(idOrTicket, { title, why, fields, steps, links, tried, only_you, plan, spend, message, consent_blocked_by }) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
     if (ask.status !== 'open') {
@@ -245,8 +252,12 @@ export class Store {
     }
     const at = nowMs()
     this.#db
-      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, updated_at = ? WHERE id = ?')
-      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you, at, ask.id)
+      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
+      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you,
+        plan ? JSON.stringify(plan) : null, spend ? JSON.stringify(spend) : null, message ? JSON.stringify(message) : null,
+        consent_blocked_by ?? null, at, ask.id)
+    if (JSON.stringify(ask.plan) !== JSON.stringify(plan) || JSON.stringify(ask.spend) !== JSON.stringify(spend) ||
+        JSON.stringify(ask.message) !== JSON.stringify(message)) this.#db.prepare('DELETE FROM drafts WHERE ask_id = ?').run(ask.id)
 
     // Drafts and notes for fields that no longer exist would hydrate into an
     // ask with nowhere to show them. Everything else is left alone on purpose:
@@ -306,6 +317,13 @@ export class Store {
       links: JSON.parse(row.links_json),
       tried: JSON.parse(row.tried_json),
       only_you: row.only_you ?? null,
+      plan: row.plan_json ? JSON.parse(row.plan_json) : undefined,
+      spend: row.spend_json ? JSON.parse(row.spend_json) : undefined,
+      message: row.message_json ? JSON.parse(row.message_json) : undefined,
+      consent_blocked_by: row.consent_blocked_by ?? undefined,
+      receipt: row.receipt_json ? JSON.parse(row.receipt_json) : undefined,
+      revision: row.revision ?? 1,
+      answered_via: this.#db.prepare('SELECT answered_via FROM answers WHERE ask_id = ? LIMIT 1').get(row.id)?.answered_via ?? undefined,
       origin: JSON.parse(row.origin_json),
       note: row.note ?? undefined,
       reply: row.reply ?? undefined,
@@ -392,9 +410,26 @@ export class Store {
     }
   }
 
-  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce } = {}) {
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, revision, answeredVia } = {}) {
+    // SQLite serializes the status/revision check and the write together.
+    this.#db.exec('BEGIN IMMEDIATE')
+    try { return this.#answerInTransaction(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia }) }
+    catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+
+  #answerInTransaction(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia }) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
+    if (APPROVAL_PURPOSES.includes(ask.purpose)) {
+      const error = (code, message, status) => { const err = new Error(message); err.code = code; err.status = status; throw err }
+      if (revision === undefined || revision !== ask.revision) error('STALE_REVISION', 'The agent changed this ask. Check it again.', 409)
+      if (ask.status !== 'open') error('ASK_NOT_OPEN', `ask ${ask.ticket} is ${ask.status}`, 409)
+      if (!answeredVia || answeredVia === 'local') error('HUMAN_ONLY', 'answer this on the page', 403)
+      if (fieldBounce && Object.keys(fieldBounce).length || values.verdict === null ||
+          !ask.fields[0].choices.some((choice) => choice.value === values.verdict)) error('INVALID_VERDICT', 'choose a verdict', 400)
+      if (ask.purpose === 'consent' && values.verdict === 'approve' && typeof values.note === 'string' && values.note.trim()) error('NOTE_MEANS_CHANGE', 'change the plan before approval', 400)
+      if (values.edited_text != null && typeof values.edited_text !== 'string') error('INVALID_VERDICT', 'edited text must be text', 400)
+    }
     if (['collected', 'cancelled', 'expired'].includes(ask.status)) {
       throw new Error(`ask ${ask.ticket} is ${ask.status}`)
     }
@@ -471,14 +506,42 @@ export class Store {
       // check X" goes — the part a typed field cannot hold.
       this.#db.prepare('UPDATE asks SET reply = ? WHERE id = ?').run(reply || null, ask.id)
     }
+    if (answeredVia) this.#db.prepare('UPDATE answers SET answered_via = ? WHERE ask_id = ?').run(answeredVia, ask.id)
     this.#db.prepare('DELETE FROM drafts WHERE ask_id = ?').run(ask.id)
 
     const updated = this.get(ask.id)
     if (updated.missing.length === 0 && updated.status === 'open') {
       this.#db.prepare(`UPDATE asks SET status = 'answered', answered_at = ? WHERE id = ?`).run(at, ask.id)
-      return { ask: this.get(ask.id), complete: true }
+      const result = { ask: this.get(ask.id), complete: true }; this.#db.exec('COMMIT'); return result
     }
-    return { ask: updated, complete: false }
+    this.#db.exec('COMMIT'); return { ask: updated, complete: false }
+  }
+
+  payClaim(ticket) {
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const ask = this.get(ticket)
+      if (!ask || ask.purpose !== 'spend' || ask.status !== 'answered' || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) {
+        const err = new Error('payment not allowed'); err.code = 'PAY_NOT_ALLOWED'; throw err
+      }
+      const key = ask.receipt?.pay_key ?? `unblock-${ask.ticket}-r${ask.revision}`
+      const is_new = !ask.receipt?.pay_key
+      if (is_new) this.#db.prepare('UPDATE asks SET receipt_json = ? WHERE id = ?').run(JSON.stringify({ pay_key: key, at: nowMs() }), ask.id)
+      this.#db.exec('COMMIT')
+      return { pay_key: key, is_new }
+    } catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  }
+
+  receipt(ticket, data) {
+    const ask = this.get(ticket)
+    const approved = ask && ask.status === 'answered' && ask.answers.verdict === 'approve'
+    const spend = data.spend_request_id !== undefined || data.spend_status !== undefined
+    if (!approved || (spend ? ask.purpose !== 'spend' || !ask.receipt?.pay_key || Boolean(ask.receipt?.spend_request_id) : ask.purpose !== 'consent')) {
+      const err = new Error('receipt not allowed'); err.code = 'RECEIPT_NOT_ALLOWED'; throw err
+    }
+    const receipt = { ...ask.receipt, ...data, at: nowMs() }
+    this.#db.prepare('UPDATE asks SET receipt_json = ? WHERE id = ?').run(JSON.stringify(receipt), ask.id)
+    return this.get(ask.id)
   }
 
   saveDraft(idOrTicket, values, fieldContext, reply) {

@@ -1,12 +1,12 @@
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, renameSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { applyConfig } from './config.js'
-import { normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
+import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
 import { Store } from './store.js'
 
@@ -136,7 +136,7 @@ function proxyIdentity(req) {
   if (typeof login !== 'string' || !login.includes('@')) return null
 
   const allowed = process.env.UNBLOCK_ALLOWED_USERS
-  if (allowed && !allowed.split(',').map((u) => u.trim()).includes(login)) return null
+  if (!allowed || !allowed.split(',').map((u) => u.trim()).includes(login)) return null
 
   return { login, name: req.headers['tailscale-user-name'] || login }
 }
@@ -355,6 +355,7 @@ export async function startDaemon({ port } = {}) {
   }
 
   async function bounceAsk(ticket, reply) {
+  if (APPROVAL_PURPOSES.includes(store.get(ticket)?.purpose)) { const error = new Error("choose a verdict on the page"); error.code = "INVALID_VERDICT"; throw error }
   // The note is optional. Requiring one greyed out the send-back button until
   // the human wrote an essay, which made rejecting a bad ask harder than
   // rubber-stamping it. A bounce with no note still tells the agent the ask
@@ -393,9 +394,14 @@ function scrubFieldBounce(raw) {
   return out
 }
 
-async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
+async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia) {
     const ask = store.get(ticket)
     if (!ask) return null
+    if (APPROVAL_PURPOSES.includes(ask.purpose)) {
+      // Reject stale or agent-supplied approvals before processing any values.
+      if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
+      if (answeredVia === 'local') { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
+    }
     const records = []
     for (const field of ask.fields) {
       const value = values?.[field.name]
@@ -427,6 +433,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       reply: optionalScrub(reply, 1000),
       fieldContext: scrubFieldContext(fieldContext),
       fieldBounce: scrubFieldBounce(fieldBounce),
+      revision, answeredVia,
     })
     emitAsk(result.ask, 'answered')
     return result
@@ -507,7 +514,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       }
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, 'share-link')
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
       // used to stay live after submitting, still serving every ask's answers.
@@ -598,7 +605,68 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile) })
     }
 
-    let ticket = routeTicket(pathname)
+    let ticket = routeTicket(pathname, '/pay-claim')
+    if (ticket && req.method === 'POST') return sendJson(res, 200, store.payClaim(ticket))
+
+    ticket = routeTicket(pathname, '/receipt')
+    if (ticket && req.method === 'POST') {
+      if (!/^ub_[a-z0-9]{6}$/.test(ticket)) return sendJson(res, 400, { error: 'invalid ticket' })
+      const body = await readJson(req)
+      const isSpend = body.spend_request_id !== undefined || body.spend_status !== undefined
+      if (isSpend) {
+        if (typeof body.spend_request_id !== 'string' || !body.spend_request_id ||
+            typeof body.spend_status !== 'string' || !body.spend_status || Object.keys(body).some((key) => !['spend_request_id','spend_status'].includes(key))) {
+          return sendJson(res, 400, { error: 'invalid spend receipt' })
+        }
+        return sendJson(res, 200, { ask: store.receipt(ticket, body) })
+      }
+      if (Object.keys(body).some((key) => !['final_url', 'before', 'after'].includes(key)) ||
+          (body.final_url !== undefined && (typeof body.final_url !== 'string' || !/^https:\/\//.test(body.final_url)))) {
+        return sendJson(res, 400, { error: 'invalid receipt' })
+      }
+      // Authorize before touching any caller-supplied path.
+      const ask = store.get(ticket)
+      if (!ask || ask.purpose !== 'consent' || ask.status !== 'answered' || ask.answers.verdict !== 'approve') {
+        return sendJson(res, 409, { error: 'receipt not allowed', code: 'RECEIPT_NOT_ALLOWED' })
+      }
+      const data = { ...(body.final_url === undefined ? {} : { final_url: body.final_url }) }
+      const images = []
+      for (const name of ['before', 'after']) {
+        if (body[name] === undefined) continue
+        const path = body[name]
+        let info
+        try { if (typeof path === 'string' && path.startsWith('/')) info = lstatSync(path) } catch { /* invalid path */ }
+        if (!info?.isFile() || info.isSymbolicLink() || info.size > 5 * 1024 * 1024) {
+          return sendJson(res, 400, { error: 'invalid PNG file' })
+        }
+        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+        let bytes
+        try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'invalid PNG file' })
+          bytes = Buffer.allocUnsafe(5 * 1024 * 1024 + 1); const size = readSync(fd, bytes, 0, bytes.length, 0); bytes = bytes.subarray(0, size) }
+        finally { closeSync(fd) }
+        if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return sendJson(res, 400, { error: 'invalid PNG file' })
+        images.push([name, bytes]); data[name] = true
+      }
+      const dir = join(stateDir(), 'receipts', ticket)
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      for (const [name, bytes] of images) {
+        const target = join(dir, `${name}.png`)
+        writeFileSync(`${target}.tmp`, bytes, { mode: 0o600 })
+        renameSync(`${target}.tmp`, target)
+      }
+      return sendJson(res, 200, { ask: store.receipt(ticket, data) })
+    }
+
+    const imageMatch = pathname.match(/^\/api\/asks\/(ub_[a-z0-9]{6})\/receipt\/(before|after)\.png$/)
+    if (imageMatch && req.method === 'GET') {
+      const ask = store.get(imageMatch[1])
+      if (!ask?.receipt?.[imageMatch[2]]) return notFound(res)
+      const bytes = readFileSync(join(stateDir(), 'receipts', imageMatch[1], `${imageMatch[2]}.png`))
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': bytes.length, 'Cache-Control': 'no-store' })
+      return res.end(bytes)
+    }
+
+    ticket = routeTicket(pathname)
     if (ticket && req.method === 'GET') {
       const ask = store.get(ticket)
       return ask ? sendJson(res, 200, ask) : notFound(res)
@@ -609,7 +677,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const body = await readJson(req)
       const result = body.bounce
         ? await bounceAsk(ticket, body.reply)
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       if (!result) return notFound(res)
       emitQueue()
       return sendJson(res, 200, result)
@@ -739,7 +807,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
         ? await bounceAsk(body.ticket, body.reply)
-        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
+        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       emitQueue()
       return sendJson(res, 200, result)
     }
@@ -773,6 +841,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
+      if (['HUMAN_ONLY', 'STALE_REVISION', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }

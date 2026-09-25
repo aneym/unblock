@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** The CLI is a local client. Only reveal resolves a secret, and only here. */
-import { spawn, spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
@@ -33,6 +34,7 @@ function project(ask) {
 function stable(health, ticket) {
   return health.public_origin ? `${health.public_origin.replace(/\/$/, '')}/#ask=${ticket}` : null
 }
+function kindWord(ask) { return ask.purpose === 'blocker' ? (ask.fields?.some((field) => field.type === 'secret') ? 'key' : 'click') : ask.purpose }
 function required(ask) {
   return (ask.fields ?? []).filter((field) => field.required && ask.missing?.includes(field.name))
 }
@@ -81,7 +83,7 @@ async function request(path, body, { start = true } = {}) {
   try { data = await response.json() } catch { fail(`invalid response from queue`, 1) }
   if (!response.ok) {
     const message = data.error || `HTTP ${response.status}`
-    if (data.code === 'ASK_NOT_OPEN') fail(message, 5)
+    if (['ASK_NOT_OPEN', 'PAY_NOT_ALLOWED', 'RECEIPT_NOT_ALLOWED'].includes(data.code)) fail(message, 5)
     if (response.status === 404) fail(message, 3)
     if (response.status === 400 || response.status === 409 || response.status === 422) {
       if (data.code === 'ALREADY_OPEN' && data.ticket) {
@@ -137,7 +139,7 @@ async function list(args) {
     for (const ask of group) {
       const prefix = `  ${ask.ticket}  `
       console.log(prefix + title(ask.title, Math.max(1, (process.stdout.columns || 100) - prefix.length)))
-      console.log(`             ${[ask.status === 'open' ? null : ask.status, ask.purpose ?? 'blocker',
+      console.log(`             ${[ask.status === 'open' ? null : ask.status, kindWord(ask),
         ask.kind === 'park' && ask.status === 'open' ? 'agent stopped' : null,
         ask.status === 'open' ? count(required(ask).length) : null, age(ask.created_at), ask.origin?.agent].filter(Boolean).join(' · ')}`)
       const link = stable(health, ask.ticket)
@@ -160,7 +162,7 @@ async function show(args) {
   if (json) return output(safe(ask))
   const health = await request('/api/health')
   console.log(ask.title)
-  console.log([ask.status, ask.purpose ?? 'blocker', project(ask), age(ask.created_at), ask.origin?.agent,
+  console.log([ask.status, kindWord(ask), project(ask), age(ask.created_at), ask.origin?.agent,
     ask.origin?.pane_id && `pane ${ask.origin.pane_id}`].filter(Boolean).join(' · '))
   const link = stable(health, ask.ticket)
   if (link) console.log(link)
@@ -202,6 +204,7 @@ async function answer(args) {
   const [ticket, ...pairs] = rest
   if (!ticket || !pairs.length) fail('usage: unblock answer <ticket> <value|name=value ...>')
   const ask = await request(`/api/asks/${encodeURIComponent(ticket)}`)
+  if (['consent', 'spend', 'message'].includes(ask.purpose)) fail('answer this on the page', 4)
   if (ask.status !== 'open') fail(`ask ${ticket} is ${ask.status}, not open`, 5)
   const values = {}
   if (pairs.length === 1 && !pairs[0].includes('=')) {
@@ -224,6 +227,61 @@ async function answer(args) {
     : `saved · still needs: ${required(result.ask).map((f) => f.label).join(', ')}`
   output({ ...result, ask: safe(result.ask) }, text)
 }
+async function receipt(args) {
+  const { rest, opts } = flags(args, { '--before': true, '--after': true, '--url': true })
+  if (rest.length !== 1) fail('usage: unblock receipt <ticket> [--before a.png] [--after b.png] [--url U] [--json]')
+  const ticket = rest[0]
+  const ask = await request(`/api/asks/${encodeURIComponent(ticket)}`)
+  if (ask.purpose !== 'consent' || ask.status !== 'answered' || ask.answers.verdict !== 'approve') fail('receipt not allowed', 5)
+  const result = await request(`/api/asks/${encodeURIComponent(ticket)}/receipt`, {
+    ...(opts['--before'] ? { before: resolve(opts['--before']) } : {}),
+    ...(opts['--after'] ? { after: resolve(opts['--after']) } : {}),
+    ...(opts['--url'] ? { final_url: opts['--url'] } : {}),
+  })
+  output(result, `receipt saved for ${ticket}`)
+}
+
+async function pay(args) {
+  const { rest, opts } = flags(args, { '--payment-method': true })
+  if (rest.length !== 1) fail('usage: unblock pay <ticket> [--payment-method <id>] [--json]')
+  const ticket = rest[0]
+  const ask = await request(`/api/asks/${encodeURIComponent(ticket)}`)
+  if (ask.purpose !== 'spend' || ask.status !== 'answered' || ask.answers.verdict !== 'approve' || ask.receipt?.spend_request_id) fail('payment not allowed', 5)
+  if (ask.spend.amount_cents > ask.spend.cap_cents || ask.spend.amount_cents > 50000) fail('amount exceeds cap or Link limit', 4)
+  const { pay_key } = await request(`/api/asks/${encodeURIComponent(ticket)}/pay-claim`, {})
+  const details = ask.spend
+  const context = `Payment for ${details.item} at ${details.vendor}: ${details.why}. Requested through Unblock ticket ${ticket}. Human approval is required in the Link app before the payment can proceed.`
+  const parameters = ['spend-request', 'create', '--merchant-name', details.vendor, '--merchant-url', details.vendor_url,
+    '--amount', String(details.amount_cents), '--currency', details.currency, '--context', context,
+    '--line-item', `name:${details.item},unit_amount:${details.amount_cents},quantity:1`, '--request-approval',
+    '--idempotency-key', pay_key, '--format', 'json']
+  if (opts['--payment-method']) parameters.push('--payment-method-id', opts['--payment-method'])
+  let data
+  try {
+    const result = await promisify(execFile)(process.env.UNBLOCK_LINK_CLI || 'link-cli', parameters, { maxBuffer: 256 * 1024 })
+    data = JSON.parse(result.stdout)
+    if (typeof data.id !== 'string' || !/^[-a-zA-Z0-9_]{1,120}$/.test(data.id) || typeof data.status !== 'string' || !/^[-a-zA-Z0-9_]{1,80}$/.test(data.status)) throw new Error('invalid response')
+  } catch (error) {
+    if (typeof error.code === 'number') fail(`link-cli failed (exit ${error.code}). Run \`link-cli spend-request create --help\` yourself to see why.`, 1)
+    fail('link-cli failed. Run `link-cli spend-request create --help` yourself to see why.', 1)
+  }
+  let recorded = false
+  const base = await daemon()
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(`${base}/api/asks/${encodeURIComponent(ticket)}/receipt`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${authToken()}` },
+        body: JSON.stringify({ spend_request_id: data.id, spend_status: data.status }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (response.ok) { recorded = true; break }
+      if (response.status >= 400 && response.status < 500) break
+    } catch { /* retry recording, never rerun link-cli */ }
+  }
+  if (!recorded) fail('payment request created but receipt could not be recorded; retry pay with the same key', 1)
+  output({ id: data.id, status: data.status }, `${data.id} · ${data.status}\nApprove the push in your Link app; then get the card with: link-cli spend-request retrieve ${data.id} --include card --output-file <path>`)
+}
+
 async function close(args) {
   const { rest } = flags(args, {})
   const [ticket, ...reason] = rest
@@ -395,6 +453,8 @@ function help() {
 unblock show <ticket> [--json]                   one ask in full (never secret values)
 unblock answer <ticket> <value>                  answer a one-question ask in one line
 unblock answer <ticket> name=value ...           answer by question name
+unblock receipt <ticket> [--before a.png] [--after b.png] [--url U]
+unblock pay <ticket> [--payment-method <id>]
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
 unblock file [path|-]                            file an ask from JSON (same shape as the MCP tool)
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
@@ -414,6 +474,8 @@ try {
   else if (command === 'list') await list(input)
   else if (command === 'show') await show(input)
   else if (command === 'answer') await answer(input)
+  else if (command === 'receipt') await receipt(input)
+  else if (command === 'pay') await pay(input)
   else if (command === 'close') await close(input)
   else if (command === 'file') await file(input)
   else if (command === 'update') await update(input)

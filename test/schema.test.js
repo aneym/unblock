@@ -105,7 +105,7 @@ test('only-human filing gate accepts real blockers and decisions and rejects inc
     [{ only_you: undefined }, 'only_you'],
     [{ ...decision, only_you: 'credential' }, 'only_you'],
     [{ only_you: 'judgment' }, 'only_you'],
-    [{ only_you: 'their_account', links: [{ url: 'https://railway.com/dashboard' }] }, 'links'],
+    [{ only_you: 'their_account', consent_blocked_by: 'device', links: [{ url: 'https://railway.com/dashboard' }] }, 'links'],
     [{ title: 'Choose a v1 plan' }, 'title'],
   ]) {
     assert.throws(() => validateAsk({ ...base, ...changes }), (error) => error.path === path, path)

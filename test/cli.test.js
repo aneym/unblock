@@ -30,7 +30,7 @@ async function run(args, input) {
 
 const common = {
   kind: 'file', why: 'A human must resolve the last step to proceed.', project: 'launch',
-  only_you: 'their_account',
+  only_you: 'their_account', consent_blocked_by: 'device',
   tried: ['ran railway variables and the API refused: needs the owner'],
   links: [{ url: 'https://example.com/settings/keys' }],
 }

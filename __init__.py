@@ -5,7 +5,7 @@ from .hermes import unblock_cancel, unblock_check, unblock_file, unblock_park
 ASK_SCHEMA = {
     "type": "object",
     "properties": {
-        "purpose": {"type": "string", "enum": ["blocker", "decision"]},
+        "purpose": {"type": "string", "enum": ["blocker", "decision", "consent", "spend", "message"]},
         # The filing gate: why only the human can do this, and what the agent
         # already tried. The daemon rejects an ask without both.
         "only_you": {
@@ -21,6 +21,10 @@ ASK_SCHEMA = {
         "project": {"type": "string", "maxLength": 64},
         "title": {"type": "string", "maxLength": 90},
         "why": {"type": "string", "maxLength": 1200},
+        "consent_blocked_by": {"type": "string", "enum": ["sign_in", "not_signed_in", "no_browser", "types_secret", "device"]},
+        "plan": {"type": "object", "properties": {"site": {"type": "string"}, "start_url": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}, "changes": {"type": "string"}, "untouched": {"type": "string"}}, "required": ["site", "start_url", "steps", "changes", "untouched"]},
+        "spend": {"type": "object", "properties": {"item": {"type": "string"}, "vendor": {"type": "string"}, "vendor_url": {"type": "string"}, "amount_cents": {"type": "integer"}, "currency": {"type": "string"}, "cap_cents": {"type": "integer"}, "why": {"type": "string"}}, "required": ["item", "vendor", "vendor_url", "amount_cents", "currency", "cap_cents", "why"]},
+        "message": {"type": "object", "properties": {"to": {"type": "string"}, "via": {"type": "string", "enum": ["email", "slack", "linkedin", "sms", "other"]}, "subject": {"type": "string"}, "text": {"type": "string"}}, "required": ["to", "via", "text"]},
         "fields": {
             "type": "array",
             "minItems": 1,
@@ -65,7 +69,7 @@ ASK_SCHEMA = {
         },
         "ttl_seconds": {"type": "number", "exclusiveMinimum": 0},
     },
-    "required": ["title", "why", "fields", "only_you", "tried"],
+    "required": ["title", "why", "only_you", "tried"],
 }
 
 
@@ -75,7 +79,7 @@ def register(ctx):
         toolset="unblock",
         schema=ASK_SCHEMA,
         handler=unblock_file,
-        description="File a nonblocking ask in the standalone Unblock queue. Only for what only the human can do; list what you tried first.",
+        description="File a nonblocking ask in the standalone Unblock queue. Clicks in a signed-in site are consent asks; sign-in is never consent. List what you tried first.",
         emoji="🟠",
     )
     ctx.register_tool(
