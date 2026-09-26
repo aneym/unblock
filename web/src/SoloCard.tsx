@@ -261,6 +261,8 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const [menu, setMenu] = useState(false)
   const [manual, setManual] = useState(false)
   const focalRef = useRef<HTMLElement>(null)
+  const focalActionsRef = useRef<HTMLDivElement>(null)
+  const [focalActionsInView, setFocalActionsInView] = useState(false)
   const [sendBackOpen, setSendBackOpen] = useState(false)
   const [backNote, setBackNote] = useState('')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error' | 'passkey'>('idle')
@@ -299,6 +301,20 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const detected = ask.origin.detected === true
   const isBusy = state === 'sending' || state === 'done' || state === 'passkey'
   const answered = ask.status === 'answered'
+  useEffect(() => {
+    if (!approvalKind || answered || detected || typeof IntersectionObserver === 'undefined') {
+      setFocalActionsInView(false)
+      return
+    }
+    const row = focalActionsRef.current
+    if (!row) return
+    const observer = new IntersectionObserver(
+      ([entry]) => setFocalActionsInView(entry.isIntersecting),
+      { root: null, rootMargin: '0px 0px -72px 0px', threshold: 0 },
+    )
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [approvalKind, answered, detected])
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}`
       + (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '')
@@ -702,7 +718,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
           </div>
         )}
         {!answered && !detected && (
-          <div className="focal-actions">
+          <div className="focal-actions" ref={focalActionsRef}>
             {state === 'passkey' && (
               <p className="passkey-pending">
                 <Icon name="fingerprint" size={16} /> Confirm with Touch ID or your passkey…
@@ -792,7 +808,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
         </section>
       )}
       {!answered && !detected && (
-        <div className="action-bar">
+        <div className={`action-bar${approvalKind && focalActionsInView ? ' is-hidden' : ''}`} aria-hidden={approvalKind && focalActionsInView}>
           {approvalKind ? (
             <button type="button" className="primary" disabled={primaryDisabled} onClick={onPrimary}>
               <PlainText text={primaryLabel} />

@@ -171,6 +171,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .action-bar { position: sticky; bottom: 0; z-index: 4; background: var(--page);
   border-top: 1px solid var(--border); padding: 12px 0; margin-top: 24px;
   display: flex; align-items: center; flex-wrap: nowrap; gap: 16px; }
+.action-bar.is-hidden { visibility: hidden; pointer-events: none; }
 .action-bar .primary { flex: 0 0 auto; }
 .action-bar .send-back { flex: 0 0 auto; white-space: nowrap; }
 .action-status { flex: 1; min-width: 0; text-align: right; color: var(--dim); font-size: 13px;
