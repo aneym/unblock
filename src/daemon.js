@@ -479,11 +479,16 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       await Promise.all(records.map(([, record]) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
       throw error
     }
-    // Commit succeeded. Retire only the secret references replaced by this
-    // answer, never a prior ref on the failure path.
-    const replaced = records.map(([name]) => ask.answers[name])
+    // Only references actually committed may survive this attempt. A bounced
+    // secret (or a field removed before commit) has no committed reference.
+    const unused = records.filter(([name, record]) =>
+      !result.ask.answer_is_ref[name] || result.ask.answers[name]?.resolve !== record.resolve,
+    ).map(([, record]) => record)
+    const replaced = records.filter(([name, record]) =>
+      result.ask.answer_is_ref[name] && result.ask.answers[name]?.resolve === record.resolve,
+    ).map(([name]) => ask.answers[name])
       .filter((record) => record && typeof record === 'object' && record.store)
-    await Promise.all(replaced.map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+    await Promise.all([...unused, ...replaced].map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
     emitAsk(result.ask, 'answered')
     return result
   })
@@ -564,7 +569,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        return sendJson(res, 200, { ask: applyDraft(ticket, body) })
+        return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body)) })
       }
       const result = body.bounce
         ? await withTicket(ticket, () => bounceAsk(ticket, body.reply))
@@ -679,7 +684,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     ticket = routeTicket(pathname, '/draft')
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(ticket, await readJson(req)) })
+      const body = await readJson(req)
+      return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body)) })
     }
 
     // Revise a live ask instead of cancelling and refiling it. The ticket, the
@@ -687,10 +693,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     // all survive.
     ticket = routeTicket(pathname, '/update')
     if (ticket && req.method === 'POST') {
-      const existing = store.get(ticket)
-      if (!existing) return notFound(res)
       const body = await readJson(req)
-      const ask = store.update(ticket, validateUpdate(existing, body))
+      const ask = await withTicket(ticket, () => {
+        const existing = store.get(ticket)
+        return existing ? store.update(ticket, validateUpdate(existing, body)) : null
+      })
+      if (!ask) return notFound(res)
       emitAsk(ask, 'updated')
       emitQueue()
       return sendJson(res, 200, { ask })
@@ -817,7 +825,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (!store.get(body.ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(body.ticket, body) })
+      return sendJson(res, 200, { ask: await withTicket(body.ticket, () => applyDraft(body.ticket, body)) })
     }
 
     const tokenMatch = pathname.match(/^\/u\/([^/]+)(.*)$/)

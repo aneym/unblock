@@ -409,6 +409,21 @@ export class Store {
   }
 
   answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce } = {}) {
+    // One answer spans references, bounces, context, drafts and status. Never
+    // expose a partial reference if a later write fails and the caller retires
+    // the corresponding secret on the failure path.
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce })
+      this.#db.exec('COMMIT')
+      return result
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  #answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce }) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)

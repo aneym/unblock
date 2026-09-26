@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
 // The page retries a send whose reply never arrived (a phone waking on a dead
@@ -212,6 +213,72 @@ test('re-answer failure preserves a committed secret; success retires the old ke
   assert.equal(resolve(next), 'two')
   assert.doesNotMatch(envText(), new RegExp(`^${envKey(old)}=`, 'm'))
   assert.match(envText(), new RegExp(`^${envKey(next)}=`, 'm'))
+})
+
+test('a later SQLite write failure rolls back the reference and removes the new secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'rollback-reference', { extra: [
+    { name: 'verdict', type: 'text', label: 'Verdict', required: true },
+  ] })
+  const db = new DatabaseSync(join(stateDir, 'queue.db'))
+  t.after(() => db.close())
+  db.exec(`CREATE TRIGGER reject_second_answer BEFORE INSERT ON answers
+    WHEN NEW.field_name = 'verdict' AND NEW.ask_id = (SELECT id FROM asks WHERE ticket = '${ticket}')
+    BEGIN SELECT RAISE(FAIL, 'second answer failed'); END`)
+  const failed = await post(base, '/api/answer', {
+    ticket, values: { api_key: 'rollback-value', verdict: 'keep' },
+  })
+  assert.equal(failed.status, 500)
+  const ask = await fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } }).then((res) => res.json())
+  assert.equal(ask.status, 'open')
+  assert.deepEqual(ask.answers, {})
+  assert.deepEqual(ask.answer_is_ref, {})
+  assert.doesNotMatch(envText(), new RegExp(scopedLine(ticket, 'api_key')))
+})
+
+test('a bounced secret is not left in the secret store after a successful answer', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'bounced-secret')
+  const sent = await post(base, '/api/answer', {
+    ticket, values: { api_key: 'bounced-value' }, field_bounce: { api_key: 'wrong question' },
+  })
+  assert.equal(sent.status, 200)
+  assert.deepEqual(sent.body.ask.answers.api_key, { $bounce: 'wrong question' })
+  assert.equal(sent.body.ask.answer_is_ref.api_key, undefined)
+  assert.doesNotMatch(envText(), new RegExp(scopedLine(ticket, 'api_key')))
+})
+
+test('an update waits for a secret answer before revising the ask', async (t) => {
+  let started, release
+  const putStarted = new Promise((resolve) => { started = resolve })
+  const resumePut = new Promise((resolve) => { release = resolve })
+  const real = new SecretStore({ backend: 'env' })
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    async put(input) { started(); await resumePut; return real.put(input) },
+    delete: (record) => real.delete(record),
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'update-during-put')
+  const answer = post(base, '/api/answer', { ticket, values: { api_key: 'race-value' } })
+  await putStarted
+  const update = post(base, `/api/asks/${ticket}/update`, {
+    title: 'Updated question', why: 'Human input unblocks the key.', only_you: 'credential',
+    tried: ['Checked everything an agent can check before asking the human.'],
+    fields: [{ name: 'verdict', type: 'text', label: 'Verdict', required: true }],
+    links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
+  })
+  try {
+    assert.equal(await Promise.race([update.then(() => 'updated'), new Promise((resolve) => setTimeout(() => resolve('pending'), 100))]), 'pending')
+  } finally { release() }
+  assert.equal((await answer).status, 200)
+  assert.equal((await update).status, 409)
 })
 
 test('sweep waits for a secret put before changing ask status', async (t) => {
