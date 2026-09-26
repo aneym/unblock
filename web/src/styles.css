@@ -256,7 +256,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .status-pill { background: var(--gray-bg); color: var(--gray-text); border-radius: 6px; }
 .status-pill.paused { background: var(--red-bg); color: var(--red-text); }
 .status-pill.answered { background: var(--green-bg); color: var(--green-text); }
-.focal-card, .receipt-card { border-left: 3px solid var(--kind-text); border-radius: 8px;
+.focal-card, .receipt-card { border-radius: 8px;
   padding: 20px; background: var(--kind-bg); margin-top: 24px; min-width: 0; }
 .focal-sentence { margin: 0 0 18px; font-size: 17px; line-height: 26px; font-weight: 500; }
 .focal-extra { margin: 14px 0; }
@@ -316,8 +316,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .passkey-hint { flex-basis: 100%; margin: 0; color: var(--dim); font-size: 13px; }
 .list-entry { min-width: 0; border-bottom: 1px solid var(--border); }
 .list-entry .list-row-copy, .list-entry .list-row-title, .list-focal { min-width: 0; overflow-wrap: anywhere; }
-.list-entry.expanded { background: var(--kind-bg); border-left: 3px solid var(--kind-text);
-  border-radius: 8px; border-bottom: 0; }
+.list-entry.expanded { background: var(--kind-bg); border-radius: 8px; border-bottom: 0; }
 .list-entry .list-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px; border-bottom: 0; padding: 16px; }
 .list-entry .list-row-copy { gap: 4px; }
