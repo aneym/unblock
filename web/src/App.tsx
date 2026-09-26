@@ -164,22 +164,23 @@ export default function App() {
     window.scrollTo(0, 0)
   }, [])
   // A card calls finish a moment after it sends, by which time the queue may
-  // have changed: read the current one, and remember where the ask stood in
-  // case a refresh already removed it.
+  // have changed and the human may have moved on. Remember, while the ask is
+  // open, the asks that followed it; advance to the first still waiting, or to
+  // whatever else waits, or to the list. Never move someone who already left.
   const asksRef = useRef(asks)
   asksRef.current = asks
-  const lastIndex = useRef(-1)
-  if (currentIndex >= 0) lastIndex.current = currentIndex
+  const selectedRef = useRef(selectedTicket)
+  selectedRef.current = selectedTicket
+  const following = useRef<string[]>([])
+  if (currentIndex >= 0) following.current = asks.slice(currentIndex + 1).map((ask) => ask.ticket)
   const finish = (ticket: string) => {
-    const current = asksRef.current
-    const found = current.findIndex((ask) => ask.ticket === ticket)
-    const index = found >= 0 ? found : lastIndex.current
-    const remaining = current.filter((ask) => ask.ticket !== ticket)
-    const next = remaining[index < 0 || index >= remaining.length ? 0 : index]
     setDoneTickets((previous) => new Set([...previous, ticket]))
-    if (next) choose(next.ticket)
-    else goToList()
     void load()
+    if (selectedRef.current !== ticket) return
+    const waiting = asksRef.current.filter((ask) => ask.ticket !== ticket)
+    const next = following.current.find((t) => waiting.some((ask) => ask.ticket === t)) ?? waiting[0]?.ticket
+    if (next) choose(next)
+    else goToList()
   }
   useEffect(() => {
     if (!selectedTicket || !selected) return
