@@ -653,6 +653,26 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
           )}
         </section>
       )}
+      {/* A finished consent leads with what the agent did. */}
+      {answered && kind === 'consent' && receipt && (
+        <section className="receipt-card">
+          <h2><Icon name="answered" size={18} /> Done by the agent ·{' '}
+            {receiptAt && <time dateTime={new Date(receiptAt).toISOString()}>
+              {new Date(receiptAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </time>}
+          </h2>
+          {(receipt.before || receipt.after) && <p>Screenshots the agent took</p>}
+          <div className="receipt-images">
+            {receipt.before && (
+              <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/before.png`} alt="Before" />
+            )}
+            {receipt.after && (
+              <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/after.png`} alt="After" />
+            )}
+          </div>
+          {receipt.final_url && <Chip url={receipt.final_url} />}
+        </section>
+      )}
       <section className="focal-card" ref={focalRef}>
         {kind === 'spend' && ask.spend && (
           <div className="amount">
@@ -788,25 +808,6 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
         </div>
       )}
       <Details ask={ask} answered={answered} herdrHref={herdrHref} topLinks={hasMainSteps ? [] : topLinks} />
-      {answered && kind === 'consent' && receipt && (
-        <section className="receipt-card">
-          <h2><Icon name="answered" size={18} /> Done by the agent ·{' '}
-            {receiptAt && <time dateTime={new Date(receiptAt).toISOString()}>
-              {new Date(receiptAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </time>}
-          </h2>
-          {(receipt.before || receipt.after) && <p>Screenshots the agent took</p>}
-          <div className="receipt-images">
-            {receipt.before && (
-              <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/before.png`} alt="Before" />
-            )}
-            {receipt.after && (
-              <img src={`${BASE}/api/asks/${encodeURIComponent(ask.ticket)}/receipt/after.png`} alt="After" />
-            )}
-          </div>
-          {receipt.final_url && <Chip url={receipt.final_url} />}
-        </section>
-      )}
       {!answered && !detected && (
         <div className={`action-bar${approvalKind && focalActionsInView ? ' is-hidden' : ''}`} aria-hidden={approvalKind && focalActionsInView}>
           {approvalKind ? (
