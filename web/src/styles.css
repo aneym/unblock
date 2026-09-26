@@ -61,24 +61,22 @@ a { color: inherit; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .top-count { font-size: 12px; color: var(--dim); }
 .viewer { margin-left: auto; min-width: 0; color: var(--dim); font-size: 13px;
   overflow-wrap: anywhere; text-align: right; }
-.shell { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px;
-  display: grid; grid-template-columns: 280px minmax(0, 720px); gap: 48px; align-items: start; }
+.shell { max-width: 680px; margin: 0 auto; padding: 32px 24px 80px; }
 .ask-pane { min-width: 0; }
-.queue { min-width: 0; }
-.queue h2 { margin: 0 0 20px; font-size: 13px; font-weight: 600; color: var(--dim); }
-.queue-group { margin-bottom: 24px; }
-.queue-group h3 { margin: 0 0 8px 12px; font-size: 12px; font-weight: 500; color: var(--dim); }
+.ask-navigation { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 20px; color: var(--dim); font-size: 13px; }
+.ask-navigation-right { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .queue-row { display: block; width: 100%; text-align: left; padding: 8px 12px;
   min-height: 56px; border: 0; border-left: 2px solid transparent; border-radius: 6px;
   background: transparent; }
 .queue-row:hover { background: var(--border); }
-.queue-row.selected { border-left-color: var(--ink); background: var(--card); }
 .row-heading { display: flex; align-items: flex-start; gap: 10px; }
 .row-heading .state-icon { margin-top: 2px; }
 .row-title { font-size: 14px; font-weight: 500; line-height: 1.4; display: -webkit-box;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .row-meta { margin: 3px 0 0 30px; display: block; color: var(--dim); font-size: 12px; }
-.back-link { display: none; border: 0; background: none; padding: 0; color: var(--dim); font-size: 13px; }
+.back-link { display: block; border: 0; background: none; padding: 0; margin-bottom: 20px;
+  color: var(--dim); font-size: 13px; }
 .ask-card, .next-card { min-width: 0; background: var(--card); border: 1px solid var(--border);
   border-radius: 12px; box-shadow: var(--card-shadow); }
 .card-body { padding: 28px 32px 8px; }
@@ -207,7 +205,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .ticket { font-size: 12px; overflow-wrap: anywhere; }
 .receipt-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
 .receipt-images img { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
-.list-page { max-width: 768px; margin: 0 auto; padding: 36px 24px 80px; }
+.list-page { max-width: 720px; margin: 0 auto; padding: 36px 24px 80px; }
 .list-title { margin: 0 0 20px; font-size: 28px; line-height: 34px; }
 .next-card { padding: 28px 32px; }
 .next-card h2 { margin: 16px 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; overflow-wrap: anywhere; }
@@ -226,11 +224,6 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .empty p { margin: 0; color: var(--dim); font-size: 13px; }
 .empty-list { text-align: center; }
 .empty-list p { margin: 0 0 12px; }
-@media (max-width: 1099px) {
-  .shell { max-width: 768px; display: block; padding: 24px; }
-  .queue { display: none; }
-  .back-link { display: block; margin-bottom: 20px; }
-}
 @media (max-width: 600px) {
   .top-inner { padding: 0 16px; }
   .passkey-banner-row { padding: 10px 16px; }
@@ -255,10 +248,6 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .kind-message { --kind-text: var(--pink-text); --kind-bg: var(--pink-bg); }
 .kind-permission { --kind-text: var(--red-text); --kind-bg: var(--red-bg); }
 .topbar { background: var(--page); }
-.shell { max-width: 1200px; grid-template-columns: 280px minmax(0, 760px); }
-.queue { background: var(--rail); padding: 16px; border-radius: 8px; }
-.queue-row.selected { border-left-color: var(--kind-text); background: var(--kind-bg); }
-.queue .kind-label { font-size: 11px; }
 .ask-article { min-width: 0; padding-bottom: 90px; }
 .ask-article .card-heading { padding-top: 4px; }
 .ask-article h1 { margin: 16px 0 8px; }
@@ -337,7 +326,6 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .list-focal { padding: 0 16px 20px; }
 .list-focal p { min-width: 0; margin: 0 0 14px; font-size: 17px; line-height: 26px; font-weight: 500; overflow-wrap: anywhere; }
 .list-entry .row-answer { align-self: start; }
-@media (max-width: 1099px) { .shell { max-width: 808px; } }
 @media (max-width: 600px) {
   .focal-card, .receipt-card { padding: 16px; }
   .focal-actions .primary { width: 100%; }

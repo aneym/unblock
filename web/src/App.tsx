@@ -56,30 +56,12 @@ function QueueRow({ ask, active, choose }: { ask: Ask; active: boolean; choose: 
     </button>
   )
 }
-function QueueRail({ asks, selected, choose }: {
-  asks: Ask[]; selected: string | null; choose: (ticket: string) => void
-}) {
-  const projects = Array.from(new Set(asks.map(groupOf)))
-  return (
-    <nav className="queue" aria-label="Waiting on you">
-      <h2>Waiting on you</h2>
-      {projects.map((project) => (
-        <div className="queue-group" key={project}>
-          <h3>{project}</h3>
-          {asks.filter((ask) => groupOf(ask) === project).map((ask) => (
-            <QueueRow key={ask.ticket} ask={ask} active={selected === ask.ticket} choose={choose} />
-          ))}
-        </div>
-      ))}
-    </nav>
-  )
-}
 function AskList({ asks, choose, showAnswered }: {
   asks: Ask[]; choose: (ticket: string) => void; showAnswered: () => void
 }) {
   if (!asks.length) return (
     <main className="list-page empty-list">
-      <p>Nothing is waiting on you.</p>
+      <p>Nothing waiting</p>
       <button className="text-button" type="button" onClick={showAnswered}>Show answered</button>
     </main>
   )
@@ -169,35 +151,57 @@ export default function App() {
     [data, doneTickets],
   )
   const selected = data?.asks.find((ask) => ask.ticket === selectedTicket)
+  const currentIndex = asks.findIndex((ask) => ask.ticket === selectedTicket)
   const choose = useCallback((ticket: string) => {
     if (pinned() !== ticket) location.hash = `ask=${encodeURIComponent(ticket)}`
     setSelectedTicket(ticket)
+    window.scrollTo(0, 0)
+  }, [])
+  const goToList = useCallback(() => {
+    history.pushState(null, '', location.pathname + location.search)
+    setSelectedTicket(null)
+    setShowAnswered(false)
+    window.scrollTo(0, 0)
   }, [])
   const finish = (ticket: string) => {
     const index = asks.findIndex((ask) => ask.ticket === ticket)
-    const next = asks[index + 1] || asks[index - 1]
+    const remaining = asks.filter((ask) => ask.ticket !== ticket)
+    const next = remaining[index < 0 || index >= remaining.length ? 0 : index]
     setDoneTickets((previous) => new Set([...previous, ticket]))
     if (next) choose(next.ticket)
-    else { history.replaceState(null, '', location.pathname + location.search); setSelectedTicket(null) }
+    else goToList()
     void load()
   }
   useEffect(() => {
+    if (!selectedTicket || !selected) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
-      if (event.target instanceof HTMLElement
-        && event.target.closest('input, textarea, select, button, a, [contenteditable="true"]')) return
-      const direction = event.key === 'j' || event.key === 'ArrowDown' ? 1
-        : event.key === 'k' || event.key === 'ArrowUp' ? -1 : 0
-      if (!direction || !asks.length) return
+      if (event.altKey || event.metaKey || event.ctrlKey) return
+      if (event.target instanceof Element
+        && event.target.closest('input, textarea, select, [contenteditable]')) return
+      const openMenu = document.querySelector('.ask-pane .menu-popover')
+      const openDialog = document.querySelector('.ask-pane dialog[open], .ask-pane [role="dialog"], .ask-pane [popover]:popover-open')
+      if (openMenu || openDialog) {
+        if (event.key === 'Escape' && openMenu) {
+          event.preventDefault()
+          openMenu.parentElement?.querySelector<HTMLButtonElement>('[aria-expanded="true"]')?.click()
+        }
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        goToList()
+        return
+      }
+      const direction = event.key === 'j' || event.key === 'ArrowRight' ? 1
+        : event.key === 'k' || event.key === 'ArrowLeft' ? -1 : 0
+      const next = asks[currentIndex + direction]
+      if (!direction || !next || currentIndex < 0) return
       event.preventDefault()
-      const index = selected ? asks.findIndex((ask) => ask.ticket === selected.ticket) : 0
-      const next = asks[(index + direction + asks.length) % asks.length]
       choose(next.ticket)
-      document.getElementById(`ask-tab-${encodeURIComponent(next.ticket)}`)?.scrollIntoView({ block: 'nearest' })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [asks, selected, choose])
+  }, [asks, selected, selectedTicket, currentIndex, choose, goToList])
   return (
     <>
       <PasskeyBanner events={passkeyBanner} dismiss={dismissPasskeyBanner} />
@@ -217,16 +221,21 @@ export default function App() {
         </div>
       ) : selectedTicket && selected ? (
         <main className="shell">
-          <QueueRail asks={asks} selected={selectedTicket} choose={choose} />
           <section className="ask-pane" aria-label="Selected ask">
-            <button
-              className="back-link" type="button" onClick={() => {
-                history.pushState(null, '', location.pathname + location.search)
-                setSelectedTicket(null)
-              }}
-            >
-              ← All asks
-            </button>
+            <nav className="ask-navigation" aria-label="Ask navigation">
+              <button className="text-button" type="button" onClick={goToList}>← All asks</button>
+              <span className="ask-navigation-right">
+                {currentIndex >= 0 && <span>{currentIndex + 1} of {asks.length}</span>}
+                {!!asks.length && (currentIndex < 0 || currentIndex < asks.length - 1) && (
+                  <>
+                    {currentIndex >= 0 && <span>·</span>}
+                    <button className="text-button" type="button"
+                      onClick={() => choose(asks[currentIndex < 0 ? 0 : currentIndex + 1].ticket)}
+                    >Next →</button>
+                  </>
+                )}
+              </span>
+            </nav>
             <SoloCard
               key={selected.ticket} ask={selected} passkeys={passkeys}
               onFinished={() => finish(selected.ticket)} onReload={load}
