@@ -203,7 +203,7 @@ test('enrollment: open with zero credentials, gated afterwards, and it raises a 
   const intruder = createAuthenticator({ rpId, origin })
   const late = await post('/api/passkeys/register', { challenge_id: early.json.challenge_id, credential: intruder.register(early.json.challenge) }, human)
   assert.equal(late.status, 403)
-  assert.equal(late.json.code, 'PASSKEY_INVALID')
+  assert.equal(late.json.code, 'PASSKEY_EXISTS')
   device1 = first.device
   firstEventId = first.event_id
   assert.equal(typeof first.id_suffix, 'string')
@@ -213,13 +213,19 @@ test('enrollment: open with zero credentials, gated afterwards, and it raises a 
   assert.equal(list.status, 200)
   assert.equal(list.json.credentials.length, 1)
   assert.equal(list.json.credentials[0].id_suffix, first.id_suffix)
+  const addedAt = list.json.credentials[0].created_at
+  const expected = `A passkey is already set up here (added ${new Date(addedAt).toISOString()}). If you didn't add it, don't approve anything and tell your agent.`
+  assert.equal(late.json.added_at, addedAt)
+  assert.equal(late.json.error, expected)
   assert.equal(list.json.banner.length, 1)
   assert.equal(list.json.banner[0].event_id, firstEventId)
 
   // A second enrollment with no assertion from the first key is refused.
   const bare = await registerOptions({})
   assert.equal(bare.status, 403)
-  assert.equal(bare.json.code, 'PASSKEY_REQUIRED')
+  assert.equal(bare.json.code, 'PASSKEY_EXISTS')
+  assert.equal(bare.json.added_at, addedAt)
+  assert.equal(bare.json.error, expected)
 
   const dismiss = await post('/api/passkeys/banner/dismiss', { event_id: firstEventId }, human)
   assert.equal(dismiss.status, 200)

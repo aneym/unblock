@@ -36,7 +36,13 @@ function sendFailure(error: unknown, what: string, button: string): string {
   return `Not sent: ${error instanceof Error ? error.message : 'unknown error'}.`
 }
 /** Plain words for a failed Touch ID ceremony (enroll or approve), before an answer ever reaches the server. */
-function passkeyFailure(error: unknown, button: string): string {
+function passkeyFailure(error: unknown, button: string, approving = false): string {
+  if (error instanceof ApiError && error.code === 'PASSKEY_EXISTS') {
+    const added = error.added_at && Number.isFinite(error.added_at)
+      ? new Date(error.added_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+      : 'an unknown time'
+    return `A passkey is already set up here (added ${added}). If you didn't add it, don't approve anything and tell your agent.`
+  }
   if (error instanceof ApiError && error.code === 'PASSKEY_INVALID') {
     return 'That Touch ID check did not match this version of the ask. Try again.'
   }
@@ -44,9 +50,12 @@ function passkeyFailure(error: unknown, button: string): string {
     return 'Enroll a passkey first.'
   }
   const name = error instanceof Error ? error.name : undefined
-  if (name === 'NotAllowedError' || name === 'AbortError') {
-    return 'Touch ID was cancelled. Nothing was sent.'
+  if (name === 'NotAllowedError') {
+    return approving
+      ? 'Touch ID was cancelled, or this device has no passkey for unblock. Nothing was sent.'
+      : 'Touch ID was cancelled. Nothing was sent.'
   }
+  if (name === 'AbortError') return 'Touch ID was cancelled. Nothing was sent.'
   return sendFailure(error, 'Your answer', button)
 }
 function StepList({ ticket, steps, fields, values, renderField, checked, setChecked }: {
@@ -262,6 +271,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const [manual, setManual] = useState(false)
   const focalRef = useRef<HTMLElement>(null)
   const focalActionsRef = useRef<HTMLDivElement>(null)
+  const actionBarRef = useRef<HTMLDivElement>(null)
   const [focalActionsInView, setFocalActionsInView] = useState(false)
   const [sendBackOpen, setSendBackOpen] = useState(false)
   const [backNote, setBackNote] = useState('')
@@ -302,19 +312,28 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const isBusy = state === 'sending' || state === 'done' || state === 'passkey'
   const answered = ask.status === 'answered'
   useEffect(() => {
-    if (!approvalKind || answered || detected || typeof IntersectionObserver === 'undefined') {
-      setFocalActionsInView(false)
-      return
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const button = focalActionsRef.current?.querySelector('button.primary')
+      const barHeight = actionBarRef.current?.offsetHeight || 72
+      const rect = button?.getBoundingClientRect()
+      const visible = !!button && getComputedStyle(button).visibility !== 'hidden'
+        && getComputedStyle(button).display !== 'none'
+        && !!rect && rect.width > 0 && rect.height > 0
+        && rect.top < window.innerHeight - barHeight && rect.bottom > 0
+      setFocalActionsInView(visible)
     }
-    const row = focalActionsRef.current
-    if (!row) return
-    const observer = new IntersectionObserver(
-      ([entry]) => setFocalActionsInView(entry.isIntersecting),
-      { root: null, rootMargin: '0px 0px -72px 0px', threshold: 0 },
-    )
-    observer.observe(row)
-    return () => observer.disconnect()
-  }, [approvalKind, answered, detected])
+    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(measure) }
+    schedule()
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      window.cancelAnimationFrame(frame)
+    }
+  })
   const herdrHref = ask.origin.pane_id
     ? `herdr://focus?pane=${encodeURIComponent(ask.origin.pane_id)}`
       + (ask.origin.tab_id ? `&tab=${encodeURIComponent(ask.origin.tab_id)}` : '')
@@ -512,16 +531,18 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
     if (isBusy || detected || answered) return
     setSafetyNotice(''); setErrorText('')
     setState('passkey'); setStatus('Confirm with Touch ID or your passkey…')
+    let approving = !!passkeys.count
     try {
       if (!passkeys.count) {
         await enroll()
         void passkeys.refresh()
       }
+      approving = true
       const assertion = await approveAssertion(ask.ticket)
       await submit(gatedVerdict, assertion)
     } catch (error) {
       setState('error'); setStatus('Not sent')
-      setErrorText(passkeyFailure(error, primaryLabel))
+      setErrorText(passkeyFailure(error, primaryLabel, approving))
     }
   }
   const onPrimary = () => {
@@ -530,9 +551,15 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
     else if (allRecommended) onRecommend()
     else void submit()
   }
+  const recommended = unanswered.filter((field) => field.recommend && !field.must_decide)
+  const singleRecommendation = recommended.length === 1 ? recommended[0] : null
+  const choiceLabel = singleRecommendation?.type === 'choice'
+    ? singleRecommendation.choices?.find((choice) => choice.value === singleRecommendation.recommend?.value)?.label
+    : undefined
   const primaryLabel = kind === 'key' || kind === 'click'
     ? `${topLink?.label || ''} ↗`
-    : kind === 'decision' || kind === 'question' ? 'Accept the recommendations'
+    : kind === 'decision' || kind === 'question'
+      ? singleRecommendation ? (choiceLabel ? `Go with ${choiceLabel}` : 'Accept the recommendation') : 'Accept the recommendations'
       : kind === 'spend' ? `Approve payment ${ask.spend ? money(ask.spend.amount_cents, ask.spend.currency) : ''}`
         : !passkeyGated ? 'Approve and send' // unreachable: passkeyGated covers every remaining kind
           : !passkeys.available
@@ -809,7 +836,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
       )}
       <Details ask={ask} answered={answered} herdrHref={herdrHref} topLinks={hasMainSteps ? [] : topLinks} />
       {!answered && !detected && (
-        <div className={`action-bar${approvalKind && focalActionsInView ? ' is-hidden' : ''}`} aria-hidden={approvalKind && focalActionsInView}>
+        <div ref={actionBarRef} className={`action-bar${focalActionsInView ? ' is-hidden' : ''}`} aria-hidden={focalActionsInView}>
           {approvalKind ? (
             <button type="button" className="primary" disabled={primaryDisabled} onClick={onPrimary}>
               <PlainText text={primaryLabel} />

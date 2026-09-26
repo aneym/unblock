@@ -961,7 +961,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
-      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED', 'PASSKEY_REQUIRED', 'PASSKEY_INVALID', 'PASSKEY_CAP'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : error.code === 'PASSKEY_CAP' ? 409 : 400), { error: error.message, code: error.code })
+      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED', 'PASSKEY_REQUIRED', 'PASSKEY_INVALID', 'PASSKEY_EXISTS', 'PASSKEY_CAP'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : error.code === 'PASSKEY_CAP' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }

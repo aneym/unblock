@@ -22,11 +22,17 @@ const CHALLENGE_TTL_MS = 120_000
 // A fixed, non-secret user handle: there is exactly one human this daemon serves.
 const FIXED_USER_ID = Buffer.alloc(16)
 
-function fail(code, message, status) {
+function fail(code, message, status, details = {}) {
   const err = new Error(message)
   err.code = code
   err.status = status
+  err.details = details
   throw err
+}
+
+function passkeyExists(existing) {
+  const addedAt = Math.min(...existing.map((credential) => credential.createdAt))
+  fail('PASSKEY_EXISTS', `A passkey is already set up here (added ${new Date(addedAt).toISOString()}). If you didn't add it, don't approve anything and tell your agent.`, 403, { added_at: addedAt })
 }
 
 function clip(value, max) {
@@ -93,7 +99,8 @@ export function registerOptions(store, body) {
   const rp = requireRp()
   const existing = store.listCredentials()
   if (existing.length) {
-    const { challenge, credential, newSignCount } = verifyWithChallenge(store, body?.assertion, 'enroll_auth', rp)
+    if (!body?.assertion) passkeyExists(existing)
+    const { challenge, credential, newSignCount } = verifyWithChallenge(store, body.assertion, 'enroll_auth', rp)
     if (!store.consumeChallenge(challenge.id, { kind: 'enroll_auth' }))
       fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
     store.updateCredentialSignCount(credential.id, newSignCount)
@@ -146,8 +153,10 @@ export function register(store, body, { userAgent, logDir } = {}) {
     throw error
   }
   return store.transaction(() => {
-    if (!challenge.authorized && store.countCredentials() > 0)
-      fail('PASSKEY_INVALID', 'a passkey was added meanwhile; approve this one with it', 403)
+    if (!challenge.authorized) {
+      const existing = store.listCredentials()
+      if (existing.length) passkeyExists(existing)
+    }
     if (!store.consumeChallenge(challenge.id, { kind: 'register' }, { inTransaction: true }))
       fail('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
     const label = `Passkey · ${new Date().toISOString().slice(0, 10)}`

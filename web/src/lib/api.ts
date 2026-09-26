@@ -27,7 +27,7 @@ export const VIEWER = BOOT.viewer
 
 export class FinishedError extends Error {}
 export class ApiError extends Error {
-  constructor(message: string, public readonly code?: string) { super(message) }
+  constructor(message: string, public readonly code?: string, public readonly added_at?: number) { super(message) }
 }
 
 /** The request never got an HTTP answer (Safari words this "Load failed"). */
@@ -102,8 +102,8 @@ export async function api<T>(path: string, body?: unknown, { retry = true } = {}
   flushReports()
   if (response.status === 410) throw new FinishedError('finished')
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string }
-    throw new ApiError(payload.error || `HTTP ${response.status}`, payload.code)
+    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string; added_at?: number }
+    throw new ApiError(payload.error || `HTTP ${response.status}`, payload.code, payload.added_at)
   }
   return response.json() as Promise<T>
 }

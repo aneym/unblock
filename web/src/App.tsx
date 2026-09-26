@@ -99,7 +99,7 @@ function AskList({ asks, choose, showAnswered }: {
             <span className="ask-meta">unblocks: <PlainText text={ask.blocks.join(', ')} /></span>
           )}
         </span>
-        <span className="row-answer">Answer →</span>
+        {!expanded && <span className="row-answer">Answer →</span>}
       </button>
       {expanded && (
         <div className="list-focal">

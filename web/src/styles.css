@@ -325,7 +325,8 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .passkey-pending { display: flex; align-items: center; gap: 8px; flex-basis: 100%;
   margin: 0; color: var(--dim); font-size: 13px; }
 .passkey-hint { flex-basis: 100%; margin: 0; color: var(--dim); font-size: 13px; }
-.list-entry { border-bottom: 1px solid var(--border); }
+.list-entry { min-width: 0; border-bottom: 1px solid var(--border); }
+.list-entry .list-row-copy, .list-entry .list-row-title, .list-focal { min-width: 0; overflow-wrap: anywhere; }
 .list-entry.expanded { background: var(--kind-bg); border-left: 3px solid var(--kind-text);
   border-radius: 8px; border-bottom: 0; }
 .list-entry .list-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
@@ -334,7 +335,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .list-entry .kind-label { white-space: nowrap; align-self: start; }
 .list-entry .status-pill { justify-self: start; width: fit-content; }
 .list-focal { padding: 0 16px 20px; }
-.list-focal p { margin: 0 0 14px; font-size: 17px; line-height: 26px; font-weight: 500; }
+.list-focal p { min-width: 0; margin: 0 0 14px; font-size: 17px; line-height: 26px; font-weight: 500; overflow-wrap: anywhere; }
 .list-entry .row-answer { align-self: start; }
 @media (max-width: 1099px) { .shell { max-width: 808px; } }
 @media (max-width: 600px) {
