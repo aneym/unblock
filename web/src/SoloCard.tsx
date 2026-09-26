@@ -220,6 +220,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const draftTimer = useRef<number | undefined>(undefined)
   const draftInFlight = useRef(false)
   const draftPending = useRef(false)
+  const draftSession = useRef(crypto.randomUUID())
+  const draftSeq = useRef(0)
   const completed = useRef(false)
   const latest = useRef({
     values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
@@ -266,6 +268,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     const current = latest.current
     api('/api/draft', {
       ticket: ask.ticket,
+      draft_session: draftSession.current,
+      draft_seq: ++draftSeq.current,
       values: safeValues(current.values),
       field_context: current.notes,
       reply: current.reply,
@@ -316,6 +320,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       const body = new Blob(
         [JSON.stringify({
           ticket: ask.ticket,
+          draft_session: draftSession.current,
+          draft_seq: ++draftSeq.current,
           values: safeValues(merged.values),
           field_context: merged.notes,
           reply: merged.reply,

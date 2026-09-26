@@ -140,6 +140,74 @@ test('a repeated send is safe and ends in 410 once the agent has it', async (t) 
   })
 })
 
+test('collection cannot pass an answer while its secret is being stored', async (t) => {
+  let started
+  let release
+  const putStarted = new Promise((resolve) => { started = resolve })
+  const resumePut = new Promise((resolve) => { release = resolve })
+  const stored = new Map()
+  const secretStore = {
+    backend: async () => 'test', backendIfResolved: () => 'test',
+    async put({ name, value, ticket, envName }) {
+      started()
+      await resumePut
+      const ref = `${ticket}-${name}`
+      stored.set(ref, value)
+      return { ref, store: 'test', env_name: envName, resolve: ref }
+    },
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const created = await post(base, '/api/asks', {
+    ask: {
+      kind: 'file', title: 'secret-during-collect', why: 'Human input unblocks the key.', only_you: 'credential',
+      tried: ['Checked everything an agent can check before asking the human.'],
+      fields: [{ name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'RETRY_RACE_KEY' }],
+      links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
+    },
+    origin: { session_id: 'retry-race-secret' },
+  })
+  assert.equal(created.status, 201)
+  const ticket = created.body.ticket
+  const answer = post(base, '/api/answer', { ticket, values: { api_key: 'race-value' } })
+  await putStarted
+  const collect = post(base, `/api/asks/${ticket}/collect`, {})
+  try {
+    // Without the lock, collect returns while put is still blocked and its reference can change later.
+    const first = await Promise.race([
+      collect.then(() => 'collected'),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 100)),
+    ])
+    assert.equal(first, 'pending')
+    assert.equal(stored.size, 0)
+  } finally {
+    release()
+  }
+  const [answered, collected] = await Promise.all([answer, collect])
+  assert.equal(answered.status, 200)
+  assert.equal(collected.status, 200)
+  assert.deepEqual(collected.body.ask.answers.api_key, answered.body.ask.answers.api_key)
+  assert.equal(stored.get(collected.body.ask.answers.api_key.ref), 'race-value')
+})
+
+test('an older draft from the same page cannot overwrite a newer one', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await fileAsk(base, 'draft-order')
+  const newer = await post(base, '/api/draft', {
+    ticket, draft_session: 'page-1', draft_seq: 2, values: { verdict: 'newer' }, reply: 'newer note',
+  })
+  assert.equal(newer.status, 200)
+  const older = await post(base, '/api/draft', {
+    ticket, draft_session: 'page-1', draft_seq: 1, values: { verdict: 'older' }, reply: 'older note',
+  })
+  assert.equal(older.status, 200)
+  assert.equal(older.body.ask.draft.verdict, 'newer')
+  assert.equal(older.body.ask.draft_reply, 'newer note')
+})
+
 test('the store refuses an answer on a bounced ask', async () => {
   const daemon = await startDaemon({ port: 0 })
   const base = `http://127.0.0.1:${daemon.port}`

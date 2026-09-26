@@ -305,14 +305,15 @@ function safeSecretAnswer(ask, values, records) {
   return { safe, refs }
 }
 
-export async function startDaemon({ port } = {}) {
+export async function startDaemon({ port, secretStore: injectedSecretStore } = {}) {
   // The config file fills in whatever the spawner's environment left unset,
   // so the daemon is reachable on its public origin no matter who started it.
   const config = applyConfig()
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
   const store = new Store()
-  const secretStore = new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
+  // A delayed store can be injected by tests to exercise the real async put boundary.
+  const secretStore = injectedSecretStore ?? new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
   // Resolve the secret backend now rather than on the first /api/health. In
   // `auto` mode that probe runs `op whoami`, which can take seconds when
   // 1Password is installed but signed out — long enough that every spawner's
@@ -323,6 +324,23 @@ export async function startDaemon({ port } = {}) {
   // asks are open; this one says what is happening inside a single ask while
   // the human fills it in, which is what an agent watching its own ask needs.
   const askClients = new Map()
+  const ticketTails = new Map()
+  const draftVersions = new Map()
+  // Queue only operations on the same ticket; cleanup works even on throw.
+  async function withTicket(ticket, operation) {
+    const previous = ticketTails.get(ticket) ?? Promise.resolve()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const tail = previous.then(() => gate)
+    ticketTails.set(ticket, tail)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (ticketTails.get(ticket) === tail) ticketTails.delete(ticket)
+    }
+  }
   let actualPort = port
   let isClosed = false
 
@@ -365,12 +383,23 @@ export async function startDaemon({ port } = {}) {
 
   /** One path for every draft write, so every transport emits the same event. */
   function applyDraft(ticket, body) {
+    const session = body.draft_session
+    const seq = body.draft_seq
+    const ordered = typeof session === 'string' && session.length > 0 &&
+      Number.isSafeInteger(seq) && seq >= 0
+    const previous = draftVersions.get(ticket)
+    if (ordered && previous?.session === session && seq <= previous.seq) {
+      const ask = store.get(ticket)
+      if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
+      return ask
+    }
     const ask = store.saveDraft(
       ticket,
       body.values || {},
       scrubFieldContext(body.field_context),
       draftReply(body),
     )
+    if (ordered) draftVersions.set(ticket, { session, seq })
     emitAsk(ask, 'draft')
     emitQueue()
     return ask
@@ -382,6 +411,7 @@ export async function startDaemon({ port } = {}) {
   // rubber-stamping it. A bounce with no note still tells the agent the ask
   // itself was wrong.
   const ask = store.bounce(ticket, optionalScrub(reply, 1000))
+  draftVersions.delete(ticket)
   emitAsk(ask, 'sent_back')
   return { ask, complete: true, bounced: true }
 }
@@ -416,6 +446,7 @@ function scrubFieldBounce(raw) {
 }
 
 async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
+  return withTicket(ticket, async () => {
     const ask = store.get(ticket)
     if (!ask) return null
     // Before any secret is stored: a page retrying a send whose reply it lost
@@ -453,8 +484,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       fieldContext: scrubFieldContext(fieldContext),
       fieldBounce: scrubFieldBounce(fieldBounce),
     })
+    if (result.complete) draftVersions.delete(ticket)
     emitAsk(result.ask, 'answered')
     return result
+  })
   }
 
   /** The reply drafts alongside the fields; '' erases, undefined leaves it. */
@@ -535,7 +568,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
         return sendJson(res, 200, { ask: applyDraft(ticket, body) })
       }
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply)
+        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
@@ -637,7 +670,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply)
+        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       if (!result) return notFound(res)
       emitQueue()
@@ -696,7 +729,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
 
     ticket = routeTicket(pathname, '/collect')
     if (ticket && req.method === 'POST') {
-      const ask = store.collect(ticket)
+      const ask = await withTicket(ticket, () => {
+        const collected = store.collect(ticket)
+        draftVersions.delete(ticket)
+        return collected
+      })
       if (!ask) return notFound(res)
       emitQueue()
       return sendJson(res, 200, { ask })
@@ -710,7 +747,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       // renders it today, which makes it a trap for whoever adds the first
       // renderer rather than a bug you would notice.
       const note = optionalScrub(body.note, 600)
-      const ask = store.cancel(ticket, note)
+      const ask = await withTicket(ticket, () => {
+        const cancelled = store.cancel(ticket, note)
+        draftVersions.delete(ticket)
+        return cancelled
+      })
       if (!ask) return notFound(res)
       emitAsk(ask, 'cancelled')
       emitQueue()
@@ -767,7 +808,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
-        ? await bounceAsk(body.ticket, body.reply)
+        ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply))
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce)
       emitQueue()
       return sendJson(res, 200, result)
@@ -835,7 +876,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
   }, 25_000)
   keepalive.unref()
   const sweeper = setInterval(() => {
-    if (store.sweep().length > 0) emitQueue()
+    const closed = store.sweep()
+    for (const ask of closed) if (ask) draftVersions.delete(ask.ticket)
+    if (closed.length > 0) emitQueue()
   }, 60_000)
   sweeper.unref()
 
