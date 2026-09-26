@@ -16,10 +16,11 @@ if [ -z "$DEST" ] || [ "$DEST" = "$SRC" ]; then
 fi
 
 (cd "$SRC" && npm run --silent web:build >/dev/null)
-rsync -a --delete --exclude secrets.js "$SRC/src/" "${DEST:?}/src/"
-# Swapped in whole, so an interrupted deploy leaves the previous store, never none.
+# The store goes in first and is swapped in whole, so src/ is never without one.
+mkdir -p "${DEST:?}/src"
 install -m 644 "$SRC/headless/secrets.js" "${DEST:?}/src/.secrets.js.new"
 mv -f "${DEST:?}/src/.secrets.js.new" "${DEST:?}/src/secrets.js"
+rsync -a --delete --exclude secrets.js "$SRC/src/" "${DEST:?}/src/"
 rsync -a --delete "$SRC/web/dist/" "${DEST:?}/web/dist/"
 rsync -a "$SRC/bin/" "${DEST:?}/bin/"
 cp "$SRC/package.json" "${DEST:?}/package.json"
