@@ -507,3 +507,56 @@ test('pruning an old uncollected ask removes its secret; a collected one keeps r
   assert.doesNotMatch(envText(), new RegExp(`^${envKey(lost.body.ask.answers.api_key)}=`, 'm'))
   assert.match(envText(), new RegExp(`^${envKey(kept.body.ask.answers.api_key)}=`, 'm'))
 })
+
+test('sending back a partly answered ask removes its secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'bounce-partial-secret', partlyAnswered)
+  const partial = await post(base, '/api/answer', { ticket, values: { api_key: 'half-done' } })
+  const key = envKey(partial.body.ask.answers.api_key)
+  assert.match(envText(), new RegExp(`^${key}=`, 'm'))
+  assert.equal((await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })).status, 200)
+  assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
+})
+
+test('sending back one committed secret field removes the old secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'field-bounce-committed-secret', partlyAnswered)
+  const partial = await post(base, '/api/answer', { ticket, values: { api_key: 'half-done' } })
+  const key = envKey(partial.body.ask.answers.api_key)
+  const bounced = await post(base, '/api/answer', { ticket, values: { verdict: 'keep' }, field_bounce: { api_key: 'wrong account' } })
+  assert.equal(bounced.status, 200)
+  assert.ok(!bounced.body.ask.answer_is_ref.api_key)
+  assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
+})
+
+test('a failed delete keeps the old ask until a later sweep removes its secret', async (t) => {
+  const real = new SecretStore({ backend: 'env' })
+  let failDeletes = true
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put: (input) => real.put(input),
+    delete: async (record) => (failDeletes ? false : real.delete(record)),
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'prune-delete-fails')
+  const answered = await post(base, '/api/answer', { ticket, values: { api_key: 'never-delivered' } })
+  const key = envKey(answered.body.ask.answers.api_key)
+  const db = new DatabaseSync(join(stateDir, 'queue.db'))
+  try {
+    db.prepare(`UPDATE asks SET status = 'orphaned', closed_at = 1 WHERE ticket = ?`).run(ticket)
+  } finally { db.close() }
+  const read = () => fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } })
+  await daemon.sweep()
+  assert.equal((await read()).status, 200)
+  assert.match(envText(), new RegExp(`^${key}=`, 'm'))
+  failDeletes = false
+  await daemon.sweep()
+  assert.equal((await read()).status, 404)
+  assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
+})

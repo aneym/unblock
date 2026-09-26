@@ -52,6 +52,13 @@ export function finished(ask) {
   return error
 }
 
+// Prune long-closed rows so the queue file cannot grow without bound.
+// Everything closed keeps a 30-day window for `unblock_check` stragglers
+// and post-mortems; after that it is noise the hydrate loop pays for.
+const PRUNABLE = `WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
+    AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`
+const pruneCutoff = () => nowMs() - 30 * 24 * 60 * 60 * 1000
+
 /** Stored secret references committed on an ask (never values). */
 export function secretRecords(ask) {
   if (!ask) return []
@@ -684,31 +691,33 @@ export class Store {
   }
 
   /**
-   * Returns the secret records of pruned asks the agent never received, so the
-   * caller can remove them from the secret store. A collected secret belongs to
-   * the agent that collected it and stays where it resolves.
+   * Long-closed asks due for pruning, with the secret records to remove first.
+   * An uncollected secret was never delivered, so it goes with the row. A
+   * collected secret belongs to the agent that collected it and stays where it
+   * resolves. The caller prunes a row only once its secrets are gone, so a
+   * failed delete is retried on the next sweep instead of losing its reference.
    */
   sweepCleanup() {
-    const at = nowMs()
-    this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
-    // Prune long-closed rows so the queue file cannot grow without bound.
-    // Everything closed keeps a 30-day window for `unblock_check` stragglers
-    // and post-mortems; after that it is noise the hydrate loop pays for.
-    const cutoff = at - 30 * 24 * 60 * 60 * 1000
-    const where = `WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
-            AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`
-    const undelivered = this.#db
-      .prepare(`SELECT id FROM asks ${where} AND status != 'collected'`)
-      .all(cutoff)
-      .flatMap(({ id }) => secretRecords(this.get(id)))
-    this.#db.prepare(`DELETE FROM asks ${where}`).run(cutoff)
-    return undelivered
+    this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(nowMs())
+    return this.#db
+      .prepare(`SELECT id FROM asks ${PRUNABLE}`)
+      .all(pruneCutoff())
+      .map(({ id }) => this.get(id))
+      .filter(Boolean)
+      .map((ask) => ({ ticket: ask.ticket, records: ask.status === 'collected' ? [] : secretRecords(ask) }))
   }
 
-  /** Synchronous store-only sweep for callers with no concurrent async secret puts. */
+  /** Remove one pruning candidate, if it still is one. */
+  prune(idOrTicket) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return false
+    return this.#db.prepare(`DELETE FROM asks ${PRUNABLE} AND id = ?`).run(pruneCutoff(), ask.id).changes > 0
+  }
+
+  /** Synchronous store-only sweep for callers with no concurrent async secret puts or stored secrets. */
   sweep(options) {
     const closed = this.sweepCandidates(options).map((ticket) => this.sweepOne(ticket, options)).filter(Boolean)
-    this.sweepCleanup()
+    for (const { ticket } of this.sweepCleanup()) this.prune(ticket)
     return closed
   }
 

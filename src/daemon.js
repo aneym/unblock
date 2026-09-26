@@ -327,8 +327,19 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   const ticketTails = new Map()
   // Queue only operations on the same ticket; cleanup works even on throw.
   // Best effort: a failed delete must not undo the state change that retired it.
+  // True only when every record is gone from the secret store.
   async function retireSecrets(records) {
-    await Promise.all(records.map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+    const results = await Promise.all(records.map((record) =>
+      Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)))
+    return results.every(Boolean)
+  }
+  // Every secret this ask held or was just given that it no longer references.
+  const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
+  async function settleSecrets(before, after, puts = []) {
+    const kept = new Set(secretRecords(after).map(secretId))
+    const dropped = new Map([...secretRecords(before), ...puts].map((record) => [secretId(record), record]))
+    for (const id of kept) dropped.delete(id)
+    return retireSecrets([...dropped.values()])
   }
   async function withTicket(ticket, operation) {
     const previous = ticketTails.get(ticket) ?? Promise.resolve()
@@ -405,6 +416,8 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // rubber-stamping it. A bounce with no note still tells the agent the ask
   // itself was wrong.
   const ask = store.bounce(ticket, optionalScrub(reply, 1000))
+  // Sent back as the wrong ask: a secret typed into part of it is not handed out.
+  await retireSecrets(secretRecords(ask))
   emitAsk(ask, 'sent_back')
   return { ask, complete: true, bounced: true }
 }
@@ -483,16 +496,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       await Promise.all(records.map(([, record]) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
       throw error
     }
-    // Only references actually committed may survive this attempt. A bounced
-    // secret (or a field removed before commit) has no committed reference.
-    const unused = records.filter(([name, record]) =>
-      !result.ask.answer_is_ref[name] || result.ask.answers[name]?.resolve !== record.resolve,
-    ).map(([, record]) => record)
-    const replaced = records.filter(([name, record]) =>
-      result.ask.answer_is_ref[name] && result.ask.answers[name]?.resolve === record.resolve,
-    ).map(([name]) => ask.answers[name])
-      .filter((record) => record && typeof record === 'object' && record.store)
-    await Promise.all([...unused, ...replaced].map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+    // Only references actually committed may survive this attempt: a secret
+    // replaced by a new one, bounced, or put for a field that did not commit
+    // has nothing left pointing at it.
+    await settleSecrets(ask, result.ask, records.map(([, record]) => record))
     emitAsk(result.ask, 'answered')
     return result
   })
@@ -900,7 +907,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       })
       if (ask) { changed = true; emitAsk(ask, ask.status) }
     }
-    await retireSecrets(store.sweepCleanup())
+    for (const { ticket, records } of store.sweepCleanup()) {
+      await withTicket(ticket, async () => { if (await retireSecrets(records)) store.prune(ticket) })
+    }
     if (changed) emitQueue()
   }
   const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)

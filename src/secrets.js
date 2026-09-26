@@ -227,26 +227,41 @@ export class SecretStore {
     }
   }
 
-  /** Undo a put that cannot be committed to an answer. Never mask the original failure. */
+  /**
+   * Remove a stored secret. Never throws, so it cannot mask the caller's own
+   * failure. True when the secret is gone (or was never there), false when it
+   * may still be stored.
+   */
   async delete(record) {
     try {
-      if (record?.store === 'env' && existsSync(ENV_FILE)) {
+      if (record?.store === 'env') {
+        if (!existsSync(ENV_FILE)) return true
         const key = envKeyFromRecord(record)
         // Do not remove legacy unscoped entries delivered before this version.
-        if (key === `${record.env_name}_B64`) return
+        if (key === `${record.env_name}_B64`) return true
         const text = readFileSync(ENV_FILE, 'utf8')
         const lines = text.split('\n').filter((line) => !line.startsWith(`${key}=`))
         writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 })
         chmodSync(ENV_FILE, 0o600)
-      } else if (record?.store === 'keychain') {
+        return true
+      }
+      if (record?.store === 'keychain') {
         await run('security', ['-i'], {
           input: `delete-generic-password -a ${KEYCHAIN_ACCOUNT} -s ${record.ref}\n`,
         })
-      } else if (record?.store === 'op') {
-        const item = record.ref?.match(/^op:\/\/[^/]+\/([^/]+)\/credential$/)?.[1]
-        if (item) await run('op', ['item', 'delete', item, '--vault', this.#vault])
+        // Judge by what is left, not the exit code: an item already gone is a success.
+        const left = await run('security', ['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', record.ref])
+        return !left.ok
       }
-    } catch { /* best effort: the caller's error takes precedence */ }
+      if (record?.store === 'op') {
+        const item = record.ref?.match(/^op:\/\/[^/]+\/([^/]+)\/credential$/)?.[1]
+        if (!item) return true
+        return (await run('op', ['item', 'delete', item, '--vault', this.#vault])).ok
+      }
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** Prove the value survived the round trip before handing out a reference. */
