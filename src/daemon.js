@@ -788,50 +788,52 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
           (body.final_url !== undefined && (typeof body.final_url !== 'string' || !/^https:\/\//.test(body.final_url)))) {
         return sendJson(res, 400, { error: 'invalid receipt' })
       }
-      // Authorize before touching any caller-supplied path.
-      const ask = store.get(ticket)
-      if (!ask || ask.purpose !== 'consent' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve') {
-        return sendJson(res, 409, { error: 'receipt not allowed', code: 'RECEIPT_NOT_ALLOWED' })
-      }
-      const data = { ...(body.final_url === undefined ? {} : { final_url: body.final_url }) }
-      const images = []
-      for (const name of ['before', 'after']) {
-        if (body[name] === undefined) continue
-        const path = body[name]
-        let info
-        try { if (typeof path === 'string' && path.startsWith('/')) info = lstatSync(path) } catch { /* invalid path */ }
-        if (!info?.isFile() || info.isSymbolicLink() || info.size > 5 * 1024 * 1024) {
-          return sendJson(res, 400, { error: 'invalid PNG file' })
+      // Authorize, write the images and record the receipt under one ticket lock, so two receipts cannot interleave.
+      return await withTicket(ticket, () => {
+        const ask = store.get(ticket)
+        if (!ask || ask.purpose !== 'consent' || !['answered', 'collected', 'orphaned'].includes(ask.status) || ask.answers.verdict !== 'approve') {
+          return sendJson(res, 409, { error: 'receipt not allowed', code: 'RECEIPT_NOT_ALLOWED' })
         }
-        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-        let bytes
-        try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'invalid PNG file' })
-          bytes = Buffer.allocUnsafe(5 * 1024 * 1024 + 1); const size = readSync(fd, bytes, 0, bytes.length, 0); bytes = bytes.subarray(0, size) }
-        finally { closeSync(fd) }
-        if (bytes.length > 5 * 1024 * 1024 || bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return sendJson(res, 400, { error: 'invalid PNG file' })
-        images.push([name, bytes]); data[name] = true
-      }
-      const dir = join(stateDir(), 'receipts', ticket)
-      const root = join(stateDir(), 'receipts')
-      // lstat before chmod or writing: neither directory may redirect to another tree.
-      for (const directory of [root, dir]) {
-        try { mkdirSync(directory, { mode: 0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
-        const info = lstatSync(directory)
-        if (info.isSymbolicLink() || !info.isDirectory()) return sendJson(res, 400, { error: 'invalid receipt directory' })
-        chmodSync(directory, 0o700)
-      }
-      for (const [name, bytes] of images) {
-        const target = join(dir, `${name}.png`)
-        const temporary = `${target}.tmp`
-        try { unlinkSync(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
-        const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600)
-        try {
-          let offset = 0
-          while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
-        } finally { closeSync(fd) }
-        renameSync(temporary, target)
-      }
-      return sendJson(res, 200, { ask: await withTicket(ticket, () => store.receipt(ticket, data)) })
+        const data = { ...(body.final_url === undefined ? {} : { final_url: body.final_url }) }
+        const images = []
+        for (const name of ['before', 'after']) {
+          if (body[name] === undefined) continue
+          const path = body[name]
+          let info
+          try { if (typeof path === 'string' && path.startsWith('/')) info = lstatSync(path) } catch { /* invalid path */ }
+          if (!info?.isFile() || info.isSymbolicLink() || info.size > 5 * 1024 * 1024) {
+            return sendJson(res, 400, { error: 'invalid PNG file' })
+          }
+          const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+          let bytes
+          try { if (!fstatSync(fd).isFile() || fstatSync(fd).size > 5 * 1024 * 1024) return sendJson(res, 400, { error: 'invalid PNG file' })
+            bytes = Buffer.allocUnsafe(5 * 1024 * 1024 + 1); const size = readSync(fd, bytes, 0, bytes.length, 0); bytes = bytes.subarray(0, size) }
+          finally { closeSync(fd) }
+          if (bytes.length > 5 * 1024 * 1024 || bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return sendJson(res, 400, { error: 'invalid PNG file' })
+          images.push([name, bytes]); data[name] = true
+        }
+        const dir = join(stateDir(), 'receipts', ticket)
+        const root = join(stateDir(), 'receipts')
+        // lstat before chmod or writing: neither directory may redirect to another tree.
+        for (const directory of [root, dir]) {
+          try { mkdirSync(directory, { mode: 0o700 }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+          const info = lstatSync(directory)
+          if (info.isSymbolicLink() || !info.isDirectory()) return sendJson(res, 400, { error: 'invalid receipt directory' })
+          chmodSync(directory, 0o700)
+        }
+        for (const [name, bytes] of images) {
+          const target = join(dir, `${name}.png`)
+          const temporary = `${target}.tmp`
+          try { unlinkSync(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
+          const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600)
+          try {
+            let offset = 0
+            while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+          } finally { closeSync(fd) }
+          renameSync(temporary, target)
+        }
+        return sendJson(res, 200, { ask: store.receipt(ticket, data) })
+      })
     }
 
     const imageMatch = pathname.match(/^\/api\/asks\/(ub_[a-z0-9]{6})\/receipt\/(before|after)\.png$/)
