@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Linkify } from './lib/linkify'
 import { Icon, stateOf } from './icons'
-import { api, BASE, FinishedError, NetworkError } from './lib/api'
+import { api, BASE, DraftStaleError, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { FieldControl } from './FieldControl'
 import { ago, groupOf, isMissing, type Ask, type Bounced, type FieldValue, type Values } from './deck'
@@ -220,8 +220,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
   const draftTimer = useRef<number | undefined>(undefined)
   const draftInFlight = useRef(false)
   const draftPending = useRef(false)
-  const draftSession = useRef(crypto.randomUUID())
-  const draftSeq = useRef(0)
+  const baseRev = useRef((ask as Ask & { draft_rev?: number }).draft_rev ?? 0)
   const completed = useRef(false)
   const latest = useRef({
     values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
@@ -265,34 +264,45 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       return
     }
     draftInFlight.current = true
-    const current = latest.current
-    api('/api/draft', {
-      ticket: ask.ticket,
-      draft_session: draftSession.current,
-      draft_seq: ++draftSeq.current,
-      values: safeValues(current.values),
-      field_context: current.notes,
-      reply: current.reply,
-    }, { retry: false })
-      .then(() => setDraftState('saved'))
-      .catch((error) => {
+    const save = () => {
+      const current = latest.current
+      return api<{ ask: Ask }>('/api/draft', {
+        ticket: ask.ticket,
+        base_rev: baseRev.current,
+        values: safeValues(current.values),
+        field_context: current.notes,
+        reply: current.reply,
+      }, { retry: false })
+    }
+    const attempt = async () => {
+      try {
+        let result: { ask: Ask }
+        try {
+          result = await save()
+        } catch (error) {
+          if (!(error instanceof DraftStaleError)) throw error
+          baseRev.current = error.draftRev
+          result = await save() // latest values, only one stale retry
+        }
+        baseRev.current = (result.ask as Ask & { draft_rev: number }).draft_rev
+        setDraftState('saved')
+      } catch (error) {
         if (error instanceof FinishedError) {
           completed.current = true
           window.clearTimeout(draftTimer.current)
           draftTimer.current = undefined
           draftPending.current = false
           onFinished()
-          return
-        }
-        setDraftState('offline')
-      })
-      .finally(() => {
+        } else setDraftState('offline')
+      } finally {
         draftInFlight.current = false
         if (draftPending.current && !completed.current) {
           draftPending.current = false
           sendDraft()
         }
-      })
+      }
+    }
+    void attempt()
   }
 
   const persist = (next: Partial<typeof latest.current>) => {
@@ -320,8 +330,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
       const body = new Blob(
         [JSON.stringify({
           ticket: ask.ticket,
-          draft_session: draftSession.current,
-          draft_seq: ++draftSeq.current,
+          base_rev: baseRev.current + (draftInFlight.current ? 1 : 0),
           values: safeValues(merged.values),
           field_context: merged.notes,
           reply: merged.reply,

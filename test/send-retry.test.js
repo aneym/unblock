@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 
 // The page retries a send whose reply never arrived (a phone waking on a dead
@@ -13,6 +14,7 @@ process.env.UNBLOCK_SECRET_BACKEND = 'env'
 
 const { startDaemon, loadOrCreateSecret } = await import('../src/daemon.js')
 const { Store } = await import('../src/store.js')
+const { SecretStore } = await import('../src/secrets.js')
 const authSecret = loadOrCreateSecret()
 
 async function post(base, pathname, body, { auth = true } = {}) {
@@ -140,72 +142,151 @@ test('a repeated send is safe and ends in 410 once the agent has it', async (t) 
   })
 })
 
-test('collection cannot pass an answer while its secret is being stored', async (t) => {
-  let started
-  let release
+const envText = () => readFileSync(join(stateDir, 'config', 'secrets.env'), 'utf8')
+const scopedLine = (ticket, name) => `UB_${`${ticket}-${name}`.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`
+const envKey = (record) => record.resolve.match(/grep '\^([A-Z0-9_]+)='/)[1]
+
+async function secretAsk(base, title, { extra = [], ttl_seconds } = {}) {
+  const created = await post(base, '/api/asks', {
+    ask: {
+      kind: 'file', title, why: 'Human input unblocks the key.', only_you: 'credential', ttl_seconds,
+      tried: ['Checked everything an agent can check before asking the human.'],
+      fields: [
+        { name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'SHARED_KEY' }, ...extra,
+      ],
+      links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
+    }, origin: { session_id: title },
+  })
+  assert.equal(created.status, 201, JSON.stringify(created.body))
+  return created.body.ticket
+}
+
+test('collected secrets with the same env name resolve independently', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const a = await secretAsk(base, 'scoped-secret-a')
+  const first = await post(base, '/api/answer', { ticket: a, values: { api_key: 'alpha' } })
+  assert.equal(first.status, 200)
+  assert.equal((await post(base, `/api/asks/${a}/collect`, {})).status, 200)
+  const b = await secretAsk(base, 'scoped-secret-b')
+  const second = await post(base, '/api/answer', { ticket: b, values: { api_key: 'bravo' } })
+  assert.equal(second.status, 200)
+  for (const [result, expected] of [[first, 'alpha'], [second, 'bravo']]) {
+    const record = result.body.ask.answers.api_key
+    assert.equal(record.env_name, 'SHARED_KEY')
+    assert.equal(record.ref, '$SHARED_KEY')
+    assert.equal(execFileSync('/bin/sh', ['-c', `${record.resolve}; printf %s "$SHARED_KEY"`], { env: { ...process.env, SHARED_KEY: '' }, encoding: 'utf8' }), expected)
+    assert.equal(await new SecretStore({ backend: 'env' }).reveal(record), expected)
+  }
+})
+
+test('re-answer failure preserves a committed secret; success retires the old key', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 're-answer-committed-secret', { extra: [
+    { name: 'other_key', type: 'secret', label: 'Other key', required: false, env_name: 'OTHER_KEY' },
+  ] })
+  const first = await post(base, '/api/answer', { ticket, values: { api_key: 'one' } })
+  assert.equal(first.status, 200)
+  const old = first.body.ask.answers.api_key
+  const resolve = (record) => execFileSync('/bin/sh', ['-c', `${record.resolve}; printf %s "$SHARED_KEY"`], { encoding: 'utf8' })
+  assert.equal(resolve(old), 'one')
+
+  // A second secret has an invalid type; store.answer rejects after api_key was put.
+  const rejected = await post(base, '/api/answer', {
+    ticket, values: { api_key: 'two', other_key: ['invalid'] },
+  })
+  assert.equal(rejected.status, 400)
+  assert.equal(rejected.body.code, 'SECRET_NOT_REFERENCED')
+  assert.equal(resolve(old), 'one')
+  const current = await fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } }).then((res) => res.json())
+  assert.deepEqual(current.answers.api_key, old)
+  assert.equal(envText().split('\n').filter((line) => line.startsWith(scopedLine(ticket, 'api_key'))).length, 1)
+
+  const successful = await post(base, '/api/answer', { ticket, values: { api_key: 'two' } })
+  assert.equal(successful.status, 200)
+  const next = successful.body.ask.answers.api_key
+  assert.notEqual(envKey(old), envKey(next))
+  assert.equal(resolve(next), 'two')
+  assert.doesNotMatch(envText(), new RegExp(`^${envKey(old)}=`, 'm'))
+  assert.match(envText(), new RegExp(`^${envKey(next)}=`, 'm'))
+})
+
+test('sweep waits for a secret put before changing ask status', async (t) => {
+  let started, release
   const putStarted = new Promise((resolve) => { started = resolve })
   const resumePut = new Promise((resolve) => { release = resolve })
-  const stored = new Map()
+  const real = new SecretStore({ backend: 'env' })
   const secretStore = {
-    backend: async () => 'test', backendIfResolved: () => 'test',
-    async put({ name, value, ticket, envName }) {
-      started()
-      await resumePut
-      const ref = `${ticket}-${name}`
-      stored.set(ref, value)
-      return { ref, store: 'test', env_name: envName, resolve: ref }
-    },
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    async put(input) { started(); await resumePut; return real.put(input) },
+    delete: (record) => real.delete(record),
   }
   const daemon = await startDaemon({ port: 0, secretStore })
   t.after(() => daemon.close())
   const base = `http://127.0.0.1:${daemon.port}`
-  const created = await post(base, '/api/asks', {
-    ask: {
-      kind: 'file', title: 'secret-during-collect', why: 'Human input unblocks the key.', only_you: 'credential',
-      tried: ['Checked everything an agent can check before asking the human.'],
-      fields: [{ name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'RETRY_RACE_KEY' }],
-      links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
-    },
-    origin: { session_id: 'retry-race-secret' },
-  })
-  assert.equal(created.status, 201)
-  const ticket = created.body.ticket
+  const ticket = await secretAsk(base, 'sweep-during-put', { ttl_seconds: 1 })
   const answer = post(base, '/api/answer', { ticket, values: { api_key: 'race-value' } })
   await putStarted
-  const collect = post(base, `/api/asks/${ticket}/collect`, {})
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  const sweeping = daemon.sweep()
   try {
-    // Without the lock, collect returns while put is still blocked and its reference can change later.
     const first = await Promise.race([
-      collect.then(() => 'collected'),
+      sweeping.then(() => 'swept'),
       new Promise((resolve) => setTimeout(() => resolve('pending'), 100)),
     ])
     assert.equal(first, 'pending')
-    assert.equal(stored.size, 0)
-  } finally {
-    release()
-  }
-  const [answered, collected] = await Promise.all([answer, collect])
-  assert.equal(answered.status, 200)
-  assert.equal(collected.status, 200)
-  assert.deepEqual(collected.body.ask.answers.api_key, answered.body.ask.answers.api_key)
-  assert.equal(stored.get(collected.body.ask.answers.api_key.ref), 'race-value')
+  } finally { release() }
+  const answered = await answer
+  await sweeping
+  const stored = await fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } }).then((response) => response.json())
+  assert.equal(stored.status, answered.status === 410 ? 'expired' : 'answered')
+  if (answered.status === 410) assert.doesNotMatch(envText(), new RegExp(scopedLine(ticket, 'api_key')))
+  else assert.equal(answered.status, 200)
 })
 
-test('an older draft from the same page cannot overwrite a newer one', async (t) => {
+test('failed answer compensates a successful secret put', async (t) => {
   const daemon = await startDaemon({ port: 0 })
   t.after(() => daemon.close())
   const base = `http://127.0.0.1:${daemon.port}`
-  const ticket = await fileAsk(base, 'draft-order')
-  const newer = await post(base, '/api/draft', {
-    ticket, draft_session: 'page-1', draft_seq: 2, values: { verdict: 'newer' }, reply: 'newer note',
-  })
-  assert.equal(newer.status, 200)
-  const older = await post(base, '/api/draft', {
-    ticket, draft_session: 'page-1', draft_seq: 1, values: { verdict: 'older' }, reply: 'older note',
-  })
-  assert.equal(older.status, 200)
-  assert.equal(older.body.ask.draft.verdict, 'newer')
-  assert.equal(older.body.ask.draft_reply, 'newer note')
+  const ticket = await secretAsk(base, 'failed-secret-answer')
+  // The store rejects a secret field that was not converted to a reference.
+  // An array bypasses the daemon string put check; another valid secret is put first.
+  const created = await secretAsk(base, 'failed-second-secret', { extra: [
+    { name: 'other_key', type: 'secret', label: 'Other key', required: true, env_name: 'OTHER_KEY' },
+  ] })
+  const rejected = await post(base, '/api/answer', { ticket: created, values: { api_key: 'stored-first', other_key: ['invalid'] } })
+  assert.equal(rejected.status, 400)
+  assert.equal(rejected.body.code, 'SECRET_NOT_REFERENCED')
+  assert.doesNotMatch(envText(), new RegExp(scopedLine(created, 'api_key')))
+  assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'still works' } })).status, 200)
+})
+
+test('draft revision rejects stale writes, permits ahead revisions and survives restart', async () => {
+  let daemon = await startDaemon({ port: 0 })
+  let base = `http://127.0.0.1:${daemon.port}`
+  try {
+    const ticket = await fileAsk(base, 'draft-order')
+    const first = await post(base, '/api/draft', { ticket, base_rev: 0, values: { verdict: 'newer' }, reply: 'newer note' })
+    assert.equal(first.status, 200)
+    assert.equal(first.body.ask.draft_rev, 1)
+    const older = await post(base, '/api/draft', { ticket, base_rev: 0, values: { verdict: 'older' }, reply: 'older note' })
+    assert.equal(older.status, 409)
+    assert.equal(older.body.code, 'DRAFT_STALE')
+    assert.equal(older.body.draft_rev, 1)
+    await daemon.close()
+    daemon = await startDaemon({ port: 0 })
+    base = `http://127.0.0.1:${daemon.port}`
+    const stillStale = await post(base, '/api/draft', { ticket, base_rev: 0, values: { verdict: 'lost' } })
+    assert.equal(stillStale.status, 409)
+    const ahead = await post(base, '/api/draft', { ticket, base_rev: 2, values: { verdict: 'beacon' } })
+    assert.equal(ahead.status, 200)
+    assert.equal(ahead.body.ask.draft_rev, 2)
+    assert.equal(ahead.body.ask.draft.verdict, 'beacon')
+    assert.equal(ahead.body.ask.draft_reply, 'newer note')
+  } finally { await daemon.close() }
 })
 
 test('the store refuses an answer on a bounced ask', async () => {

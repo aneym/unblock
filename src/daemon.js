@@ -325,7 +325,6 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // the human fills it in, which is what an agent watching its own ask needs.
   const askClients = new Map()
   const ticketTails = new Map()
-  const draftVersions = new Map()
   // Queue only operations on the same ticket; cleanup works even on throw.
   async function withTicket(ticket, operation) {
     const previous = ticketTails.get(ticket) ?? Promise.resolve()
@@ -368,6 +367,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
     status: ask.status,
     draft: ask.draft,
     draft_reply: ask.draft_reply,
+    draft_rev: ask.draft_rev,
     field_context: ask.field_context,
     draft_updated_at: ask.draft_updated_at,
     updated_at: ask.updated_at,
@@ -383,23 +383,13 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
 
   /** One path for every draft write, so every transport emits the same event. */
   function applyDraft(ticket, body) {
-    const session = body.draft_session
-    const seq = body.draft_seq
-    const ordered = typeof session === 'string' && session.length > 0 &&
-      Number.isSafeInteger(seq) && seq >= 0
-    const previous = draftVersions.get(ticket)
-    if (ordered && previous?.session === session && seq <= previous.seq) {
-      const ask = store.get(ticket)
-      if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
-      return ask
-    }
     const ask = store.saveDraft(
       ticket,
       body.values || {},
       scrubFieldContext(body.field_context),
       draftReply(body),
+      body.base_rev,
     )
-    if (ordered) draftVersions.set(ticket, { session, seq })
     emitAsk(ask, 'draft')
     emitQueue()
     return ask
@@ -411,7 +401,6 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // rubber-stamping it. A bounce with no note still tells the agent the ask
   // itself was wrong.
   const ask = store.bounce(ticket, optionalScrub(reply, 1000))
-  draftVersions.delete(ticket)
   emitAsk(ask, 'sent_back')
   return { ask, complete: true, bounced: true }
 }
@@ -453,42 +442,52 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     // must not write the secret again once the agent already has the answer.
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
     const records = []
-    for (const field of ask.fields) {
-      const value = values?.[field.name]
-      if (field.type === 'secret' && typeof value === 'string' && value !== '') {
-        let record
-        try {
-          record = await secretStore.put({
-            name: field.name,
-            value,
-            ticket: ask.ticket,
-            envName: field.env_name,
-          })
-        } catch (cause) {
-          const error = new Error('secret storage failed', { cause })
-          error.status = 502
-          throw error
+    let result
+    try {
+      for (const field of ask.fields) {
+        const value = values?.[field.name]
+        if (field.type === 'secret' && typeof value === 'string' && value !== '') {
+          let record
+          try {
+            record = await secretStore.put({
+              name: field.name,
+              value,
+              ticket: ask.ticket,
+              envName: field.env_name,
+            })
+          } catch (cause) {
+            const error = new Error('secret storage failed', { cause })
+            error.status = 502
+            throw error
+          }
+          if (!record?.ref) {
+            const error = new Error('secret storage returned no reference')
+            error.status = 502
+            throw error
+          }
+          records.push([field.name, record])
         }
-        if (!record?.ref) {
-          const error = new Error('secret storage returned no reference')
-          error.status = 502
-          throw error
-        }
-        records.push([field.name, record])
       }
+      const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
+      result = store.answer(ticket, safe, {
+        refs,
+        reply: optionalScrub(reply, 1000),
+        fieldContext: scrubFieldContext(fieldContext),
+        fieldBounce: scrubFieldBounce(fieldBounce),
+      })
+    } catch (error) {
+      await Promise.all(records.map(([, record]) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+      throw error
     }
-    const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
-    const result = store.answer(ticket, safe, {
-      refs,
-      reply: optionalScrub(reply, 1000),
-      fieldContext: scrubFieldContext(fieldContext),
-      fieldBounce: scrubFieldBounce(fieldBounce),
-    })
-    if (result.complete) draftVersions.delete(ticket)
+    // Commit succeeded. Retire only the secret references replaced by this
+    // answer, never a prior ref on the failure path.
+    const replaced = records.map(([name]) => ask.answers[name])
+      .filter((record) => record && typeof record === 'object' && record.store)
+    await Promise.all(replaced.map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
     emitAsk(result.ask, 'answered')
     return result
   })
-  }
+}
 
   /** The reply drafts alongside the fields; '' erases, undefined leaves it. */
   function draftReply(body) {
@@ -731,7 +730,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     if (ticket && req.method === 'POST') {
       const ask = await withTicket(ticket, () => {
         const collected = store.collect(ticket)
-        draftVersions.delete(ticket)
         return collected
       })
       if (!ask) return notFound(res)
@@ -749,7 +747,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const note = optionalScrub(body.note, 600)
       const ask = await withTicket(ticket, () => {
         const cancelled = store.cancel(ticket, note)
-        draftVersions.delete(ticket)
         return cancelled
       })
       if (!ask) return notFound(res)
@@ -849,6 +846,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }
+      if (error.code === 'DRAFT_STALE') {
+        return sendJson(res, 409, { error: error.message, code: error.code, draft_rev: error.draft_rev })
+      }
       const status = error.status || 500
       sendJson(res, status, { error: status === 500 ? 'internal server error' : error.message })
     })
@@ -875,11 +875,16 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     }
   }, 25_000)
   keepalive.unref()
-  const sweeper = setInterval(() => {
-    const closed = store.sweep()
-    for (const ask of closed) if (ask) draftVersions.delete(ask.ticket)
-    if (closed.length > 0) emitQueue()
-  }, 60_000)
+  async function sweep() {
+    let changed = false
+    for (const ticket of store.sweepCandidates()) {
+      const ask = await withTicket(ticket, () => store.sweepOne(ticket))
+      if (ask) { changed = true; emitAsk(ask, ask.status) }
+    }
+    store.sweepCleanup()
+    if (changed) emitQueue()
+  }
+  const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)
   sweeper.unref()
 
   async function close() {
@@ -894,6 +899,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     }
     askClients.clear()
     await new Promise((resolve) => server.close(resolve))
+    await Promise.all([...ticketTails.values()])
     store.close()
     try {
       rmSync(daemonFile)
@@ -902,7 +908,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
     }
   }
 
-  return { server, port: actualPort, close }
+  return { server, port: actualPort, close, sweep }
 }
 
 /**

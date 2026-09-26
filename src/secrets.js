@@ -16,6 +16,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -26,6 +27,12 @@ const CONFIG_DIR =
 
 const ENV_FILE = join(CONFIG_DIR, 'secrets.env')
 const KEYCHAIN_ACCOUNT = 'unblock'
+const scopedEnvKey = (ticket, name) =>
+  `UB_${`${ticket}-${name}`.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_B64`
+// Existing references have no scoped key; their resolve command still points
+// at the original unscoped line. New references carry the key in that command.
+const envKeyFromRecord = (record) =>
+  record?.resolve?.match(/grep '\^([A-Z0-9_]+)='/)?.[1] || `${record.env_name}_B64`
 
 /** Run a command, optionally feeding stdin. Never logs argv or stdin. */
 function run(cmd, args, { input, timeout = 20_000 } = {}) {
@@ -112,7 +119,9 @@ export class SecretStore {
   async put({ name, value, ticket, envName }) {
     if (typeof value !== 'string' || value === '') throw new Error('empty secret')
     const backend = await this.backend()
-    const slug = `${ticket}-${name}`.replace(/[^A-Za-z0-9._-]/g, '-')
+    // A new record for every attempt: a failed re-answer must not delete (or
+    // overwrite) the secret referenced by an earlier committed answer.
+    const slug = `${ticket}-${name}-${randomBytes(4).toString('hex')}`.replace(/[^A-Za-z0-9._-]/g, '-')
     const env_name = envName || `UNBLOCK_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`
 
     if (backend === 'op') {
@@ -197,17 +206,18 @@ export class SecretStore {
     mkdirSync(dirname(ENV_FILE), { recursive: true })
     const encoded = Buffer.from(value, 'utf8').toString('base64')
     const existing = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : ''
+    const scoped = scopedEnvKey(ticket, `${name}-${slug.slice(-8)}`)
     const lines = existing
       .split('\n')
-      .filter((l) => l.trim() && !l.startsWith(`${env_name}_B64=`) && !l.startsWith(`${env_name}=`))
-    lines.push(`${env_name}_B64=${encoded}`)
+      .filter((l) => l.trim() && !l.startsWith(`${scoped}=`))
+    lines.push(`${scoped}=${encoded}`)
     writeFileSync(ENV_FILE, `${lines.join('\n')}\n`, { mode: 0o600 })
     chmodSync(ENV_FILE, 0o600)
 
     // Resolve ONE variable rather than sourcing the whole file. Sourcing loads
     // every secret ever stored into the agent's environment, so a reference for
     // one ask would leak the secrets of every other.
-    const resolve = `${env_name}=$(grep '^${env_name}_B64=' ${ENV_FILE} | cut -d= -f2- | base64 -d)`
+    const resolve = `${env_name}=$(grep '^${scoped}=' ${JSON.stringify(ENV_FILE)} | cut -d= -f2- | base64 -d)`
     return {
       store: 'env',
       ref: `$${env_name}`,
@@ -215,6 +225,28 @@ export class SecretStore {
       resolve,
       hint: `Load just this one: export ${resolve}  — then use $${env_name}. Never echo it, and never source the whole file.`,
     }
+  }
+
+  /** Undo a put that cannot be committed to an answer. Never mask the original failure. */
+  async delete(record) {
+    try {
+      if (record?.store === 'env' && existsSync(ENV_FILE)) {
+        const key = envKeyFromRecord(record)
+        // Do not remove legacy unscoped entries delivered before this version.
+        if (key === `${record.env_name}_B64`) return
+        const text = readFileSync(ENV_FILE, 'utf8')
+        const lines = text.split('\n').filter((line) => !line.startsWith(`${key}=`))
+        writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 })
+        chmodSync(ENV_FILE, 0o600)
+      } else if (record?.store === 'keychain') {
+        await run('security', ['-i'], {
+          input: `delete-generic-password -a ${KEYCHAIN_ACCOUNT} -s ${record.ref}\n`,
+        })
+      } else if (record?.store === 'op') {
+        const item = record.ref?.match(/^op:\/\/[^/]+\/([^/]+)\/credential$/)?.[1]
+        if (item) await run('op', ['item', 'delete', item, '--vault', this.#vault])
+      }
+    } catch { /* best effort: the caller's error takes precedence */ }
   }
 
   /** Prove the value survived the round trip before handing out a reference. */
@@ -263,7 +295,7 @@ export class SecretStore {
     }
     if (record.store === 'env') {
       const text = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : ''
-      const key = `${record.env_name}_B64=`
+      const key = `${envKeyFromRecord(record)}=`
       const line = text.split('\n').find((l) => l.startsWith(key))
       if (!line) throw new Error('env entry missing')
       return Buffer.from(line.slice(key.length).trim(), 'base64').toString('utf8')

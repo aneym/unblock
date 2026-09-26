@@ -153,6 +153,7 @@ export class Store {
     // rendering the ask watches this to know the QUESTIONS changed, which
     // draft_updated_at cannot tell it — that one only moves when the human types.
     this.#addColumn('asks', 'updated_at', 'INTEGER')
+    this.#addColumn('asks', 'draft_rev', 'INTEGER NOT NULL DEFAULT 0')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -327,6 +328,7 @@ export class Store {
       answer_is_ref: refs,
       draft,
       draft_reply: draftReply,
+      draft_rev: row.draft_rev,
       // Lets a client decide whether its own locally-kept copy is newer than
       // what the daemon has, instead of guessing.
       draft_updated_at: draftAt || undefined,
@@ -493,10 +495,17 @@ export class Store {
     return { ask: updated, complete: false }
   }
 
-  saveDraft(idOrTicket, values, fieldContext, reply) {
+  saveDraft(idOrTicket, values, fieldContext, reply, baseRev) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
+    if (typeof baseRev === 'number' && baseRev < ask.draft_rev) {
+      const error = new Error('draft is stale')
+      error.status = 409
+      error.code = 'DRAFT_STALE'
+      error.draft_rev = ask.draft_rev
+      throw error
+    }
     const known = new Set(ask.fields.map((f) => f.name))
     const at = nowMs()
     this.#saveFieldContext(ask.id, known, fieldContext, at)
@@ -521,6 +530,7 @@ export class Store {
         stmt.run(ask.id, '__reply__', JSON.stringify(reply), at)
       }
     }
+    this.#db.prepare('UPDATE asks SET draft_rev = draft_rev + 1 WHERE id = ?').run(ask.id)
     return this.get(ask.id)
   }
 
@@ -609,7 +619,7 @@ export class Store {
    * answer claimable by ticket and stops the queue quietly lying about what is
    * still in flight.
    */
-  sweep({ orphanAfterMs = 10 * 60 * 1000 } = {}) {
+  sweepCandidates({ orphanAfterMs = 10 * 60 * 1000 } = {}) {
     const at = nowMs()
     // ONLY parked asks can be orphaned. A park means an agent is definitionally
     // sitting in a tool call waiting, so uncollected-for-ten-minutes really does
@@ -623,17 +633,28 @@ export class Store {
             AND answered_at IS NOT NULL AND answered_at < ?`,
       )
       .all(at - orphanAfterMs)
-    for (const { id } of stranded) {
-      this.#db
-        .prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ?`)
-        .run('answered, but the agent that asked never collected it', id)
-    }
     const stale = this.#db
       .prepare(`SELECT id FROM asks WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at < ?`)
       .all(at)
-    for (const { id } of stale) {
-      this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ?`).run(at, id)
-    }
+    return [...stale, ...stranded].map(({ id }) => this.get(id)?.ticket).filter(Boolean)
+  }
+
+  sweepOne(idOrTicket, { orphanAfterMs = 10 * 60 * 1000 } = {}) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return null
+    const at = nowMs()
+    if (ask.status === 'open' && ask.expires_at && ask.expires_at < at) {
+      this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ? AND status = 'open'`).run(at, ask.id)
+    } else if (ask.status === 'answered' && ask.kind === 'park' &&
+      ask.answered_at !== undefined && ask.answered_at < at - orphanAfterMs) {
+      this.#db.prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ? AND status = 'answered'`)
+        .run('answered, but the agent that asked never collected it', ask.id)
+    } else return null
+    return this.get(ask.id)
+  }
+
+  sweepCleanup() {
+    const at = nowMs()
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
     // Prune long-closed rows so the queue file cannot grow without bound.
     // Everything closed keeps a 30-day window for `unblock_check` stragglers
@@ -646,7 +667,13 @@ export class Store {
             AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`,
       )
       .run(cutoff)
-    return [...stale, ...stranded].map(({ id }) => this.get(id))
+  }
+
+  /** Synchronous store-only sweep for callers with no concurrent async secret puts. */
+  sweep(options) {
+    const closed = this.sweepCandidates(options).map((ticket) => this.sweepOne(ticket, options)).filter(Boolean)
+    this.sweepCleanup()
+    return closed
   }
 
   // --------------------------------------------------------------- links

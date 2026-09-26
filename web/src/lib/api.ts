@@ -27,6 +27,10 @@ export const VIEWER = BOOT.viewer
 
 export class FinishedError extends Error {}
 
+export class DraftStaleError extends Error {
+  constructor(public draftRev: number) { super('draft is stale') }
+}
+
 /** The request never got an HTTP answer (Safari words this "Load failed"). */
 export class NetworkError extends Error {}
 
@@ -99,7 +103,10 @@ export async function api<T>(path: string, body?: unknown, { retry = true } = {}
   flushReports()
   if (response.status === 410) throw new FinishedError('finished')
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { error?: string }
+    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string; draft_rev?: number }
+    if (response.status === 409 && payload.code === 'DRAFT_STALE' && typeof payload.draft_rev === 'number') {
+      throw new DraftStaleError(payload.draft_rev)
+    }
     throw new Error(payload.error || `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
