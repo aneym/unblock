@@ -9,6 +9,7 @@ import { join } from 'node:path'
 
 const installed = join(homedir(), '.local', 'bin', 'agent-secret')
 const home = mkdtempSync(join(tmpdir(), 'unblock-headless-'))
+test.after(() => rmSync(home, { recursive: true, force: true }))
 const bin = join(home, '.local', 'bin', 'agent-secret')
 const real = `${bin}.real`
 const dir = join(home, '.agent-rails', 'custody', 'agent-secret')
@@ -21,7 +22,6 @@ if (!skip) {
   process.env.HOME = home
   ;({ SecretStore } = await import('../headless/secrets.js'))
 }
-test.after(() => rmSync(home, { recursive: true, force: true }))
 
 // agent-secret as installed, or with one step sabotaged by a shell prefix.
 function wrap(prefix = '') {
@@ -40,6 +40,11 @@ test('stores each attempt under its own private 128-bit ref and deletes it', { s
   assert.equal(await secrets.delete(record), true)
   assert.equal(existsSync(join(dir, record.ref)), false)
   assert.equal(await secrets.delete(record), true, 'already gone counts as gone')
+  // A re-answer must not overwrite what an earlier attempt committed.
+  const first = await secrets.put({ name: 'api_key', value: 'dummy-first', ticket: 'ub_test01' })
+  const second = await secrets.put({ name: 'api_key', value: 'dummy-second', ticket: 'ub_test01' })
+  assert.notEqual(first.ref, second.ref)
+  assert.equal(await secrets.reveal(first), 'dummy-first')
 })
 
 test('delete keeps anything it cannot confirm gone queued', { skip }, async () => {

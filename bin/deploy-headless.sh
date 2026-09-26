@@ -17,7 +17,9 @@ fi
 
 (cd "$SRC" && npm run --silent web:build >/dev/null)
 rsync -a --delete --exclude secrets.js "$SRC/src/" "${DEST:?}/src/"
-install -m 644 "$SRC/headless/secrets.js" "${DEST:?}/src/secrets.js"
+# Swapped in whole, so an interrupted deploy leaves the previous store, never none.
+install -m 644 "$SRC/headless/secrets.js" "${DEST:?}/src/.secrets.js.new"
+mv -f "${DEST:?}/src/.secrets.js.new" "${DEST:?}/src/secrets.js"
 rsync -a --delete "$SRC/web/dist/" "${DEST:?}/web/dist/"
 rsync -a "$SRC/bin/" "${DEST:?}/bin/"
 cp "$SRC/package.json" "${DEST:?}/package.json"
