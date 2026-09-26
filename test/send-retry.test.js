@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -533,7 +533,7 @@ test('sending back one committed secret field removes the old secret', async (t)
   assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
 })
 
-test('a failed delete keeps the old ask until a later sweep removes its secret', async (t) => {
+test('a failed delete during a prune stays queued until a later sweep removes the secret', async (t) => {
   const real = new SecretStore({ backend: 'env' })
   let failDeletes = true
   const secretStore = {
@@ -553,11 +553,10 @@ test('a failed delete keeps the old ask until a later sweep removes its secret',
   } finally { db.close() }
   const read = () => fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } })
   await daemon.sweep()
-  assert.equal((await read()).status, 200)
+  assert.equal((await read()).status, 404)
   assert.match(envText(), new RegExp(`^${key}=`, 'm'))
   failDeletes = false
   await daemon.sweep()
-  assert.equal((await read()).status, 404)
   assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
 })
 
@@ -584,30 +583,38 @@ test('a failed delete of a replaced secret is retried by the sweeper', async (t)
 })
 
 test('an orphan collected while the sweep is pruning keeps its secret', async (t) => {
+  // The first ask's lock is held by an answer blocked in its secret put, so the
+  // sweep lists both asks and then waits; the second is collected meanwhile.
   const real = new SecretStore({ backend: 'env' })
-  let entered, release
-  const deleting = new Promise((resolve) => { entered = resolve })
+  let blockPuts = false, entered, release
+  const putting = new Promise((resolve) => { entered = resolve })
   const resume = new Promise((resolve) => { release = resolve })
   const secretStore = {
     backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
-    put: (input) => real.put(input),
-    async delete(record) { entered(); await resume; return real.delete(record) },
+    async put(input) { if (blockPuts) { entered(); await resume } return real.put(input) },
+    delete: (record) => real.delete(record),
   }
   const daemon = await startDaemon({ port: 0, secretStore })
   t.after(() => daemon.close())
   const base = `http://127.0.0.1:${daemon.port}`
-  const first = await secretAsk(base, 'prune-race-first')
+  const first = await secretAsk(base, 'prune-race-first', partlyAnswered)
   const second = await secretAsk(base, 'prune-race-second')
-  await post(base, '/api/answer', { ticket: first, values: { api_key: 'first' } })
   const claimed = await post(base, '/api/answer', { ticket: second, values: { api_key: 'second' } })
+  blockPuts = true
+  const holding = post(base, '/api/answer', { ticket: first, values: { api_key: 'first' } })
+  await putting
   const db = new DatabaseSync(join(stateDir, 'queue.db'))
   try {
     db.prepare(`UPDATE asks SET status = 'orphaned', closed_at = 1 WHERE ticket IN (?, ?)`).run(first, second)
   } finally { db.close() }
   const sweeping = daemon.sweep()
-  await deleting // the sweep has listed both and is removing the first one's secret
-  assert.equal((await post(base, `/api/asks/${second}/collect`, {})).status, 200)
-  release()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  let collected
+  try {
+    collected = await post(base, `/api/asks/${second}/collect`, {})
+  } finally { release() }
+  assert.equal(collected.status, 200)
+  assert.equal((await holding).status, 410)
   await sweeping
   assert.match(envText(), new RegExp(`^${envKey(claimed.body.ask.answers.api_key)}=`, 'm'))
 })
@@ -665,4 +672,32 @@ test('a 1Password delete uses the vault named in the reference', async (t) => {
   const secrets = new SecretStore({ backend: 'env', vault: 'Today' })
   assert.equal(await secrets.delete({ store: 'op', ref: 'op://Then/item123/credential' }), true)
   assert.equal(readFileSync(log, 'utf8').trim(), 'item delete item123 --vault Then')
+})
+
+test('an answer that cannot queue the secret it replaces does not commit', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'queue-in-transaction', partlyAnswered)
+  const first = await post(base, '/api/answer', { ticket, values: { api_key: 'one' } })
+  const old = first.body.ask.answers.api_key
+  const store = new Store(join(stateDir, 'queue.db'))
+  try {
+    store.queueSecretDeletes = () => { throw new Error('queue unavailable') }
+    const replacement = { store: 'env', ref: '$SHARED_KEY', env_name: 'SHARED_KEY', resolve: 'SHARED_KEY=replacement' }
+    assert.throws(() => store.answer(ticket, { api_key: replacement }, { refs: { api_key: true }, puts: [replacement] }), /queue unavailable/)
+    assert.deepEqual(store.get(ticket).answers.api_key, old)
+  } finally { store.close() }
+})
+
+test('the env file is replaced whole and stays owner-only', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'env-file-replaced', partlyAnswered)
+  await post(base, '/api/answer', { ticket, values: { api_key: 'one' } })
+  await post(base, '/api/answer', { ticket, values: { api_key: 'two' } })
+  const dir = join(stateDir, 'config')
+  assert.equal(statSync(join(dir, 'secrets.env')).mode & 0o777, 0o600)
+  assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.tmp')), [])
 })

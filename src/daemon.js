@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyConfig } from './config.js'
 import { normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { CLOSED_TO_ANSWERS, finished, secretRecords, Store } from './store.js'
+import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -325,27 +325,28 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // the human fills it in, which is what an agent watching its own ask needs.
   const askClients = new Map()
   const ticketTails = new Map()
-  // A retired secret is queued before its delete is tried, in the same tick as
-  // the state change that retired it, so a crash or a failed delete leaves it
-  // for the sweeper to retry. True only when every record is gone.
+  // The store queues every secret a state change leaves undelivered, in that
+  // change's own transaction. Deleting is then just draining the queue: right
+  // after the change, and from the sweeper for anything that failed or was cut
+  // off by a restart. Entries already being deleted are skipped.
   async function deleteSecret(record) {
     return Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)
   }
-  async function retireSecrets(records) {
-    if (records.length === 0) return true
-    let ids = []
-    try { ids = store.queueSecretDeletes(records) } catch { /* the deletes below still run */ }
-    const results = await Promise.all(records.map(deleteSecret))
-    results.forEach((ok, index) => { if (ok && ids[index] !== undefined) store.clearSecretDelete(ids[index]) })
-    return results.every(Boolean)
+  const deleting = new Set()
+  async function flushSecretDeletes() {
+    const due = store.pendingSecretDeletes().filter(({ id }) => !deleting.has(id))
+    for (const { id } of due) deleting.add(id)
+    await Promise.all(due.map(async ({ id, record }) => {
+      try { if (await deleteSecret(record)) store.clearSecretDelete(id) } finally { deleting.delete(id) }
+    }))
   }
-  // Every secret this ask held or was just given that it no longer references.
-  const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
-  async function settleSecrets(before, after, puts = []) {
-    const kept = new Set(secretRecords(after).map(secretId))
-    const dropped = new Map([...secretRecords(before), ...puts].map((record) => [secretId(record), record]))
-    for (const id of kept) dropped.delete(id)
-    return retireSecrets([...dropped.values()])
+  // A failed answer rolled back, so nothing queued its puts: queue them now.
+  async function compensate(records) {
+    try { store.queueSecretDeletes(records) } catch {
+      await Promise.all(records.map(deleteSecret))
+      return
+    }
+    await flushSecretDeletes()
   }
   // Queue only operations on the same ticket; cleanup works even on throw.
   async function withTicket(ticket, operation) {
@@ -423,8 +424,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // rubber-stamping it. A bounce with no note still tells the agent the ask
   // itself was wrong.
   const ask = store.bounce(ticket, optionalScrub(reply, 1000))
-  // Sent back as the wrong ask: a secret typed into part of it is not handed out.
-  await retireSecrets(secretRecords(ask))
+  await flushSecretDeletes()
   emitAsk(ask, 'sent_back')
   return { ask, complete: true, bounced: true }
 }
@@ -494,19 +494,18 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       }
       const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
       result = store.answer(ticket, safe, {
+        puts: records.map(([, record]) => record),
         refs,
         reply: optionalScrub(reply, 1000),
         fieldContext: scrubFieldContext(fieldContext),
         fieldBounce: scrubFieldBounce(fieldBounce),
       })
     } catch (error) {
-      await retireSecrets(records.map(([, record]) => record)).catch(() => {})
+      await compensate(records.map(([, record]) => record)).catch(() => {})
       throw error
     }
-    // Only references actually committed may survive this attempt: a secret
-    // replaced by a new one, bounced, or put for a field that did not commit
-    // has nothing left pointing at it.
-    await settleSecrets(ask, result.ask, records.map(([, record]) => record))
+    // The answer queued any secret it replaced, sent back or did not commit.
+    await flushSecretDeletes()
     emitAsk(result.ask, 'answered')
     return result
   })
@@ -773,8 +772,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       const note = optionalScrub(body.note, 600)
       const ask = await withTicket(ticket, async () => {
         const cancelled = store.cancel(ticket, note)
-        // A partly answered ask can already hold a secret; it is never delivered now.
-        await retireSecrets(secretRecords(cancelled))
+        await flushSecretDeletes()
         return cancelled
       })
       if (!ask) return notFound(res)
@@ -905,24 +903,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
   keepalive.unref()
   async function sweep() {
     let changed = false
-    for (const { id, record } of store.pendingSecretDeletes()) {
-      if (await deleteSecret(record)) store.clearSecretDelete(id)
-    }
     for (const ticket of store.sweepCandidates()) {
-      const ask = await withTicket(ticket, async () => {
-        const swept = store.sweepOne(ticket)
-        // An orphaned answer stays claimable by ticket, so only expiry retires secrets.
-        if (swept?.status === 'expired') await retireSecrets(secretRecords(swept))
-        return swept
-      })
+      const ask = await withTicket(ticket, () => store.sweepOne(ticket))
       if (ask) { changed = true; emitAsk(ask, ask.status) }
     }
-    for (const ticket of store.sweepCleanup()) {
-      await withTicket(ticket, async () => {
-        const candidate = store.pruneCandidate(ticket)
-        if (candidate && await retireSecrets(candidate.records)) store.prune(ticket)
-      })
-    }
+    for (const ticket of store.sweepCleanup()) await withTicket(ticket, () => store.prune(ticket))
+    await flushSecretDeletes()
     if (changed) emitQueue()
   }
   const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)

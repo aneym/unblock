@@ -17,7 +17,7 @@
 
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -73,6 +73,17 @@ async function opAvailable() {
 
 function keychainAvailable() {
   return process.platform === 'darwin'
+}
+
+/**
+ * Replace the env file in one step. Every collected secret lives in this one
+ * file, so a crash halfway through an in-place rewrite could cost them all.
+ */
+function writeEnvFile(text) {
+  const temp = `${ENV_FILE}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  writeFileSync(temp, text, { mode: 0o600 })
+  chmodSync(temp, 0o600)
+  renameSync(temp, ENV_FILE)
 }
 
 export class SecretStore {
@@ -212,8 +223,7 @@ export class SecretStore {
       .split('\n')
       .filter((l) => l.trim() && !l.startsWith(`${scoped}=`))
     lines.push(`${scoped}=${encoded}`)
-    writeFileSync(ENV_FILE, `${lines.join('\n')}\n`, { mode: 0o600 })
-    chmodSync(ENV_FILE, 0o600)
+    writeEnvFile(`${lines.join('\n')}\n`)
 
     // Resolve ONE variable rather than sourcing the whole file. Sourcing loads
     // every secret ever stored into the agent's environment, so a reference for
@@ -242,8 +252,7 @@ export class SecretStore {
         if (key === `${record.env_name}_B64`) return true
         const text = readFileSync(ENV_FILE, 'utf8')
         const lines = text.split('\n').filter((line) => !line.startsWith(`${key}=`))
-        writeFileSync(ENV_FILE, lines.join('\n'), { mode: 0o600 })
-        chmodSync(ENV_FILE, 0o600)
+        writeEnvFile(lines.join('\n'))
         return true
       }
       if (record?.store === 'keychain') {

@@ -59,6 +59,8 @@ const PRUNABLE = `WHERE status IN ('collected', 'cancelled', 'expired', 'orphane
     AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`
 const pruneCutoff = () => nowMs() - 30 * 24 * 60 * 60 * 1000
 
+const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
+
 /** Stored secret references committed on an ask (never values). */
 export function secretRecords(ask) {
   if (!ask) return []
@@ -431,19 +433,39 @@ export class Store {
     }
   }
 
-  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce } = {}) {
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, puts = [] } = {}) {
     // One answer spans references, bounces, context, drafts and status. Never
     // expose a partial reference if a later write fails and the caller retires
-    // the corresponding secret on the failure path.
+    // the corresponding secret on the failure path. `puts` are the secrets
+    // stored for this attempt: any the answer leaves unreferenced, and any
+    // earlier secret it replaced or sent back, are queued for deletion in the
+    // same transaction.
+    return this.#transact(() => {
+      const before = this.get(idOrTicket)
+      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce })
+      this.#queueDropped([...secretRecords(before), ...puts], secretRecords(result.ask))
+      return result
+    })
+  }
+
+  #transact(change) {
     this.#db.exec('BEGIN IMMEDIATE')
     try {
-      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce })
+      const result = change()
       this.#db.exec('COMMIT')
       return result
     } catch (error) {
       this.#db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Queue every record in `held` that `kept` no longer references. */
+  #queueDropped(held, kept = []) {
+    const keep = new Set(kept.map(secretId))
+    const dropped = new Map(held.map((record) => [secretId(record), record]))
+    for (const id of keep) dropped.delete(id)
+    this.queueSecretDeletes([...dropped.values()])
   }
 
   #answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce }) {
@@ -592,10 +614,14 @@ export class Store {
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (ask.status !== 'open') throw finished(ask)
     const at = nowMs()
-    this.#db
-      .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
-      .run(at, reply || null, ask.id)
-    return this.get(ask.id)
+    // Sent back as the wrong ask: a secret typed into part of it is not handed out.
+    return this.#transact(() => {
+      this.#db
+        .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
+        .run(at, reply || null, ask.id)
+      this.#queueDropped(secretRecords(ask))
+      return this.get(ask.id)
+    })
   }
 
   /** The agent picked up its answers. */
@@ -639,10 +665,14 @@ export class Store {
       err.askStatus = ask.status
       throw err
     }
-    this.#db
-      .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
-      .run(nowMs(), note ?? null, ask.id)
-    return this.get(ask.id)
+    // A partly answered ask can already hold a secret; it is never delivered now.
+    return this.#transact(() => {
+      this.#db
+        .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
+        .run(nowMs(), note ?? null, ask.id)
+      this.#queueDropped(secretRecords(ask))
+      return this.get(ask.id)
+    })
   }
 
   /** The agent is gone. Answers are kept so a later agent can claim them by ticket. */
@@ -689,7 +719,11 @@ export class Store {
     if (!ask) return null
     const at = nowMs()
     if (ask.status === 'open' && ask.expires_at && ask.expires_at < at) {
-      this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ? AND status = 'open'`).run(at, ask.id)
+      // An orphaned answer stays claimable by ticket, so only expiry retires secrets.
+      this.#transact(() => {
+        this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ? AND status = 'open'`).run(at, ask.id)
+        this.#queueDropped(secretRecords(ask))
+      })
     } else if (ask.status === 'answered' && ask.kind === 'park' &&
       ask.answered_at !== undefined && ask.answered_at < at - orphanAfterMs) {
       this.#db.prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ? AND status = 'answered'`)
@@ -708,25 +742,20 @@ export class Store {
   }
 
   /**
-   * The secrets to remove before pruning this ask, or null if it is not due.
-   * Read under the caller's ticket lock, since an orphan can be collected
-   * between the sweep's listing and here. An uncollected secret was never
-   * delivered, so it goes with the row. A collected secret belongs to the
-   * agent that collected it and stays where it resolves.
+   * Prune one long-closed ask, if it still is one. Read under the caller's
+   * ticket lock, since an orphan can be collected between the sweep's listing
+   * and here. An uncollected secret was never delivered, so it is queued for
+   * deletion in the same transaction that drops the row. A collected secret
+   * belongs to the agent that collected it and stays where it resolves.
    */
-  pruneCandidate(idOrTicket) {
-    const ask = this.get(idOrTicket)
-    if (!ask) return null
-    const due = this.#db.prepare(`SELECT 1 FROM asks ${PRUNABLE} AND id = ?`).get(pruneCutoff(), ask.id)
-    if (!due) return null
-    return { records: ask.status === 'collected' ? [] : secretRecords(ask) }
-  }
-
-  /** Remove one pruning candidate, if it still is one. */
   prune(idOrTicket) {
     const ask = this.get(idOrTicket)
     if (!ask) return false
-    return this.#db.prepare(`DELETE FROM asks ${PRUNABLE} AND id = ?`).run(pruneCutoff(), ask.id).changes > 0
+    return this.#transact(() => {
+      const gone = this.#db.prepare(`DELETE FROM asks ${PRUNABLE} AND id = ?`).run(pruneCutoff(), ask.id).changes > 0
+      if (gone && ask.status !== 'collected') this.#queueDropped(secretRecords(ask))
+      return gone
+    })
   }
 
   queueSecretDeletes(records) {
