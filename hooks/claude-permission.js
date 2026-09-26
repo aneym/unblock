@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
-import { entries, eligible, fileAsk, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
+import { entries, eligible, fileFirst, UNKNOWN_PURPOSE, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
 
 const timer = setTimeout(() => process.exit(0), 3800)
 try {
   const input = JSON.parse(readFileSync(0, 'utf8'))
-  if (eligible(input)) {
+  if (eligible(input) && input.tool_name) {
     const source = await origin()
     const pane = source.pane_id
     const tool = input.tool_name || ''
@@ -17,9 +17,27 @@ try {
     const summary = cut(redact(String(raw ?? '')), 600)
     const fingerprint = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 24)
     const workspace = source.workspace_name || project(input.cwd)
-    const ask = {
-      kind: 'file', purpose: 'decision', only_you: 'judgment', project: project(input.cwd), ttl_seconds: 3600,
+    const common = {
+      kind: 'file', project: project(input.cwd), ttl_seconds: 3600,
       title: cut(plainify(`Allow ${label} in ${workspace} (pane ${pane.split(':').at(-1)})?`), 90),
+    }
+    const fileTool = ['Edit', 'Write', 'MultiEdit', 'Read', 'NotebookEdit'].includes(tool)
+    const command = tool === 'Bash' ? data.command : tool === 'WebFetch' ? data.url : fileTool ? undefined : JSON.stringify(data)
+    const toolSummary = tool === 'Bash' ? 'Run a shell command' : tool === 'Read' ? 'Read a file'
+      : ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool) ? 'Edit a file'
+        : tool === 'WebFetch' ? 'Fetch a web page' : `Use ${label}`
+    const modern = {
+      ...common, purpose: 'permission',
+      why: 'Claude stopped at a permission prompt and is waiting. Allow once presses Yes in its terminal; Deny presses Escape and tells it to find another way. Nothing here changes its permission settings.',
+      permission: {
+        tool,
+        ...(command == null || !String(command).trim() ? {} : { command: cut(redact(String(command)), 2000) }),
+        ...(fileTool && (data.file_path || data.notebook_path) ? { path: data.file_path || data.notebook_path } : {}),
+        summary: cut(plainify(`${toolSummary} in ${workspace}`), 200),
+      },
+    }
+    const legacy = {
+      ...common, purpose: 'decision', only_you: 'judgment',
       why: `Claude stopped at a permission prompt and is waiting. It wants to run: ${summary}. Allow once presses Yes in its terminal; Deny presses Escape and tells it to find another way. Nothing here changes its permission settings.`,
       tried: ['Claude stopped at its own permission prompt; only you can approve this step for it.'],
       fields: [{ name: 'decision', type: 'choice', label: 'Let it run this once?', choices: [{ value: 'allow_once', label: 'Allow once' }, { value: 'deny', label: 'Deny' }], recommend: { value: 'allow_once', why: 'Claude chose this step itself; deny it if the command looks wrong.' }, must_decide: true }],
@@ -34,7 +52,7 @@ try {
     }
     source.session_id = `permission:${pane}`
     source.agent = 'claude'
-    const { ticket } = await fileAsk(ask, source)
+    const { ticket } = await fileFirst([modern, legacy], source, UNKNOWN_PURPOSE)
     if (!readEntry(ticket)) {
       register(ticket, pane, 'permission', { fingerprint })
       watcher(ticket)

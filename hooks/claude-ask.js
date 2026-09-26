@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
-import { answerLink, cut, eligible, fileAsk, log, origin, plainify, project, readEntry, register, watcher } from './lib.js'
+import { answerLink, cut, eligible, fileFirst, log, origin, plainify, project, readEntry, register, watcher } from './lib.js'
 
 // Claude treats stdout as a decision; every failure must leave it untouched.
 const timer = setTimeout(() => process.exit(0), 3800)
@@ -28,14 +28,27 @@ try {
       }
     })
     const workspace = source.workspace_name || project(input.cwd)
-    const ask = {
-      kind: 'file', purpose: 'decision', only_you: 'judgment', project: project(input.cwd),
+    const common = {
+      kind: 'file', project: project(input.cwd),
       title: cut(plainify(questions.length === 1 ? questions[0].question : `Claude has ${questions.length} questions in ${workspace}`), 90),
       why: `Claude asked this in ${source.workspace_name || 'a herdr pane'} instead of guessing. It keeps working on anything that does not depend on the answer; your answer is typed into its pane.`,
-      tried: ['Claude raised this in its question dialog instead of guessing; the dialog was routed here so it can keep working meanwhile.'],
-      fields, ttl_seconds: 86400,
+      ttl_seconds: 86400,
     }
-    const { ticket } = await fileAsk(ask, source)
+    // v2 questions take a recommendation only when the agent marked one; v1 decisions always need one.
+    const modernFields = fields.map(({ recommend, ...field }, i) => ({
+      ...field,
+      ...(questions[i].options.some((o) => /\s*\(Recommended\)$/i.test(o.label)) ? { recommend } : {}),
+      help: field.label !== plainify(questions[i].question) ? cut(plainify(questions[i].question), 600) : undefined,
+      choices: field.choices.map((choice, n) => ({
+        ...choice,
+        ...(questions[i].options[n].description ? { description: cut(plainify(questions[i].options[n].description), 200) } : {}),
+      })),
+    }))
+    const { ticket } = await fileFirst([
+      { ...common, purpose: 'question', summary: cut(questions.length === 1 ? `Claude asks: ${common.title}` : common.title, 140), fields: modernFields },
+      { ...common, purpose: 'decision', only_you: 'judgment',
+        tried: ['Claude raised this in its question dialog instead of guessing; the dialog was routed here so it can keep working meanwhile.'], fields },
+    ], source)
     const link = await answerLink(ticket)
     if (!readEntry(ticket)) {
       register(ticket, source.pane_id, 'question')
