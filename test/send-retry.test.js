@@ -701,3 +701,30 @@ test('the env file is replaced whole and stays owner-only', async (t) => {
   assert.equal(statSync(join(dir, 'secrets.env')).mode & 0o777, 0o600)
   assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.tmp')), [])
 })
+
+test('a failed answer whose queue write and delete both fail is retried later', async (t) => {
+  const real = new SecretStore({ backend: 'env' })
+  let failDeletes = true
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put: (input) => real.put(input),
+    delete: async (record) => (failDeletes ? false : real.delete(record)),
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'triple-failure', partlyAnswered)
+  const db = new DatabaseSync(join(stateDir, 'queue.db'))
+  t.after(() => db.close())
+  db.exec(`CREATE TRIGGER triple_answer_fails BEFORE INSERT ON answers
+    WHEN NEW.field_name = 'verdict' AND NEW.ask_id = (SELECT id FROM asks WHERE ticket = '${ticket}')
+    BEGIN SELECT RAISE(FAIL, 'answer failed'); END`)
+  db.exec(`CREATE TRIGGER triple_queue_fails BEFORE INSERT ON secret_deletes BEGIN SELECT RAISE(FAIL, 'queue down'); END`)
+  const failed = await post(base, '/api/answer', { ticket, values: { api_key: 'stranded', verdict: 'keep' } })
+  assert.equal(failed.status, 500)
+  assert.match(envText(), new RegExp(scopedLine(ticket, 'api_key')))
+  db.exec('DROP TRIGGER triple_queue_fails')
+  failDeletes = false
+  await daemon.sweep()
+  assert.doesNotMatch(envText(), new RegExp(scopedLine(ticket, 'api_key')))
+})

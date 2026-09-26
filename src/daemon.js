@@ -334,6 +334,9 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   }
   const deleting = new Set()
   async function flushSecretDeletes() {
+    if (unqueued.length) {
+      try { store.queueSecretDeletes(unqueued); unqueued.length = 0 } catch { /* next time */ }
+    }
     const due = store.pendingSecretDeletes().filter(({ id }) => !deleting.has(id))
     for (const { id } of due) deleting.add(id)
     await Promise.all(due.map(async ({ id, record }) => {
@@ -341,9 +344,13 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
     }))
   }
   // A failed answer rolled back, so nothing queued its puts: queue them now.
+  // If even that write fails, delete directly, and hold any delete that also
+  // failed in memory until the queue accepts it.
+  const unqueued = []
   async function compensate(records) {
     try { store.queueSecretDeletes(records) } catch {
-      await Promise.all(records.map(deleteSecret))
+      const results = await Promise.all(records.map(deleteSecret))
+      unqueued.push(...records.filter((_, index) => !results[index]))
       return
     }
     await flushSecretDeletes()
