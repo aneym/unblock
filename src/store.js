@@ -732,7 +732,7 @@ export class Store {
   queueSecretDeletes(records) {
     const stmt = this.#db.prepare('INSERT INTO secret_deletes (record_json, queued_at) VALUES (?, ?)')
     const at = nowMs()
-    for (const record of records) stmt.run(JSON.stringify(record), at)
+    return records.map((record) => stmt.run(JSON.stringify(record), at).lastInsertRowid)
   }
 
   pendingSecretDeletes() {

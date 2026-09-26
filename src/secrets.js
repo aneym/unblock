@@ -256,9 +256,10 @@ export class SecretStore {
         return left.code === KEYCHAIN_NOT_FOUND
       }
       if (record?.store === 'op') {
-        const item = record.ref?.match(/^op:\/\/[^/]+\/([^/]+)\/credential$/)?.[1]
+        // The vault named in the reference, not today's setting: it may have changed since.
+        const [, vault, item] = record.ref?.match(/^op:\/\/([^/]+)\/([^/]+)\/credential$/) ?? []
         if (!item) return true
-        return (await run('op', ['item', 'delete', item, '--vault', this.#vault])).ok
+        return (await run('op', ['item', 'delete', item, '--vault', vault])).ok
       }
       return true
     } catch {

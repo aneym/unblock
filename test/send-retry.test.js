@@ -625,3 +625,44 @@ test('a keychain secret counts as deleted only when the lookup says it is gone',
     assert.equal(await secrets.delete(record), gone, `lookup exit ${code}`)
   }
 })
+
+test('a retired secret is queued before its delete is tried', async (t) => {
+  const real = new SecretStore({ backend: 'env' })
+  let blocking = false, entered, release
+  const deleting = new Promise((resolve) => { entered = resolve })
+  const resume = new Promise((resolve) => { release = resolve })
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put: (input) => real.put(input),
+    async delete(record) { if (blocking) { entered(); await resume } return real.delete(record) },
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'queue-before-delete', partlyAnswered)
+  assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'one' } })).status, 200)
+  blocking = true
+  const replacing = post(base, '/api/answer', { ticket, values: { api_key: 'two' } })
+  await deleting
+  const queued = () => {
+    const db = new DatabaseSync(join(stateDir, 'queue.db'))
+    try { return db.prepare('SELECT COUNT(*) AS n FROM secret_deletes').get().n } finally { db.close() }
+  }
+  const before = queued()
+  release()
+  assert.equal((await replacing).status, 200)
+  assert.equal(before, 1, 'the old secret is queued while its delete is in flight')
+  assert.equal(queued(), 0)
+})
+
+test('a 1Password delete uses the vault named in the reference', async (t) => {
+  const bin = mkdtempSync(join(tmpdir(), 'unblock-fake-op-'))
+  const log = join(bin, 'args')
+  writeFileSync(join(bin, 'op'), `#!/bin/sh\necho "$@" > ${JSON.stringify(log)}\n`, { mode: 0o755 })
+  const savedPath = process.env.PATH
+  t.after(() => { process.env.PATH = savedPath })
+  process.env.PATH = `${bin}:${process.env.PATH}`
+  const secrets = new SecretStore({ backend: 'env', vault: 'Today' })
+  assert.equal(await secrets.delete({ store: 'op', ref: 'op://Then/item123/credential' }), true)
+  assert.equal(readFileSync(log, 'utf8').trim(), 'item delete item123 --vault Then')
+})

@@ -325,17 +325,19 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // the human fills it in, which is what an agent watching its own ask needs.
   const askClients = new Map()
   const ticketTails = new Map()
-  // Queue only operations on the same ticket; cleanup works even on throw.
-  // A failed delete must not undo the state change that retired the secret, so
-  // it is queued and the sweeper retries it. True only when every record is gone.
+  // A retired secret is queued before its delete is tried, in the same tick as
+  // the state change that retired it, so a crash or a failed delete leaves it
+  // for the sweeper to retry. True only when every record is gone.
   async function deleteSecret(record) {
     return Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)
   }
   async function retireSecrets(records) {
+    if (records.length === 0) return true
+    let ids = []
+    try { ids = store.queueSecretDeletes(records) } catch { /* the deletes below still run */ }
     const results = await Promise.all(records.map(deleteSecret))
-    const failed = records.filter((_, index) => !results[index])
-    if (failed.length) store.queueSecretDeletes(failed)
-    return failed.length === 0
+    results.forEach((ok, index) => { if (ok && ids[index] !== undefined) store.clearSecretDelete(ids[index]) })
+    return results.every(Boolean)
   }
   // Every secret this ask held or was just given that it no longer references.
   const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
@@ -345,6 +347,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
     for (const id of kept) dropped.delete(id)
     return retireSecrets([...dropped.values()])
   }
+  // Queue only operations on the same ticket; cleanup works even on throw.
   async function withTicket(ticket, operation) {
     const previous = ticketTails.get(ticket) ?? Promise.resolve()
     let release
