@@ -52,6 +52,14 @@ export function finished(ask) {
   return error
 }
 
+/** Stored secret references committed on an ask (never values). */
+export function secretRecords(ask) {
+  if (!ask) return []
+  return Object.entries(ask.answers || {})
+    .filter(([name, record]) => ask.answer_is_ref?.[name] && record && typeof record === 'object' && record.store)
+    .map(([, record]) => record)
+}
+
 export class Store {
   #db
 
@@ -514,7 +522,14 @@ export class Store {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
-    if (typeof baseRev === 'number' && baseRev < ask.draft_rev) {
+    // One writer's requests arrive out of order (a keepalive beacon can pass the
+    // fetch still in flight), so a base below the current revision is an older
+    // request and loses. The beacon claims base+1 when a save is in flight;
+    // anything further ahead was never issued by this daemon. Two tabs are two
+    // live writers: after a 409 the page resends its newest values, so the last
+    // one typed wins. A missing base_rev is a page from before revisions and is
+    // written unconditionally, as it always was.
+    if (typeof baseRev === 'number' && (baseRev < ask.draft_rev || baseRev > ask.draft_rev + 1)) {
       const error = new Error('draft is stale')
       error.status = 409
       error.code = 'DRAFT_STALE'
@@ -668,6 +683,11 @@ export class Store {
     return this.get(ask.id)
   }
 
+  /**
+   * Returns the secret records of pruned asks the agent never received, so the
+   * caller can remove them from the secret store. A collected secret belongs to
+   * the agent that collected it and stays where it resolves.
+   */
   sweepCleanup() {
     const at = nowMs()
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
@@ -675,13 +695,14 @@ export class Store {
     // Everything closed keeps a 30-day window for `unblock_check` stragglers
     // and post-mortems; after that it is noise the hydrate loop pays for.
     const cutoff = at - 30 * 24 * 60 * 60 * 1000
-    this.#db
-      .prepare(
-        `DELETE FROM asks
-          WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
-            AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`,
-      )
-      .run(cutoff)
+    const where = `WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
+            AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`
+    const undelivered = this.#db
+      .prepare(`SELECT id FROM asks ${where} AND status != 'collected'`)
+      .all(cutoff)
+      .flatMap(({ id }) => secretRecords(this.get(id)))
+    this.#db.prepare(`DELETE FROM asks ${where}`).run(cutoff)
+    return undelivered
   }
 
   /** Synchronous store-only sweep for callers with no concurrent async secret puts. */

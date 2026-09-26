@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyConfig } from './config.js'
 import { normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
+import { CLOSED_TO_ANSWERS, finished, secretRecords, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -326,6 +326,10 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   const askClients = new Map()
   const ticketTails = new Map()
   // Queue only operations on the same ticket; cleanup works even on throw.
+  // Best effort: a failed delete must not undo the state change that retired it.
+  async function retireSecrets(records) {
+    await Promise.all(records.map((record) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+  }
   async function withTicket(ticket, operation) {
     const previous = ticketTails.get(ticket) ?? Promise.resolve()
     let release
@@ -753,8 +757,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       // renders it today, which makes it a trap for whoever adds the first
       // renderer rather than a bug you would notice.
       const note = optionalScrub(body.note, 600)
-      const ask = await withTicket(ticket, () => {
+      const ask = await withTicket(ticket, async () => {
         const cancelled = store.cancel(ticket, note)
+        // A partly answered ask can already hold a secret; it is never delivered now.
+        await retireSecrets(secretRecords(cancelled))
         return cancelled
       })
       if (!ask) return notFound(res)
@@ -886,10 +892,15 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
   async function sweep() {
     let changed = false
     for (const ticket of store.sweepCandidates()) {
-      const ask = await withTicket(ticket, () => store.sweepOne(ticket))
+      const ask = await withTicket(ticket, async () => {
+        const swept = store.sweepOne(ticket)
+        // An orphaned answer stays claimable by ticket, so only expiry retires secrets.
+        if (swept?.status === 'expired') await retireSecrets(secretRecords(swept))
+        return swept
+      })
       if (ask) { changed = true; emitAsk(ask, ask.status) }
     }
-    store.sweepCleanup()
+    await retireSecrets(store.sweepCleanup())
     if (changed) emitQueue()
   }
   const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)

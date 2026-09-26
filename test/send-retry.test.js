@@ -353,6 +353,9 @@ test('draft revision rejects stale writes, permits ahead revisions and survives 
     assert.equal(ahead.body.ask.draft_rev, 2)
     assert.equal(ahead.body.ask.draft.verdict, 'beacon')
     assert.equal(ahead.body.ask.draft_reply, 'newer note')
+    const farAhead = await post(base, '/api/draft', { ticket, base_rev: 4, values: { verdict: 'forged' } })
+    assert.equal(farAhead.status, 409)
+    assert.equal(farAhead.body.code, 'DRAFT_STALE')
   } finally { await daemon.close() }
 })
 
@@ -412,4 +415,95 @@ test('client failure log', async (t) => {
     assert.equal((await post(base, '/api/client-log', { events: many })).body.logged, 0)
     assert.equal(statSync(file).size, 1024 * 1024 + 1)
   })
+})
+
+function countingSecretStore() {
+  const real = new SecretStore({ backend: 'env' })
+  const calls = { put: 0, delete: 0 }
+  return {
+    calls,
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put(input) { calls.put += 1; return real.put(input) },
+    delete(record) { calls.delete += 1; return real.delete(record) },
+  }
+}
+
+const partlyAnswered = { extra: [{ name: 'verdict', type: 'text', label: 'Verdict', required: true }] }
+
+test('a retry after collection never reaches the secret store', async (t) => {
+  const secretStore = countingSecretStore()
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'no-put-after-collect')
+  assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'first' } })).status, 200)
+  assert.equal((await post(base, `/api/asks/${ticket}/collect`, {})).status, 200)
+  assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'late' } })).status, 410)
+  assert.deepEqual(secretStore.calls, { put: 1, delete: 0 })
+})
+
+test('two open asks sharing an env name each resolve their own secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const a = await secretAsk(base, 'shared-open-a')
+  const b = await secretAsk(base, 'shared-open-b')
+  const first = await post(base, '/api/answer', { ticket: a, values: { api_key: 'alpha' } })
+  const second = await post(base, '/api/answer', { ticket: b, values: { api_key: 'bravo' } })
+  assert.equal(first.status, 200)
+  assert.equal(second.status, 200)
+  const resolve = (record) => execFileSync('/bin/sh', ['-c', `${record.resolve}; printf %s "$SHARED_KEY"`], { env: { ...process.env, SHARED_KEY: '' }, encoding: 'utf8' })
+  for (const [ticket, expected] of [[a, 'alpha'], [b, 'bravo']]) {
+    const collected = await post(base, `/api/asks/${ticket}/collect`, {})
+    assert.equal(collected.status, 200)
+    assert.equal(resolve(collected.body.ask.answers.api_key), expected)
+  }
+})
+
+test('cancelling a partly answered ask removes its secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'cancel-partial-secret', partlyAnswered)
+  const partial = await post(base, '/api/answer', { ticket, values: { api_key: 'half-done' } })
+  assert.equal(partial.status, 200)
+  assert.equal(partial.body.ask.status, 'open')
+  const key = envKey(partial.body.ask.answers.api_key)
+  assert.match(envText(), new RegExp(`^${key}=`, 'm'))
+  assert.equal((await post(base, `/api/asks/${ticket}/cancel`, {})).status, 200)
+  assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
+})
+
+test('expiry removes a partly answered secret', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'expire-partial-secret', { ...partlyAnswered, ttl_seconds: 1 })
+  const partial = await post(base, '/api/answer', { ticket, values: { api_key: 'half-done' } })
+  assert.equal(partial.status, 200)
+  const key = envKey(partial.body.ask.answers.api_key)
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  await daemon.sweep()
+  const current = await fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } }).then((res) => res.json())
+  assert.equal(current.status, 'expired')
+  assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
+})
+
+test('pruning an old uncollected ask removes its secret; a collected one keeps resolving', async (t) => {
+  const daemon = await startDaemon({ port: 0 })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const orphaned = await secretAsk(base, 'prune-orphaned-secret')
+  const collected = await secretAsk(base, 'prune-collected-secret')
+  const lost = await post(base, '/api/answer', { ticket: orphaned, values: { api_key: 'never-delivered' } })
+  const kept = await post(base, '/api/answer', { ticket: collected, values: { api_key: 'delivered' } })
+  assert.equal((await post(base, `/api/asks/${collected}/collect`, {})).status, 200)
+  const db = new DatabaseSync(join(stateDir, 'queue.db'))
+  try {
+    db.prepare(`UPDATE asks SET status = 'orphaned' WHERE ticket = ?`).run(orphaned)
+    db.prepare('UPDATE asks SET closed_at = 1 WHERE ticket IN (?, ?)').run(orphaned, collected)
+  } finally { db.close() }
+  await daemon.sweep()
+  assert.doesNotMatch(envText(), new RegExp(`^${envKey(lost.body.ask.answers.api_key)}=`, 'm'))
+  assert.match(envText(), new RegExp(`^${envKey(kept.body.ask.answers.api_key)}=`, 'm'))
 })
