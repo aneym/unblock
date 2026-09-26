@@ -70,7 +70,7 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
     assert.deepEqual(filed.fields[0].choices.map((c) => c.label), ['First', 'Second'])
     if (ASK_PURPOSES.includes('question')) {
       assert.deepEqual(filed.fields[0].choices.map((c) => c.description), ['Try this', 'Prefer this'])
-      assert.equal(filed.summary, filed.title)
+      assert.equal(filed.summary, '2 questions: Approach, Parts')
       assert.equal(filed.only_you, null)
       assert.ok(!filed.fields[1].recommend, 'an unmarked question gets no invented recommendation')
     }
@@ -128,7 +128,7 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
     }
   } finally {
     await daemon.close()
-    rmSync(stateDir, { recursive: true, force: true })
+    rmSync(stateDir, { recursive: true, force: true, maxRetries: 5 }) // detached watchers may still be writing
   }
 })
 
