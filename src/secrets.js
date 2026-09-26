@@ -16,7 +16,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -26,6 +27,13 @@ const CONFIG_DIR =
 
 const ENV_FILE = join(CONFIG_DIR, 'secrets.env')
 const KEYCHAIN_ACCOUNT = 'unblock'
+const KEYCHAIN_NOT_FOUND = 44 // errSecItemNotFound, as `security` exits
+const scopedEnvKey = (ticket, name) =>
+  `UB_${`${ticket}-${name}`.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_B64`
+// Existing references have no scoped key; their resolve command still points
+// at the original unscoped line. New references carry the key in that command.
+const envKeyFromRecord = (record) =>
+  record?.resolve?.match(/grep '\^([A-Z0-9_]+)='/)?.[1] || `${record.env_name}_B64`
 
 /** Run a command, optionally feeding stdin. Never logs argv or stdin. */
 function run(cmd, args, { input, timeout = 20_000 } = {}) {
@@ -65,6 +73,17 @@ async function opAvailable() {
 
 function keychainAvailable() {
   return process.platform === 'darwin'
+}
+
+/**
+ * Replace the env file in one step. Every collected secret lives in this one
+ * file, so a crash halfway through an in-place rewrite could cost them all.
+ */
+function writeEnvFile(text) {
+  const temp = `${ENV_FILE}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  writeFileSync(temp, text, { mode: 0o600 })
+  chmodSync(temp, 0o600)
+  renameSync(temp, ENV_FILE)
 }
 
 export class SecretStore {
@@ -112,7 +131,9 @@ export class SecretStore {
   async put({ name, value, ticket, envName }) {
     if (typeof value !== 'string' || value === '') throw new Error('empty secret')
     const backend = await this.backend()
-    const slug = `${ticket}-${name}`.replace(/[^A-Za-z0-9._-]/g, '-')
+    // A new record for every attempt: a failed re-answer must not delete (or
+    // overwrite) the secret referenced by an earlier committed answer.
+    const slug = `${ticket}-${name}-${randomBytes(4).toString('hex')}`.replace(/[^A-Za-z0-9._-]/g, '-')
     const env_name = envName || `UNBLOCK_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`
 
     if (backend === 'op') {
@@ -197,23 +218,61 @@ export class SecretStore {
     mkdirSync(dirname(ENV_FILE), { recursive: true })
     const encoded = Buffer.from(value, 'utf8').toString('base64')
     const existing = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : ''
+    const scoped = scopedEnvKey(ticket, `${name}-${slug.slice(-8)}`)
     const lines = existing
       .split('\n')
-      .filter((l) => l.trim() && !l.startsWith(`${env_name}_B64=`) && !l.startsWith(`${env_name}=`))
-    lines.push(`${env_name}_B64=${encoded}`)
-    writeFileSync(ENV_FILE, `${lines.join('\n')}\n`, { mode: 0o600 })
-    chmodSync(ENV_FILE, 0o600)
+      .filter((l) => l.trim() && !l.startsWith(`${scoped}=`))
+    lines.push(`${scoped}=${encoded}`)
+    writeEnvFile(`${lines.join('\n')}\n`)
 
     // Resolve ONE variable rather than sourcing the whole file. Sourcing loads
     // every secret ever stored into the agent's environment, so a reference for
     // one ask would leak the secrets of every other.
-    const resolve = `${env_name}=$(grep '^${env_name}_B64=' ${ENV_FILE} | cut -d= -f2- | base64 -d)`
+    const resolve = `${env_name}=$(grep '^${scoped}=' ${JSON.stringify(ENV_FILE)} | cut -d= -f2- | base64 -d)`
     return {
       store: 'env',
       ref: `$${env_name}`,
       env_name,
       resolve,
       hint: `Load just this one: export ${resolve}  — then use $${env_name}. Never echo it, and never source the whole file.`,
+    }
+  }
+
+  /**
+   * Remove a stored secret. Never throws, so it cannot mask the caller's own
+   * failure. True when the secret is gone (or was never there), false when it
+   * may still be stored.
+   */
+  async delete(record) {
+    try {
+      if (record?.store === 'env') {
+        if (!existsSync(ENV_FILE)) return true
+        const key = envKeyFromRecord(record)
+        // Do not remove legacy unscoped entries delivered before this version.
+        if (key === `${record.env_name}_B64`) return true
+        const text = readFileSync(ENV_FILE, 'utf8')
+        const lines = text.split('\n').filter((line) => !line.startsWith(`${key}=`))
+        writeEnvFile(lines.join('\n'))
+        return true
+      }
+      if (record?.store === 'keychain') {
+        await run('security', ['-i'], {
+          input: `delete-generic-password -a ${KEYCHAIN_ACCOUNT} -s ${record.ref}\n`,
+        })
+        // Judge by what is left, not the delete's exit code: gone only when the
+        // lookup says "not found" (44), not when the lookup itself failed.
+        const left = await run('security', ['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', record.ref])
+        return left.code === KEYCHAIN_NOT_FOUND
+      }
+      if (record?.store === 'op') {
+        // The vault named in the reference, not today's setting: it may have changed since.
+        const [, vault, item] = record.ref?.match(/^op:\/\/([^/]+)\/([^/]+)\/credential$/) ?? []
+        if (!item) return true
+        return (await run('op', ['item', 'delete', item, '--vault', vault])).ok
+      }
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -263,7 +322,7 @@ export class SecretStore {
     }
     if (record.store === 'env') {
       const text = existsSync(ENV_FILE) ? readFileSync(ENV_FILE, 'utf8') : ''
-      const key = `${record.env_name}_B64=`
+      const key = `${envKeyFromRecord(record)}=`
       const line = text.split('\n').find((l) => l.startsWith(key))
       if (!line) throw new Error('env entry missing')
       return Buffer.from(line.slice(key.length).trim(), 'base64').toString('utf8')

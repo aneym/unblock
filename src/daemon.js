@@ -320,14 +320,15 @@ function safeSecretAnswer(ask, values, records) {
   return { safe, refs }
 }
 
-export async function startDaemon({ port } = {}) {
+export async function startDaemon({ port, secretStore: injectedSecretStore } = {}) {
   // The config file fills in whatever the spawner's environment left unset,
   // so the daemon is reachable on its public origin no matter who started it.
   const config = applyConfig()
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
   const store = new Store()
-  const secretStore = new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
+  // A delayed store can be injected by tests to exercise the real async put boundary.
+  const secretStore = injectedSecretStore ?? new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
   // Resolve the secret backend now rather than on the first /api/health. In
   // `auto` mode that probe runs `op whoami`, which can take seconds when
   // 1Password is installed but signed out — long enough that every spawner's
@@ -338,6 +339,52 @@ export async function startDaemon({ port } = {}) {
   // asks are open; this one says what is happening inside a single ask while
   // the human fills it in, which is what an agent watching its own ask needs.
   const askClients = new Map()
+  const ticketTails = new Map()
+  // The store queues every secret a state change leaves undelivered, in that
+  // change's own transaction. Deleting is then just draining the queue: right
+  // after the change, and from the sweeper for anything that failed or was cut
+  // off by a restart. Entries already being deleted are skipped.
+  async function deleteSecret(record) {
+    return Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)
+  }
+  const deleting = new Set()
+  async function flushSecretDeletes() {
+    if (unqueued.length) {
+      try { store.queueSecretDeletes(unqueued); unqueued.length = 0 } catch { /* next time */ }
+    }
+    const due = store.pendingSecretDeletes().filter(({ id }) => !deleting.has(id))
+    for (const { id } of due) deleting.add(id)
+    await Promise.all(due.map(async ({ id, record }) => {
+      try { if (await deleteSecret(record)) store.clearSecretDelete(id) } finally { deleting.delete(id) }
+    }))
+  }
+  // A failed answer rolled back, so nothing queued its puts: queue them now.
+  // If even that write fails, delete directly, and hold any delete that also
+  // failed in memory until the queue accepts it.
+  const unqueued = []
+  async function compensate(records) {
+    try { store.queueSecretDeletes(records) } catch {
+      const results = await Promise.all(records.map(deleteSecret))
+      unqueued.push(...records.filter((_, index) => !results[index]))
+      return
+    }
+    await flushSecretDeletes()
+  }
+  // Queue only operations on the same ticket; cleanup works even on throw.
+  async function withTicket(ticket, operation) {
+    const previous = ticketTails.get(ticket) ?? Promise.resolve()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    const tail = previous.then(() => gate)
+    ticketTails.set(ticket, tail)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (ticketTails.get(ticket) === tail) ticketTails.delete(ticket)
+    }
+  }
   let actualPort = port
   let isClosed = false
 
@@ -365,6 +412,7 @@ export async function startDaemon({ port } = {}) {
     status: ask.status,
     draft: ask.draft,
     draft_reply: ask.draft_reply,
+    draft_rev: ask.draft_rev,
     field_context: ask.field_context,
     draft_updated_at: ask.draft_updated_at,
     updated_at: ask.updated_at,
@@ -390,6 +438,7 @@ export async function startDaemon({ port } = {}) {
       body.values || {},
       scrubFieldContext(body.field_context),
       draftReply(body),
+      body.base_rev,
     )
     emitAsk(ask, 'draft')
     emitQueue()
@@ -407,6 +456,7 @@ export async function startDaemon({ port } = {}) {
       if (typeof reply !== 'string' || !reply.trim()) error('WHOLE_ASK_ONLY', 'send the entire ask back with a note', 400)
     }
     const bounced = store.bounce(ticket, optionalScrub(reply, 1000))
+    await flushSecretDeletes()
     emitAsk(bounced, 'sent_back')
     return { ask: bounced, complete: true, bounced: true }
   }
@@ -441,6 +491,7 @@ function scrubFieldBounce(raw) {
 }
 
 async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia, assertion) {
+  return withTicket(ticket, async () => {
     const ask = store.get(ticket)
     if (!ask) return null
     if (APPROVAL_PURPOSES.includes(ask.purpose)) {
@@ -457,41 +508,51 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     // must not write the secret again once the agent already has the answer.
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
     const records = []
-    for (const field of ask.fields) {
-      const value = values?.[field.name]
-      if (field.type === 'secret' && typeof value === 'string' && value !== '') {
-        let record
-        try {
-          record = await secretStore.put({
-            name: field.name,
-            value,
-            ticket: ask.ticket,
-            envName: field.env_name,
-          })
-        } catch (cause) {
-          const error = new Error('secret storage failed', { cause })
-          error.status = 502
-          throw error
+    let result
+    try {
+      for (const field of ask.fields) {
+        const value = values?.[field.name]
+        if (field.type === 'secret' && typeof value === 'string' && value !== '') {
+          let record
+          try {
+            record = await secretStore.put({
+              name: field.name,
+              value,
+              ticket: ask.ticket,
+              envName: field.env_name,
+            })
+          } catch (cause) {
+            const error = new Error('secret storage failed', { cause })
+            error.status = 502
+            throw error
+          }
+          if (!record?.ref) {
+            const error = new Error('secret storage returned no reference')
+            error.status = 502
+            throw error
+          }
+          records.push([field.name, record])
         }
-        if (!record?.ref) {
-          const error = new Error('secret storage returned no reference')
-          error.status = 502
-          throw error
-        }
-        records.push([field.name, record])
       }
+      const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
+      result = store.answer(ticket, safe, {
+        puts: records.map(([, record]) => record),
+        refs,
+        reply: optionalScrub(reply, 1000),
+        fieldContext: scrubFieldContext(fieldContext),
+        fieldBounce: scrubFieldBounce(fieldBounce),
+        revision, answeredVia, assertion: passkeyAssertion,
+      })
+    } catch (error) {
+      await compensate(records.map(([, record]) => record)).catch(() => {})
+      throw error
     }
-    const { safe, refs } = safeSecretAnswer(ask, values || {}, records)
-    const result = store.answer(ticket, safe, {
-      refs,
-      reply: optionalScrub(reply, 1000),
-      fieldContext: scrubFieldContext(fieldContext),
-      fieldBounce: scrubFieldBounce(fieldBounce),
-      revision, answeredVia, assertion: passkeyAssertion,
-    })
+    // The answer queued any secret it replaced, sent back or did not commit.
+    await flushSecretDeletes()
     emitAsk(result.ask, 'answered')
     return result
-  }
+  })
+}
 
   /** The reply drafts alongside the fields; '' erases, undefined leaves it. */
   function draftReply(body) {
@@ -575,11 +636,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const ask = store.get(ticket)
       if (!ask) return notFound(res)
       if (tail === '/api/draft') {
-        return sendJson(res, 200, { ask: applyDraft(ticket, body, `share-link:${link.minted_by}`) })
+        return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body, `share-link:${link.minted_by}`)) })
       }
       if (body.assertion != null) return sendJson(res, 403, { error: 'approve on the unblock page; it needs Touch ID', code: 'PASSKEY_ON_SHARE_LINK' })
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply, `share-link:${link.minted_by}`, body.revision, body.field_bounce)
+        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, `share-link:${link.minted_by}`, body.revision, body.field_bounce))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`)
       // Burn on ANY complete answer, not just a ticket-scoped one. A link
       // minted with no ticket — what `unblock link` and the TUI both produce —
@@ -709,7 +770,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
 
     let ticket = routeTicket(pathname, '/pay-claim')
-    if (ticket && req.method === 'POST') return sendJson(res, 200, store.payClaim(ticket))
+    if (ticket && req.method === 'POST') return sendJson(res, 200, await withTicket(ticket, () => store.payClaim(ticket)))
 
     ticket = routeTicket(pathname, '/receipt')
     if (ticket && req.method === 'POST') {
@@ -721,7 +782,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
             typeof body.spend_status !== 'string' || !body.spend_status || Object.keys(body).some((key) => !['spend_request_id','spend_status'].includes(key))) {
           return sendJson(res, 400, { error: 'invalid spend receipt' })
         }
-        return sendJson(res, 200, { ask: store.receipt(ticket, body) })
+        return sendJson(res, 200, { ask: await withTicket(ticket, () => store.receipt(ticket, body)) })
       }
       if (Object.keys(body).some((key) => !['final_url', 'before', 'after'].includes(key)) ||
           (body.final_url !== undefined && (typeof body.final_url !== 'string' || !/^https:\/\//.test(body.final_url)))) {
@@ -770,7 +831,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         } finally { closeSync(fd) }
         renameSync(temporary, target)
       }
-      return sendJson(res, 200, { ask: store.receipt(ticket, data) })
+      return sendJson(res, 200, { ask: await withTicket(ticket, () => store.receipt(ticket, data)) })
     }
 
     const imageMatch = pathname.match(/^\/api\/asks\/(ub_[a-z0-9]{6})\/receipt\/(before|after)\.png$/)
@@ -792,7 +853,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
       const result = body.bounce
-        ? await bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce)
+        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.assertion)
       if (!result) return notFound(res)
       emitQueue()
@@ -802,7 +863,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     ticket = routeTicket(pathname, '/draft')
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(ticket, await readJson(req), proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local') })
+      const body = await readJson(req)
+      return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')) })
     }
 
     // Revise a live ask instead of cancelling and refiling it. The ticket, the
@@ -810,10 +872,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     // all survive.
     ticket = routeTicket(pathname, '/update')
     if (ticket && req.method === 'POST') {
-      const existing = store.get(ticket)
-      if (!existing) return notFound(res)
       const body = await readJson(req)
-      const ask = store.update(ticket, validateUpdate(existing, body))
+      const ask = await withTicket(ticket, () => {
+        const existing = store.get(ticket)
+        return existing ? store.update(ticket, validateUpdate(existing, body)) : null
+      })
+      if (!ask) return notFound(res)
       emitAsk(ask, 'updated')
       emitQueue()
       return sendJson(res, 200, { ask })
@@ -851,7 +915,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
 
     ticket = routeTicket(pathname, '/collect')
     if (ticket && req.method === 'POST') {
-      const ask = store.collect(ticket)
+      const ask = await withTicket(ticket, () => {
+        const collected = store.collect(ticket)
+        return collected
+      })
       if (!ask) return notFound(res)
       emitQueue()
       return sendJson(res, 200, { ask })
@@ -865,7 +932,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       // renders it today, which makes it a trap for whoever adds the first
       // renderer rather than a bug you would notice.
       const note = optionalScrub(body.note, 600)
-      const ask = store.cancel(ticket, note)
+      const ask = await withTicket(ticket, async () => {
+        const cancelled = store.cancel(ticket, note)
+        await flushSecretDeletes()
+        return cancelled
+      })
       if (!ask) return notFound(res)
       emitAsk(ask, 'cancelled')
       emitQueue()
@@ -923,7 +994,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
-        ? await bounceAsk(body.ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce)
+        ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.assertion)
       emitQueue()
       return sendJson(res, 200, result)
@@ -935,7 +1006,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (!store.get(body.ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: applyDraft(body.ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local') })
+      return sendJson(res, 200, { ask: await withTicket(body.ticket, () => applyDraft(body.ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')) })
     }
 
     const tokenMatch = pathname.match(/^\/u\/([^/]+)(.*)$/)
@@ -965,6 +1036,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }
+      if (error.code === 'DRAFT_STALE') {
+        return sendJson(res, 409, { error: error.message, code: error.code, draft_rev: error.draft_rev })
+      }
       const status = error.status || 500
       sendJson(res, status, { error: status === 500 ? 'internal server error' : error.message })
     })
@@ -991,9 +1065,17 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
   }, 25_000)
   keepalive.unref()
-  const sweeper = setInterval(() => {
-    if (store.sweep().length > 0) emitQueue()
-  }, 60_000)
+  async function sweep() {
+    let changed = false
+    for (const ticket of store.sweepCandidates()) {
+      const ask = await withTicket(ticket, () => store.sweepOne(ticket))
+      if (ask) { changed = true; emitAsk(ask, ask.status) }
+    }
+    for (const ticket of store.sweepCleanup()) await withTicket(ticket, () => store.prune(ticket))
+    await flushSecretDeletes()
+    if (changed) emitQueue()
+  }
+  const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)
   sweeper.unref()
 
   async function close() {
@@ -1008,6 +1090,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
     askClients.clear()
     await new Promise((resolve) => server.close(resolve))
+    await Promise.all([...ticketTails.values()])
     store.close()
     try {
       rmSync(daemonFile)
@@ -1016,7 +1099,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
   }
 
-  return { server, port: actualPort, close }
+  return { server, port: actualPort, close, sweep }
 }
 
 /**

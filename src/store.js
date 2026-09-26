@@ -44,7 +44,7 @@ function agentKey(origin) {
  * the agent collected it, "gone" is the truth the page acts on.
  */
 /** Statuses an answer can no longer change. A sent-back ask is done too: the agent re-asks. */
-export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced']
+export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced', 'orphaned']
 
 export function finished(ask) {
   const error = new Error(`ask ${ask.ticket} is ${ask.status}`)
@@ -60,6 +60,23 @@ export function finished(ask) {
  */
 export const PASSKEY_VERDICTS = { consent: 'approve', message: 'approve', permission: 'allow_once' }
 export const PASSKEY_CREDENTIAL_CAP = 5
+
+// Prune long-closed rows so the queue file cannot grow without bound.
+// Everything closed keeps a 30-day window for `unblock_check` stragglers
+// and post-mortems; after that it is noise the hydrate loop pays for.
+const PRUNABLE = `WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
+    AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`
+const pruneCutoff = () => nowMs() - 30 * 24 * 60 * 60 * 1000
+
+const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
+
+/** Stored secret references committed on an ask (never values). */
+export function secretRecords(ask) {
+  if (!ask) return []
+  return Object.entries(ask.answers || {})
+    .filter(([name, record]) => ask.answer_is_ref?.[name] && record && typeof record === 'object' && record.store)
+    .map(([, record]) => record)
+}
 
 export class Store {
   #db
@@ -190,6 +207,14 @@ export class Store {
         via            TEXT,
         dismissed_at   INTEGER
       );
+
+      -- Stored-secret references (never values) whose delete failed and is
+      -- retried by the sweeper. Nothing else references them any more.
+      CREATE TABLE IF NOT EXISTS secret_deletes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_json TEXT NOT NULL,
+        queued_at   INTEGER NOT NULL
+      );
     `)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
@@ -206,6 +231,7 @@ export class Store {
       ['blocks_json', "TEXT NOT NULL DEFAULT '[]'"], ['permission_json', 'TEXT']]) this.#addColumn('asks', name, type)
     this.#addColumn('answers', 'answered_via', 'TEXT')
     this.#addColumn('links', 'minted_by', "TEXT NOT NULL DEFAULT 'local'")
+    this.#addColumn('asks', 'draft_rev', 'INTEGER NOT NULL DEFAULT 0')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -403,6 +429,7 @@ export class Store {
       answer_is_ref: refs,
       draft,
       draft_reply: draftReply,
+      draft_rev: row.draft_rev,
       // Lets a client decide whether its own locally-kept copy is newer than
       // what the daemon has, instead of guessing.
       draft_updated_at: draftAt || undefined,
@@ -482,14 +509,41 @@ export class Store {
     }
   }
 
-  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, revision, answeredVia, assertion } = {}) {
-    // SQLite serializes the status/revision check and the write together.
-    this.#db.exec('BEGIN IMMEDIATE')
-    try { return this.#answerInTransaction(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion }) }
-    catch (error) { this.#db.exec('ROLLBACK'); throw error }
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, revision, answeredVia, assertion, puts = [] } = {}) {
+    // One answer spans references, bounces, context, drafts and status, and
+    // SQLite serializes the status/revision check with the write. `puts` are
+    // the secrets stored for this attempt: any the answer leaves unreferenced,
+    // and any earlier secret it replaced or sent back, are queued for deletion
+    // in the same transaction.
+    return this.#transact(() => {
+      const before = this.get(idOrTicket)
+      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion })
+      this.#queueDropped([...secretRecords(before), ...puts], secretRecords(result.ask))
+      return result
+    })
   }
 
-  #answerInTransaction(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion }) {
+  #transact(change) {
+    this.#db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = change()
+      this.#db.exec('COMMIT')
+      return result
+    } catch (error) {
+      this.#db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Queue every record in `held` that `kept` no longer references. */
+  #queueDropped(held, kept = []) {
+    const keep = new Set(kept.map(secretId))
+    const dropped = new Map(held.map((record) => [secretId(record), record]))
+    for (const id of keep) dropped.delete(id)
+    this.queueSecretDeletes([...dropped.values()])
+  }
+
+  #answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion }) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (APPROVAL_PURPOSES.includes(ask.purpose)) {
@@ -605,9 +659,9 @@ export class Store {
     const updated = this.get(ask.id)
     if (updated.missing.length === 0 && updated.status === 'open') {
       this.#db.prepare(`UPDATE asks SET status = 'answered', answered_at = ? WHERE id = ?`).run(at, ask.id)
-      const result = { ask: this.get(ask.id), complete: true }; this.#db.exec('COMMIT'); return result
+      return { ask: this.get(ask.id), complete: true }
     }
-    this.#db.exec('COMMIT'); return { ask: updated, complete: false }
+    return { ask: updated, complete: false }
   }
 
   payClaim(ticket) {
@@ -637,9 +691,24 @@ export class Store {
     return this.get(ask.id)
   }
 
-  saveDraft(idOrTicket, values, fieldContext, reply) {
+  saveDraft(idOrTicket, values, fieldContext, reply, baseRev) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
+    // One writer's requests arrive out of order (a keepalive beacon can pass the
+    // fetch still in flight), so a base below the current revision is an older
+    // request and loses. The beacon claims base+1 when a save is in flight;
+    // anything further ahead was never issued by this daemon. Two tabs are two
+    // live writers: after a 409 the page resends its newest values, so the last
+    // one typed wins. A missing base_rev is a page from before revisions and is
+    // written unconditionally, as it always was.
+    if (typeof baseRev === 'number' && (baseRev < ask.draft_rev || baseRev > ask.draft_rev + 1)) {
+      const error = new Error('draft is stale')
+      error.status = 409
+      error.code = 'DRAFT_STALE'
+      error.draft_rev = ask.draft_rev
+      throw error
+    }
     const known = new Set(ask.fields.map((f) => f.name))
     const at = nowMs()
     this.#saveFieldContext(ask.id, known, fieldContext, at)
@@ -664,6 +733,7 @@ export class Store {
         stmt.run(ask.id, '__reply__', JSON.stringify(reply), at)
       }
     }
+    this.#db.prepare('UPDATE asks SET draft_rev = draft_rev + 1 WHERE id = ?').run(ask.id)
     return this.get(ask.id)
   }
 
@@ -680,10 +750,14 @@ export class Store {
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (ask.status !== 'open') throw finished(ask)
     const at = nowMs()
-    this.#db
-      .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
-      .run(at, reply || null, ask.id)
-    return this.get(ask.id)
+    // Sent back as the wrong ask: a secret typed into part of it is not handed out.
+    return this.#transact(() => {
+      this.#db
+        .prepare(`UPDATE asks SET status = 'bounced', answered_at = ?, reply = ? WHERE id = ?`)
+        .run(at, reply || null, ask.id)
+      this.#queueDropped(secretRecords(ask))
+      return this.get(ask.id)
+    })
   }
 
   /** The agent picked up its answers. */
@@ -727,10 +801,14 @@ export class Store {
       err.askStatus = ask.status
       throw err
     }
-    this.#db
-      .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
-      .run(nowMs(), note ?? null, ask.id)
-    return this.get(ask.id)
+    // A partly answered ask can already hold a secret; it is never delivered now.
+    return this.#transact(() => {
+      this.#db
+        .prepare(`UPDATE asks SET status = 'cancelled', closed_at = ?, note = ? WHERE id = ?`)
+        .run(nowMs(), note ?? null, ask.id)
+      this.#queueDropped(secretRecords(ask))
+      return this.get(ask.id)
+    })
   }
 
   /** The agent is gone. Answers are kept so a later agent can claim them by ticket. */
@@ -752,7 +830,7 @@ export class Store {
    * answer claimable by ticket and stops the queue quietly lying about what is
    * still in flight.
    */
-  sweep({ orphanAfterMs = 10 * 60 * 1000 } = {}) {
+  sweepCandidates({ orphanAfterMs = 10 * 60 * 1000 } = {}) {
     const at = nowMs()
     // ONLY parked asks can be orphaned. A park means an agent is definitionally
     // sitting in a tool call waiting, so uncollected-for-ten-minutes really does
@@ -766,30 +844,76 @@ export class Store {
             AND answered_at IS NOT NULL AND answered_at < ?`,
       )
       .all(at - orphanAfterMs)
-    for (const { id } of stranded) {
-      this.#db
-        .prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ?`)
-        .run('answered, but the agent that asked never collected it', id)
-    }
     const stale = this.#db
       .prepare(`SELECT id FROM asks WHERE status = 'open' AND expires_at IS NOT NULL AND expires_at < ?`)
       .all(at)
-    for (const { id } of stale) {
-      this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ?`).run(at, id)
-    }
-    this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(at)
-    // Prune long-closed rows so the queue file cannot grow without bound.
-    // Everything closed keeps a 30-day window for `unblock_check` stragglers
-    // and post-mortems; after that it is noise the hydrate loop pays for.
-    const cutoff = at - 30 * 24 * 60 * 60 * 1000
-    this.#db
-      .prepare(
-        `DELETE FROM asks
-          WHERE status IN ('collected', 'cancelled', 'expired', 'orphaned')
-            AND COALESCE(closed_at, collected_at, answered_at, created_at) < ?`,
-      )
-      .run(cutoff)
-    return [...stale, ...stranded].map(({ id }) => this.get(id))
+    return [...stale, ...stranded].map(({ id }) => this.get(id)?.ticket).filter(Boolean)
+  }
+
+  sweepOne(idOrTicket, { orphanAfterMs = 10 * 60 * 1000 } = {}) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return null
+    const at = nowMs()
+    if (ask.status === 'open' && ask.expires_at && ask.expires_at < at) {
+      // An orphaned answer stays claimable by ticket, so only expiry retires secrets.
+      this.#transact(() => {
+        this.#db.prepare(`UPDATE asks SET status = 'expired', closed_at = ? WHERE id = ? AND status = 'open'`).run(at, ask.id)
+        this.#queueDropped(secretRecords(ask))
+      })
+    } else if (ask.status === 'answered' && ask.kind === 'park' &&
+      ask.answered_at !== undefined && ask.answered_at < at - orphanAfterMs) {
+      this.#db.prepare(`UPDATE asks SET status = 'orphaned', note = ? WHERE id = ? AND status = 'answered'`)
+        .run('answered, but the agent that asked never collected it', ask.id)
+    } else return null
+    return this.get(ask.id)
+  }
+
+  /** Tickets of long-closed asks due for pruning. */
+  sweepCleanup() {
+    this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(nowMs())
+    return this.#db
+      .prepare(`SELECT ticket FROM asks ${PRUNABLE}`)
+      .all(pruneCutoff())
+      .map(({ ticket }) => ticket)
+  }
+
+  /**
+   * Prune one long-closed ask, if it still is one. Read under the caller's
+   * ticket lock, since an orphan can be collected between the sweep's listing
+   * and here. An uncollected secret was never delivered, so it is queued for
+   * deletion in the same transaction that drops the row. A collected secret
+   * belongs to the agent that collected it and stays where it resolves.
+   */
+  prune(idOrTicket) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return false
+    return this.#transact(() => {
+      const gone = this.#db.prepare(`DELETE FROM asks ${PRUNABLE} AND id = ?`).run(pruneCutoff(), ask.id).changes > 0
+      if (gone && ask.status !== 'collected') this.#queueDropped(secretRecords(ask))
+      return gone
+    })
+  }
+
+  queueSecretDeletes(records) {
+    const stmt = this.#db.prepare('INSERT INTO secret_deletes (record_json, queued_at) VALUES (?, ?)')
+    const at = nowMs()
+    return records.map((record) => stmt.run(JSON.stringify(record), at).lastInsertRowid)
+  }
+
+  pendingSecretDeletes() {
+    return this.#db.prepare('SELECT id, record_json FROM secret_deletes ORDER BY id').all()
+      .map(({ id, record_json }) => ({ id, record: JSON.parse(record_json) }))
+  }
+
+  clearSecretDelete(id) {
+    this.#db.prepare('DELETE FROM secret_deletes WHERE id = ?').run(id)
+  }
+
+  /** Synchronous store-only sweep for callers with no concurrent async secret puts or stored secrets. */
+  sweep(options) {
+    const closed = this.sweepCandidates(options).map((ticket) => this.sweepOne(ticket, options)).filter(Boolean)
+    for (const ticket of this.sweepCleanup()) this.prune(ticket)
+    return closed
   }
 
   // --------------------------------------------------------------- links

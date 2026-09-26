@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { api, ApiError, BASE, FinishedError, NetworkError } from './lib/api'
+import { api, ApiError, BASE, DraftStaleError, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
 import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type PasskeyState, type Values } from './deck'
 import { FieldControl } from './FieldControl'
@@ -281,6 +281,9 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const [draftState, setDraftState] = useState('')
   const [safetyNotice, setSafetyNotice] = useState('')
   const timer = useRef<number | undefined>(undefined)
+  const draftInFlight = useRef(false)
+  const draftPending = useRef(false)
+  const baseRev = useRef((ask as Ask & { draft_rev?: number }).draft_rev ?? 0)
   const completed = useRef(false)
   const latest = useRef({
     values: Object.fromEntries(ask.fields.map((field) => [field.name, values[field.name]])
@@ -355,6 +358,53 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
     for (const name of prePicked.current) delete filtered[name]
     return filtered
   }
+  // One draft request at a time, stamped with the revision it builds on. If
+  // another request got there first the daemon answers DRAFT_STALE, and this
+  // resends the newest values once on top of that revision.
+  const sendDraft = () => {
+    if (completed.current) return
+    if (draftInFlight.current) {
+      draftPending.current = true
+      return
+    }
+    draftInFlight.current = true
+    const save = () => {
+      const current = latest.current
+      return api<{ ask: Ask }>('/api/draft', {
+        ticket: ask.ticket, base_rev: baseRev.current, values: persistable(current.values),
+        field_context: current.notes, reply: current.reply,
+      }, { retry: false })
+    }
+    const attempt = async () => {
+      try {
+        let result: { ask: Ask }
+        try {
+          result = await save()
+        } catch (error) {
+          if (!(error instanceof DraftStaleError)) throw error
+          baseRev.current = error.draftRev
+          result = await save()
+        }
+        baseRev.current = (result.ask as Ask & { draft_rev: number }).draft_rev
+        setDraftState('Draft saved')
+      } catch (error) {
+        if (error instanceof FinishedError) {
+          completed.current = true
+          window.clearTimeout(timer.current)
+          timer.current = undefined
+          draftPending.current = false
+          onFinished()
+        } else setDraftState('Draft kept in this browser')
+      } finally {
+        draftInFlight.current = false
+        if (draftPending.current && !completed.current) {
+          draftPending.current = false
+          sendDraft()
+        }
+      }
+    }
+    void attempt()
+  }
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
@@ -367,10 +417,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
     setDraftState('Saving draft…')
     timer.current = window.setTimeout(() => {
       timer.current = undefined
-      void api('/api/draft', {
-        ticket: ask.ticket, values: persistable(merged.values),
-        field_context: merged.notes, reply: merged.reply,
-      }, { retry: false }).then(() => setDraftState('Draft saved')).catch(() => setDraftState('Draft kept in this browser'))
+      sendDraft()
     }, 300)
   }
   useEffect(() => {
@@ -380,8 +427,8 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
       timer.current = undefined
       const merged = latest.current
       const body = new Blob([JSON.stringify({
-        ticket: ask.ticket, values: persistable(merged.values),
-        field_context: merged.notes, reply: merged.reply,
+        ticket: ask.ticket, base_rev: baseRev.current + (draftInFlight.current ? 1 : 0),
+        values: persistable(merged.values), field_context: merged.notes, reply: merged.reply,
       })], { type: 'application/json' })
       try { navigator.sendBeacon(`${BASE}/api/draft`, body) } catch { /* local mirror remains */ }
     }

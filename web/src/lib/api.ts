@@ -30,6 +30,10 @@ export class ApiError extends Error {
   constructor(message: string, public readonly code?: string, public readonly added_at?: number) { super(message) }
 }
 
+export class DraftStaleError extends Error {
+  constructor(public draftRev: number) { super('draft is stale') }
+}
+
 /** The request never got an HTTP answer (Safari words this "Load failed"). */
 export class NetworkError extends Error {}
 
@@ -102,7 +106,10 @@ export async function api<T>(path: string, body?: unknown, { retry = true } = {}
   flushReports()
   if (response.status === 410) throw new FinishedError('finished')
   if (!response.ok) {
-    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string; added_at?: number }
+    const payload = await response.json().catch(() => ({})) as { error?: string; code?: string; added_at?: number; draft_rev?: number }
+    if (response.status === 409 && payload.code === 'DRAFT_STALE' && typeof payload.draft_rev === 'number') {
+      throw new DraftStaleError(payload.draft_rev)
+    }
     throw new ApiError(payload.error || `HTTP ${response.status}`, payload.code, payload.added_at)
   }
   return response.json() as Promise<T>
