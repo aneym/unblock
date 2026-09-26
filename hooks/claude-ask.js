@@ -44,8 +44,12 @@ try {
         ...(questions[i].options[n].description ? { description: cut(plainify(questions[i].options[n].description), 200) } : {}),
       })),
     }))
+    // The card already shows the title; the summary says what the choice is between.
+    const gist = questions.length === 1
+      ? `Choose ${fields[0].choices.map((c) => c.value).join(' or ')}${fields[0].recommend && modernFields[0].recommend ? `; Claude suggests ${fields[0].recommend.value}` : ''}`
+      : `${questions.length} questions: ${questions.map((q) => plainify(q.header || q.question)).join(', ')}`
     const { ticket } = await fileFirst([
-      { ...common, purpose: 'question', summary: cut(questions.length === 1 ? `Claude asks: ${common.title}` : common.title, 140), fields: modernFields },
+      { ...common, purpose: 'question', summary: cut(gist, 140), fields: modernFields },
       { ...common, purpose: 'decision', only_you: 'judgment',
         tried: ['Claude raised this in its question dialog instead of guessing; the dialog was routed here so it can keep working meanwhile.'], fields },
     ], source)
