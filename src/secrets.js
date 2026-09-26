@@ -27,6 +27,7 @@ const CONFIG_DIR =
 
 const ENV_FILE = join(CONFIG_DIR, 'secrets.env')
 const KEYCHAIN_ACCOUNT = 'unblock'
+const KEYCHAIN_NOT_FOUND = 44 // errSecItemNotFound, as `security` exits
 const scopedEnvKey = (ticket, name) =>
   `UB_${`${ticket}-${name}`.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_B64`
 // Existing references have no scoped key; their resolve command still points
@@ -249,9 +250,10 @@ export class SecretStore {
         await run('security', ['-i'], {
           input: `delete-generic-password -a ${KEYCHAIN_ACCOUNT} -s ${record.ref}\n`,
         })
-        // Judge by what is left, not the exit code: an item already gone is a success.
+        // Judge by what is left, not the delete's exit code: gone only when the
+        // lookup says "not found" (44), not when the lookup itself failed.
         const left = await run('security', ['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', record.ref])
-        return !left.ok
+        return left.code === KEYCHAIN_NOT_FOUND
       }
       if (record?.store === 'op') {
         const item = record.ref?.match(/^op:\/\/[^/]+\/([^/]+)\/credential$/)?.[1]

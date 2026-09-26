@@ -158,6 +158,14 @@ export class Store {
         expires_at  INTEGER NOT NULL,
         used_at     INTEGER
       );
+
+      -- Stored-secret references (never values) whose delete failed and is
+      -- retried by the sweeper. Nothing else references them any more.
+      CREATE TABLE IF NOT EXISTS secret_deletes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_json TEXT NOT NULL,
+        queued_at   INTEGER NOT NULL
+      );
     `)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
@@ -690,21 +698,28 @@ export class Store {
     return this.get(ask.id)
   }
 
-  /**
-   * Long-closed asks due for pruning, with the secret records to remove first.
-   * An uncollected secret was never delivered, so it goes with the row. A
-   * collected secret belongs to the agent that collected it and stays where it
-   * resolves. The caller prunes a row only once its secrets are gone, so a
-   * failed delete is retried on the next sweep instead of losing its reference.
-   */
+  /** Tickets of long-closed asks due for pruning. */
   sweepCleanup() {
     this.#db.prepare('DELETE FROM links WHERE expires_at < ?').run(nowMs())
     return this.#db
-      .prepare(`SELECT id FROM asks ${PRUNABLE}`)
+      .prepare(`SELECT ticket FROM asks ${PRUNABLE}`)
       .all(pruneCutoff())
-      .map(({ id }) => this.get(id))
-      .filter(Boolean)
-      .map((ask) => ({ ticket: ask.ticket, records: ask.status === 'collected' ? [] : secretRecords(ask) }))
+      .map(({ ticket }) => ticket)
+  }
+
+  /**
+   * The secrets to remove before pruning this ask, or null if it is not due.
+   * Read under the caller's ticket lock, since an orphan can be collected
+   * between the sweep's listing and here. An uncollected secret was never
+   * delivered, so it goes with the row. A collected secret belongs to the
+   * agent that collected it and stays where it resolves.
+   */
+  pruneCandidate(idOrTicket) {
+    const ask = this.get(idOrTicket)
+    if (!ask) return null
+    const due = this.#db.prepare(`SELECT 1 FROM asks ${PRUNABLE} AND id = ?`).get(pruneCutoff(), ask.id)
+    if (!due) return null
+    return { records: ask.status === 'collected' ? [] : secretRecords(ask) }
   }
 
   /** Remove one pruning candidate, if it still is one. */
@@ -714,10 +729,25 @@ export class Store {
     return this.#db.prepare(`DELETE FROM asks ${PRUNABLE} AND id = ?`).run(pruneCutoff(), ask.id).changes > 0
   }
 
+  queueSecretDeletes(records) {
+    const stmt = this.#db.prepare('INSERT INTO secret_deletes (record_json, queued_at) VALUES (?, ?)')
+    const at = nowMs()
+    for (const record of records) stmt.run(JSON.stringify(record), at)
+  }
+
+  pendingSecretDeletes() {
+    return this.#db.prepare('SELECT id, record_json FROM secret_deletes ORDER BY id').all()
+      .map(({ id, record_json }) => ({ id, record: JSON.parse(record_json) }))
+  }
+
+  clearSecretDelete(id) {
+    this.#db.prepare('DELETE FROM secret_deletes WHERE id = ?').run(id)
+  }
+
   /** Synchronous store-only sweep for callers with no concurrent async secret puts or stored secrets. */
   sweep(options) {
     const closed = this.sweepCandidates(options).map((ticket) => this.sweepOne(ticket, options)).filter(Boolean)
-    for (const { ticket } of this.sweepCleanup()) this.prune(ticket)
+    for (const ticket of this.sweepCleanup()) this.prune(ticket)
     return closed
   }
 

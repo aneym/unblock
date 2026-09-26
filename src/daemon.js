@@ -326,12 +326,16 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   const askClients = new Map()
   const ticketTails = new Map()
   // Queue only operations on the same ticket; cleanup works even on throw.
-  // Best effort: a failed delete must not undo the state change that retired it.
-  // True only when every record is gone from the secret store.
+  // A failed delete must not undo the state change that retired the secret, so
+  // it is queued and the sweeper retries it. True only when every record is gone.
+  async function deleteSecret(record) {
+    return Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)
+  }
   async function retireSecrets(records) {
-    const results = await Promise.all(records.map((record) =>
-      Promise.resolve().then(() => secretStore.delete(record)).then((ok) => ok !== false, () => false)))
-    return results.every(Boolean)
+    const results = await Promise.all(records.map(deleteSecret))
+    const failed = records.filter((_, index) => !results[index])
+    if (failed.length) store.queueSecretDeletes(failed)
+    return failed.length === 0
   }
   // Every secret this ask held or was just given that it no longer references.
   const secretId = (record) => `${record.store}\0${record.ref}\0${record.resolve ?? ''}`
@@ -493,7 +497,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
         fieldBounce: scrubFieldBounce(fieldBounce),
       })
     } catch (error) {
-      await Promise.all(records.map(([, record]) => Promise.resolve().then(() => secretStore.delete(record)).catch(() => {})))
+      await retireSecrets(records.map(([, record]) => record)).catch(() => {})
       throw error
     }
     // Only references actually committed may survive this attempt: a secret
@@ -898,6 +902,9 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
   keepalive.unref()
   async function sweep() {
     let changed = false
+    for (const { id, record } of store.pendingSecretDeletes()) {
+      if (await deleteSecret(record)) store.clearSecretDelete(id)
+    }
     for (const ticket of store.sweepCandidates()) {
       const ask = await withTicket(ticket, async () => {
         const swept = store.sweepOne(ticket)
@@ -907,8 +914,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce) {
       })
       if (ask) { changed = true; emitAsk(ask, ask.status) }
     }
-    for (const { ticket, records } of store.sweepCleanup()) {
-      await withTicket(ticket, async () => { if (await retireSecrets(records)) store.prune(ticket) })
+    for (const ticket of store.sweepCleanup()) {
+      await withTicket(ticket, async () => {
+        const candidate = store.pruneCandidate(ticket)
+        if (candidate && await retireSecrets(candidate.records)) store.prune(ticket)
+      })
     }
     if (changed) emitQueue()
   }

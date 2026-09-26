@@ -560,3 +560,68 @@ test('a failed delete keeps the old ask until a later sweep removes its secret',
   assert.equal((await read()).status, 404)
   assert.doesNotMatch(envText(), new RegExp(`^${key}=`, 'm'))
 })
+
+test('a failed delete of a replaced secret is retried by the sweeper', async (t) => {
+  const real = new SecretStore({ backend: 'env' })
+  let failDeletes = true
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put: (input) => real.put(input),
+    delete: async (record) => (failDeletes ? false : real.delete(record)),
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const ticket = await secretAsk(base, 'replace-delete-fails', partlyAnswered)
+  const first = await post(base, '/api/answer', { ticket, values: { api_key: 'one' } })
+  const second = await post(base, '/api/answer', { ticket, values: { api_key: 'two' } })
+  const [oldKey, newKey] = [first, second].map((result) => envKey(result.body.ask.answers.api_key))
+  assert.match(envText(), new RegExp(`^${oldKey}=`, 'm'))
+  failDeletes = false
+  await daemon.sweep()
+  assert.doesNotMatch(envText(), new RegExp(`^${oldKey}=`, 'm'))
+  assert.match(envText(), new RegExp(`^${newKey}=`, 'm'))
+})
+
+test('an orphan collected while the sweep is pruning keeps its secret', async (t) => {
+  const real = new SecretStore({ backend: 'env' })
+  let entered, release
+  const deleting = new Promise((resolve) => { entered = resolve })
+  const resume = new Promise((resolve) => { release = resolve })
+  const secretStore = {
+    backend: () => real.backend(), backendIfResolved: () => real.backendIfResolved(),
+    put: (input) => real.put(input),
+    async delete(record) { entered(); await resume; return real.delete(record) },
+  }
+  const daemon = await startDaemon({ port: 0, secretStore })
+  t.after(() => daemon.close())
+  const base = `http://127.0.0.1:${daemon.port}`
+  const first = await secretAsk(base, 'prune-race-first')
+  const second = await secretAsk(base, 'prune-race-second')
+  await post(base, '/api/answer', { ticket: first, values: { api_key: 'first' } })
+  const claimed = await post(base, '/api/answer', { ticket: second, values: { api_key: 'second' } })
+  const db = new DatabaseSync(join(stateDir, 'queue.db'))
+  try {
+    db.prepare(`UPDATE asks SET status = 'orphaned', closed_at = 1 WHERE ticket IN (?, ?)`).run(first, second)
+  } finally { db.close() }
+  const sweeping = daemon.sweep()
+  await deleting // the sweep has listed both and is removing the first one's secret
+  assert.equal((await post(base, `/api/asks/${second}/collect`, {})).status, 200)
+  release()
+  await sweeping
+  assert.match(envText(), new RegExp(`^${envKey(claimed.body.ask.answers.api_key)}=`, 'm'))
+})
+
+test('a keychain secret counts as deleted only when the lookup says it is gone', async (t) => {
+  const bin = mkdtempSync(join(tmpdir(), 'unblock-fake-security-'))
+  writeFileSync(join(bin, 'security'), '#!/bin/sh\n[ "$1" = "-i" ] && { cat >/dev/null; exit 0; }\nexit "$FAKE_LOOKUP_EXIT"\n', { mode: 0o755 })
+  const saved = { PATH: process.env.PATH, FAKE_LOOKUP_EXIT: process.env.FAKE_LOOKUP_EXIT }
+  t.after(() => { process.env.PATH = saved.PATH; if (saved.FAKE_LOOKUP_EXIT === undefined) delete process.env.FAKE_LOOKUP_EXIT; else process.env.FAKE_LOOKUP_EXIT = saved.FAKE_LOOKUP_EXIT })
+  process.env.PATH = `${bin}:${process.env.PATH}`
+  const record = { store: 'keychain', ref: 'unblock-test-slug' }
+  const secrets = new SecretStore({ backend: 'env' })
+  for (const [code, gone] of [['44', true], ['0', false], ['1', false]]) {
+    process.env.FAKE_LOOKUP_EXIT = code
+    assert.equal(await secrets.delete(record), gone, `lookup exit ${code}`)
+  }
+})
