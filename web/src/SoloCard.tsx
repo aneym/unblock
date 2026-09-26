@@ -321,7 +321,8 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
       const visible = !!button && getComputedStyle(button).visibility !== 'hidden'
         && getComputedStyle(button).display !== 'none'
         && !!rect && rect.width > 0 && rect.height > 0
-        && rect.top < window.innerHeight - barHeight && rect.bottom > 0
+        // Wholly on screen above the bar: a sliver of it cannot be pressed.
+        && rect.top >= 0 && rect.bottom <= window.innerHeight - barHeight
       setFocalActionsInView(visible)
     }
     const schedule = () => { if (!frame) frame = window.requestAnimationFrame(measure) }
@@ -573,10 +574,11 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+      // Only a plain send. An approval (payment, consent, message, command) is
+      // never one keystroke away from a note being typed; it takes the button.
+      if (passkeyGated || approvalKind) return
       event.preventDefault()
-      if (passkeyGated) void onPasskeyApprove()
-      else if (approvalKind) void submit('approve')
-      else void submit()
+      void submit()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

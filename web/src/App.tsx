@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, BASE, FinishedError, VIEWER } from './lib/api'
 import { ago, askKind, groupOf, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
 import { Icon } from './icons'
@@ -163,9 +163,18 @@ export default function App() {
     setShowAnswered(false)
     window.scrollTo(0, 0)
   }, [])
+  // A card calls finish a moment after it sends, by which time the queue may
+  // have changed: read the current one, and remember where the ask stood in
+  // case a refresh already removed it.
+  const asksRef = useRef(asks)
+  asksRef.current = asks
+  const lastIndex = useRef(-1)
+  if (currentIndex >= 0) lastIndex.current = currentIndex
   const finish = (ticket: string) => {
-    const index = asks.findIndex((ask) => ask.ticket === ticket)
-    const remaining = asks.filter((ask) => ask.ticket !== ticket)
+    const current = asksRef.current
+    const found = current.findIndex((ask) => ask.ticket === ticket)
+    const index = found >= 0 ? found : lastIndex.current
+    const remaining = current.filter((ask) => ask.ticket !== ticket)
     const next = remaining[index < 0 || index >= remaining.length ? 0 : index]
     setDoneTickets((previous) => new Set([...previous, ticket]))
     if (next) choose(next.ticket)
@@ -175,7 +184,7 @@ export default function App() {
   useEffect(() => {
     if (!selectedTicket || !selected) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || event.metaKey || event.ctrlKey) return
+      if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
       if (event.target instanceof Element
         && event.target.closest('input, textarea, select, [contenteditable]')) return
       const openMenu = document.querySelector('.ask-pane .menu-popover')
