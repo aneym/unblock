@@ -12,6 +12,7 @@ process.env.UNBLOCK_CONFIG_DIR = join(stateDir, 'config')
 process.env.UNBLOCK_SECRET_BACKEND = 'env'
 
 const { startDaemon, loadOrCreateSecret } = await import('../src/daemon.js')
+const { Store } = await import('../src/store.js')
 const authSecret = loadOrCreateSecret()
 
 async function post(base, pathname, body, { auth = true } = {}) {
@@ -83,6 +84,48 @@ test('a repeated send is safe and ends in 410 once the agent has it', async (t) 
     assert.doesNotMatch(envFile, new RegExp(Buffer.from(late).toString('base64')))
   })
 
+  await t.test('an orphaned ask refuses a late secret without storing it', async () => {
+    const created = await post(base, '/api/asks', {
+      ask: {
+        kind: 'file', title: 'secret-after-orphan', why: 'Human input unblocks the key.', only_you: 'credential',
+        tried: ['Checked everything an agent can check before asking the human.'],
+        fields: [{ name: 'api_key', type: 'secret', label: 'API key', required: true, env_name: 'RETRY_TEST_KEY' }],
+        links: [{ url: 'https://example.com/settings/api-keys', label: 'API keys page' }],
+      },
+      origin: { session_id: 'retry-orphan-secret' },
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.body))
+    const ticket = created.body.ticket
+    assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: 'before-orphan' } })).status, 200)
+    const store = new Store(join(stateDir, 'queue.db'))
+    try {
+      assert.equal(store.orphan(ticket, 'agent is gone').status, 'orphaned')
+    } finally {
+      store.close()
+    }
+    const late = `orphaned-late-${Date.now()}`
+    assert.equal((await post(base, '/api/answer', { ticket, values: { api_key: late } })).status, 410)
+    const envFile = readFileSync(join(stateDir, 'config', 'secrets.env'), 'utf8')
+    assert.doesNotMatch(envFile, new RegExp(Buffer.from(late).toString('base64')))
+  })
+
+  await t.test('a collected ask refuses drafts without changing the saved draft', async () => {
+    const ticket = await fileAsk(base, 'draft-after-collect')
+    assert.equal((await post(base, '/api/draft', { ticket, values: { verdict: 'original' }, reply: 'original note' })).status, 200)
+    const link = await post(base, '/api/links', { ticket })
+    assert.equal(link.status, 201)
+    assert.equal((await post(base, `/api/asks/${ticket}/collect`, {})).status, 200)
+    const late = await post(base, '/api/draft', { ticket, values: { verdict: 'late' }, reply: 'late note' })
+    assert.equal(late.status, 410)
+    const viaLink = await post(base, `/u/${link.body.token}/api/draft`, { values: { verdict: 'late via link' } }, { auth: false })
+    assert.equal(viaLink.status, 410)
+    const stored = await fetch(`${base}/api/asks/${ticket}`, { headers: { Authorization: `Bearer ${authSecret}` } })
+    assert.equal(stored.status, 200)
+    const ask = await stored.json()
+    assert.equal(ask.draft.verdict, 'original')
+    assert.equal(ask.draft_reply, 'original note')
+  })
+
   await t.test('an answer arriving after a send-back is 410', async () => {
     const ticket = await fileAsk(base, 'answer-after-bounce')
     assert.equal((await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })).status, 200)
@@ -95,6 +138,24 @@ test('a repeated send is safe and ends in 410 once the agent has it', async (t) 
     const retry = await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })
     assert.equal(retry.status, 410)
   })
+})
+
+test('the store refuses an answer on a bounced ask', async () => {
+  const daemon = await startDaemon({ port: 0 })
+  const base = `http://127.0.0.1:${daemon.port}`
+  try {
+    const ticket = await fileAsk(base, 'store-bounced-answer')
+    assert.equal((await post(base, '/api/answer', { ticket, reply: 'wrong ask', bounce: true })).status, 200)
+    const store = new Store(join(stateDir, 'queue.db'))
+    try {
+      assert.throws(() => store.answer(ticket, { verdict: 'keep' }), { status: 410 })
+      assert.equal(store.get(ticket).answers.verdict, undefined)
+    } finally {
+      store.close()
+    }
+  } finally {
+    await daemon.close()
+  }
 })
 
 test('client failure log', async (t) => {

@@ -218,6 +218,8 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     return () => window.clearTimeout(timer)
   }, [armed])
   const draftTimer = useRef<number | undefined>(undefined)
+  const draftInFlight = useRef(false)
+  const draftPending = useRef(false)
   const completed = useRef(false)
   const latest = useRef({
     values: seeded.values, notes: seeded.notes, reply: seeded.reply, bounced: seeded.bounced,
@@ -254,6 +256,41 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
    * what to ask next, so a single choice click has to reach the daemon while
    * the human is still on the question, not after they have moved on.
    */
+  const sendDraft = () => {
+    if (completed.current) return
+    if (draftInFlight.current) {
+      draftPending.current = true
+      return
+    }
+    draftInFlight.current = true
+    const current = latest.current
+    api('/api/draft', {
+      ticket: ask.ticket,
+      values: safeValues(current.values),
+      field_context: current.notes,
+      reply: current.reply,
+    }, { retry: false })
+      .then(() => setDraftState('saved'))
+      .catch((error) => {
+        if (error instanceof FinishedError) {
+          completed.current = true
+          window.clearTimeout(draftTimer.current)
+          draftTimer.current = undefined
+          draftPending.current = false
+          onFinished()
+          return
+        }
+        setDraftState('offline')
+      })
+      .finally(() => {
+        draftInFlight.current = false
+        if (draftPending.current && !completed.current) {
+          draftPending.current = false
+          sendDraft()
+        }
+      })
+  }
+
   const persist = (next: Partial<typeof latest.current>) => {
     const merged = { ...latest.current, ...next }
     latest.current = merged
@@ -265,14 +302,7 @@ export function SoloCard({ ask, onFinished }: { ask: Ask; onFinished: () => void
     setDraftState('saving')
     draftTimer.current = window.setTimeout(() => {
       draftTimer.current = undefined
-      api('/api/draft', {
-        ticket: ask.ticket,
-        values: safeValues(merged.values),
-        field_context: merged.notes,
-        reply: merged.reply,
-      }, { retry: false })
-        .then(() => setDraftState('saved'))
-        .catch(() => setDraftState('offline'))
+      sendDraft()
     }, 300)
   }
 

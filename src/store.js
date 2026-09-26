@@ -44,7 +44,7 @@ function agentKey(origin) {
  * the agent collected it, "gone" is the truth the page acts on.
  */
 /** Statuses an answer can no longer change. A sent-back ask is done too: the agent re-asks. */
-export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced']
+export const CLOSED_TO_ANSWERS = ['collected', 'cancelled', 'expired', 'bounced', 'orphaned']
 
 export function finished(ask) {
   const error = new Error(`ask ${ask.ticket} is ${ask.status}`)
@@ -496,6 +496,7 @@ export class Store {
   saveDraft(idOrTicket, values, fieldContext, reply) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
+    if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
     const known = new Set(ask.fields.map((f) => f.name))
     const at = nowMs()
     this.#saveFieldContext(ask.id, known, fieldContext, at)
