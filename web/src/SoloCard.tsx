@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError, BASE, DraftStaleError, FinishedError, NetworkError } from './lib/api'
 import { clearLocal, readLocal, writeLocal } from './lib/drafts'
-import { askKind, ago, groupOf, isMissing, type Ask, type FieldValue, type PasskeyState, type Values } from './deck'
+import { askKind, ago, groupOf, isMissing, reviewLinks, type Ask, type FieldValue, type Link, type PasskeyState, type Values } from './deck'
 import { FieldControl } from './FieldControl'
 import { Icon } from './icons'
 import { Chip, ChipText, PlainText } from './ChipText'
@@ -115,6 +115,40 @@ function StepList({ ticket, steps, fields, values, renderField, checked, setChec
           ))}
         </div>
       )}
+    </section>
+  )
+}
+
+function ReviewSection({ images, pages }: { images: Link[]; pages: Link[] }) {
+  const [failed, setFailed] = useState<Set<string>>(() => new Set())
+  const pageRow = (link: Link) => {
+    let address = link.url
+    try {
+      const url = new URL(link.url)
+      address = `${url.host}${url.pathname}`
+    } catch { /* Show the original URL if it cannot be parsed. */ }
+    return (
+      <a key={link.url} className="review-page" href={link.url} target="_blank" rel="noopener noreferrer">
+        <span className="review-page-text"><strong>{link.label}</strong><span className="review-address">{address}</span></span>
+        <span aria-hidden="true">↗</span>
+      </a>
+    )
+  }
+  return (
+    <section className="review-section">
+      <h2 className="section-label">To review</h2>
+      {!!images.length && (
+        <div className="review-images">
+          {images.filter((link) => !failed.has(link.url)).map((link) => (
+            <a key={link.url} className="review-image" href={link.url} target="_blank" rel="noopener noreferrer">
+              <img src={link.url} alt={link.label} loading="lazy"
+                onError={() => setFailed((previous) => new Set(previous).add(link.url))} />
+              <span>{link.label}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {[...images.filter((link) => failed.has(link.url)), ...pages].map(pageRow)}
     </section>
   )
 }
@@ -344,15 +378,16 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
       + (ask.origin.workspace_id ? `&workspace=${encodeURIComponent(ask.origin.workspace_id)}` : '')
     : undefined
   const topLink = ask.links?.[0]
-  // A field's own url stays beside that field; the Links row is only the
-  // ask's remaining links, and it moves under the steps when there are any
-  // ("link below"), otherwise into Details.
-  const fieldUrls = new Set(ask.fields.map((field) => field.url).filter(Boolean))
-  const topLinks = (ask.links || [])
-    .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
-    .filter((link) => !fieldUrls.has(link.url))
-    .filter((link) => !topLink || link.url !== topLink.url)
   const hasMainSteps = (kind === 'key' || kind === 'click') && !!ask.steps?.length
+  // Key/click keeps its first link as the primary button; other kinds show
+  // every review link before the question, except links beside their fields.
+  const { images, pages } = reviewLinks(ask)
+  const topLinks = kind === 'key' || kind === 'click'
+    ? (ask.links || [])
+      .filter((link, index, links) => links.findIndex((item) => item.url === link.url) === index)
+      .filter((link) => !ask.fields.some((field) => field.url === link.url))
+      .filter((link) => link.url !== topLink?.url)
+    : []
   const persistable = (raw: Values): Values => {
     const filtered = safeValues(raw)
     for (const name of prePicked.current) delete filtered[name]
@@ -633,7 +668,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const renderField = (field: Ask['fields'][number]) => (
     <FieldControl
       key={field.name} field={field} ticket={ask.ticket} value={values[field.name]}
-      onChange={onChange} disabled={isBusy} topUrl={topLink?.url}
+      onChange={onChange} disabled={isBusy} topUrl={kind === 'key' || kind === 'click' ? topLink?.url : undefined}
       note={notes[field.name] || ''} onNoteChange={onNoteChange}
       onSkip={onSkip} onBounce={onBounce}
     />
@@ -715,6 +750,9 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
         <h2 className="section-label">Why</h2>
         <p><ChipText text={ask.why} /></p>
       </section>
+      {kind !== 'key' && kind !== 'click' && (images.length > 0 || pages.length > 0) && (
+        <ReviewSection key={ask.ticket} images={images} pages={pages} />
+      )}
       {hasMainSteps && (
         <section className="ask-body">
           <StepList

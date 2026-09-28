@@ -8,6 +8,30 @@
  * browser, which is where the filter bugs kept hiding.
  */
 
+/** Classify by pathname only, so query strings cannot turn pages into images. */
+export function isImageUrl(url) {
+  try {
+    return /\.(?:png|jpe?g|gif|webp|avif|svg)$/i.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
+}
+
+/** Review material lives beside the question, not in the collapsed details. */
+export function reviewLinks(ask) {
+  const fieldUrls = new Set((ask.fields || []).map((field) => field.url))
+  const seen = new Set()
+  const images = []
+  const pages = []
+  for (const link of ask.links || []) {
+    if (seen.has(link.url) || fieldUrls.has(link.url)) continue
+    seen.add(link.url)
+    if (isImageUrl(link.url)) images.push(link)
+    else pages.push(link)
+  }
+  return { images, pages }
+}
+
 /** created_at is epoch ms from the daemon and an ISO string in some fixtures. */
 const at = (value) => (typeof value === 'number' ? value : new Date(value).getTime())
 

@@ -10,6 +10,8 @@ import {
   groupOf as groupOfJs,
   hideProducts as hideProductsJs,
   isMissing as isMissingJs,
+  isImageUrl as isImageUrlJs,
+  reviewLinks as reviewLinksJs,
   projectCounts as projectCountsJs,
   selectDeck as selectDeckJs,
   sortAsks as sortAsksJs,
@@ -23,6 +25,7 @@ export type Values = Record<string, FieldValue>
 /** field name → send-back note ('' = no note yet). */
 export type Bounced = Record<string, string>
 
+export interface Link { label: string; url: string }
 export interface Choice { value: string; label: string; description?: string }
 
 export interface Field {
@@ -61,7 +64,7 @@ export interface Ask {
   permission?: { tool: string; command?: string; path?: string; summary: string }
   tried?: string[]
   only_you?: string | null
-  links?: { label: string; url: string }[]
+  links?: Link[]
   plan?: { site: string; start_url: string; steps: string[]; changes: string; untouched: string }
   spend?: {
     item: string; vendor: string; vendor_url: string; amount_cents: number
@@ -126,6 +129,8 @@ export const groupOf: (ask: Ask) => string = groupOfJs
 export const hideProducts: (asks: Ask[], hidden: Iterable<string>) => Ask[] = hideProductsJs
 export const projectCounts: (asks: Ask[]) => [string, number][] = projectCountsJs
 export const isMissing: (value: FieldValue | undefined) => boolean = isMissingJs
+export const isImageUrl: (url: string) => boolean = isImageUrlJs
+export const reviewLinks: (ask: Ask) => { images: Link[]; pages: Link[] } = reviewLinksJs
 export const unansweredFields: (ask: Ask) => Field[] = (ask) => unansweredFieldsJs<Field, Ask>(ask)
 export const sortAsks: (asks: Ask[]) => Ask[] = sortAsksJs
 export const buildDeck: (asks: Ask[]) => DeckItem[] = buildDeckJs

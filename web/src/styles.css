@@ -94,6 +94,21 @@ h1 { margin: 20px 0 8px; font-size: 28px; line-height: 34px; font-weight: 600; o
 .why-lead { margin: 20px 0 24px; overflow-wrap: anywhere; }
 .why-section { margin: 20px 0 28px; }
 .why-section p { margin: 0; max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-section { margin: 0 0 28px; min-width: 0; }
+.review-section h2 { margin: 0 0 10px; }
+.review-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.review-image { display: block; min-width: 0; text-decoration: none; font-size: 12px; color: var(--dim); }
+.review-image img { display: block; max-width: 100%; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
+.review-image span { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.review-page { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-width: 0; width: 100%; padding: 12px 14px; margin-top: 8px; border: 1px solid var(--border);
+  border-radius: 8px; text-decoration: none; }
+.review-page:hover { background: var(--gray-bg); }
+.review-page-text { min-width: 0; }
+.review-page strong { display: block; font-weight: 500; overflow-wrap: anywhere; }
+.review-address { display: block; color: var(--dim); font: 12px/18px 'JetBrains Mono Variable', monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-page > span:last-child { flex-shrink: 0; }
 .step-links { margin: 14px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .send-error { margin: 12px 0 20px; padding: 10px 12px; border: 1px solid var(--red-text);
   border-radius: 8px; color: var(--red-text); font-size: 13px; overflow-wrap: anywhere; }
@@ -245,7 +260,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
   .action-bar { padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); gap: 12px; }
   .action-status { font-size: 12px; }
   .open-link { display: flex; width: 100%; }
-  .receipt-images { grid-template-columns: 1fr; }
+  .receipt-images, .review-images { grid-template-columns: 1fr; }
   .list-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; }
   .row-answer { grid-column: 2; margin-left: 0; }
 }

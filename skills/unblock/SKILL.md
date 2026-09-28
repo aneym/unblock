@@ -52,6 +52,10 @@ Every ask needs:
   the console URL of the exact page, an app scheme (`codex://settings/...`) or
   a macOS settings pane (`x-apple.systempreferences:...`). Put it in `links`
   and name it in the step.
+- When asking the human to review or sign off on screens, a doc, a PR or a plan,
+  put everything they need to look at in `links`: the page or PR URL and any
+  screenshot image URLs (they show inline). Never mention screens, shots or a
+  doc in `why` without linking it.
 - Plain words in the title, labels and choices. The gate rejects `v1`, `ADR 12`,
   "rung", lane ids, ticket ids and file paths there. Write for someone who has
   never opened the repo: "the first version we ship", not "v1".
