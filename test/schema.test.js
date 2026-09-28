@@ -117,3 +117,18 @@ test('only-human filing gate accepts real blockers and decisions and rejects inc
   const line = 'Ran the CLI and the API; neither can make this call for the human.'
   for (const tried of [JSON.stringify([line]), line]) assert.deepEqual(validateAsk({ ...base, tried }).tried, [line])
 })
+
+// Schema owns input validation; the daemon test owns persistence and retrieval.
+test('blocks and minutes accept bounded optional metadata and reject wrong shapes', () => {
+  const base = { ...gate, title: 'Choose', why: 'Unblocks delivery.', fields: [{ name: 'ok', type: 'confirm' }] }
+  const ask = validateAsk({ ...base, blocks: 'b'.repeat(200), minutes: 240 })
+  assert.equal(ask.blocks, 'b'.repeat(200))
+  assert.equal(ask.minutes, 240)
+  assert.equal(validateAsk(base).blocks, undefined)
+  assert.equal(validateAsk({ ...base, blocks: ['A task', 'B task'] }).blocks, 'A task, B task')
+  for (const [change, path] of [
+    [{ blocks: ['too long '.repeat(8)] }, 'blocks[0]'], [{ blocks: ['x', 'x', 'x', 'x', 'x', 'x'] }, 'blocks'],
+    [{ blocks: 'b'.repeat(201) }, 'blocks'], [{ minutes: 0 }, 'minutes'],
+    [{ minutes: 241 }, 'minutes'], [{ minutes: 1.5 }, 'minutes'],
+  ]) assert.throws(() => validateAsk({ ...base, ...change }), (error) => error.path === path)
+})

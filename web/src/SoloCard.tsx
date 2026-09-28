@@ -212,7 +212,7 @@ function Details({ ask, answered, herdrHref, topLinks }: {
         {!!ask.blocks?.length && (
           <div className="property">
             <span className="property-label">Unblocks</span>
-            <span className="property-value"><PlainText text={ask.blocks.join(', ')} /></span>
+            <span className="property-value"><PlainText text={ask.blocks} /></span>
           </div>
         )}
         {!!topLinks.length && (

@@ -1,49 +1,14 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
-import { openSync, closeSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
-import { entryPath, log, permissionVerdict, readEntry, registryDir, remove, request } from './lib.js'
+import { log, permissionVerdict, readEntry, remove, request } from './lib.js'
+import { promptPane as herdr, lockPane } from '../src/pane-notice.js'
 
 const ticket = process.argv[2]
 if (!/^ub_[a-z0-9]+$/.test(ticket || '') || !readEntry(ticket)) process.exit(0)
-const bin = process.env.HERDR_BIN_PATH || 'herdr'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-function herdr(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-    let output = ''
-    const timer = setTimeout(() => child.kill(), 5000)
-    child.stdout.on('data', (chunk) => { output += chunk.toString() })
-    child.stderr.on('data', () => {}) // Do not log CLI output; it may contain secrets.
-    child.on('error', reject)
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      if (code === 0) resolve(output)
-      else reject(new Error('herdr command failed'))
-    })
-  })
-}
 
 async function collect() {
   await request(`/api/asks/${ticket}/collect`, {})
   remove(ticket)
-}
-
-function lockPane(pane) {
-  const path = join(registryDir(), `lock-${pane.replace(/[^a-z0-9_-]/gi, '_')}`)
-  try {
-    const fd = openSync(path, 'wx', 0o600)
-    return () => { closeSync(fd); try { unlinkSync(path) } catch {} }
-  } catch {
-    try {
-      if (Date.now() - statSync(path).mtimeMs > 60000) {
-        unlinkSync(path)
-        return lockPane(pane)
-      }
-    } catch {}
-    return null
-  }
 }
 
 function answerLine(ask) {

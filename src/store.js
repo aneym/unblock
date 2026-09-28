@@ -232,6 +232,8 @@ export class Store {
     this.#addColumn('answers', 'answered_via', 'TEXT')
     this.#addColumn('links', 'minted_by', "TEXT NOT NULL DEFAULT 'local'")
     this.#addColumn('asks', 'draft_rev', 'INTEGER NOT NULL DEFAULT 0')
+    this.#addColumn('asks', 'repinged_at', 'INTEGER')
+    this.#addColumn('asks', 'reping_unavailable_at', 'INTEGER')
   }
 
   /** Additive column, so an existing queue file keeps working. */
@@ -313,7 +315,7 @@ export class Store {
         body.message ? JSON.stringify(body.message) : null,
         body.consent_blocked_by ?? null,
         body.summary ?? null, body.minutes ?? null, body.after ?? null,
-        JSON.stringify(body.blocks ?? []), body.permission ? JSON.stringify(body.permission) : null,
+        JSON.stringify(body.blocks ?? null), body.permission ? JSON.stringify(body.permission) : null,
       )
 
     return this.get(id)
@@ -347,7 +349,7 @@ export class Store {
       .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
       .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you,
         plan ? JSON.stringify(plan) : null, spend ? JSON.stringify(spend) : null, message ? JSON.stringify(message) : null,
-        consent_blocked_by ?? null, summary ?? null, minutes ?? null, after ?? null, JSON.stringify(blocks ?? []),
+        consent_blocked_by ?? null, summary ?? null, minutes ?? null, after ?? null, JSON.stringify(blocks ?? null),
         permission ? JSON.stringify(permission) : null, at, ask.id)
     if (JSON.stringify(ask.plan) !== JSON.stringify(plan) || JSON.stringify(ask.spend) !== JSON.stringify(spend) ||
         JSON.stringify(ask.message) !== JSON.stringify(message) || JSON.stringify(ask.permission) !== JSON.stringify(permission)) this.#db.prepare('DELETE FROM drafts WHERE ask_id = ?').run(ask.id)
@@ -418,7 +420,10 @@ export class Store {
       summary: row.summary ?? undefined,
       minutes: row.minutes ?? undefined,
       after: row.after ?? undefined,
-      blocks: JSON.parse(row.blocks_json),
+      blocks: (() => {
+        const saved = JSON.parse(row.blocks_json)
+        return Array.isArray(saved) ? saved.join(', ') || undefined : saved ?? undefined
+      })(),
       receipt: row.receipt_json ? JSON.parse(row.receipt_json) : undefined,
       revision: row.revision ?? 1,
       answered_via: this.#db.prepare('SELECT answered_via FROM answers WHERE ask_id = ? LIMIT 1').get(row.id)?.answered_via ?? undefined,
@@ -437,6 +442,8 @@ export class Store {
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
       answered_at: row.answered_at ?? undefined,
+      repinged_at: row.repinged_at ?? undefined,
+      reping_unavailable_at: row.reping_unavailable_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
       closed_at: row.closed_at ?? undefined,
       expires_at: row.expires_at ?? undefined,
@@ -758,6 +765,24 @@ export class Store {
       this.#queueDropped(secretRecords(ask))
       return this.get(ask.id)
     })
+  }
+
+  /** Only unanswered-by-agent notices qualify for a re-ping. */
+  repingCandidates(afterMs) {
+    return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'answered'
+      AND answered_at IS NOT NULL AND answered_at <= ? AND repinged_at IS NULL AND reping_unavailable_at IS NULL`)
+      .all(nowMs() - afterMs).map(({ ticket }) => ticket)
+  }
+
+  markRepinged(ticket) {
+    this.#db.prepare(`UPDATE asks SET repinged_at = ? WHERE ticket = ? AND status = 'answered' AND repinged_at IS NULL`)
+      .run(nowMs(), ticket)
+  }
+
+  /** A missing pane cannot receive a re-ping; stop trying permanently. */
+  markRepingUnavailable(ticket) {
+    this.#db.prepare(`UPDATE asks SET reping_unavailable_at = ? WHERE ticket = ? AND status = 'answered' AND reping_unavailable_at IS NULL`)
+      .run(nowMs(), ticket)
   }
 
   /** The agent picked up its answers. */

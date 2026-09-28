@@ -143,7 +143,7 @@ async function list(args) {
         ask.kind === 'park' && ask.status === 'open' ? 'agent stopped' : null,
         ask.status === 'open' ? count(required(ask).length) : null, age(ask.created_at), ask.origin?.agent].filter(Boolean).join(' · ')}`)
       if (ask.minutes) console.log(`             ~${ask.minutes} min`)
-      if (ask.blocks?.length) console.log(`             unblocks: ${ask.blocks.join(', ')}`)
+      if (ask.blocks) console.log(`             unblocks: ${ask.blocks}`)
       const link = stable(health, ask.ticket)
       if (link) console.log(`             ${link}`)
     }
@@ -172,7 +172,7 @@ async function show(args) {
   if (ask.summary) console.log(`\nSummary: ${ask.summary}`)
   if (ask.minutes) console.log(`Time: ~${ask.minutes} min`)
   if (ask.after) console.log(`Then: ${ask.after}`)
-  if (ask.blocks?.length) console.log(`Unblocks: ${ask.blocks.join(', ')}`)
+  if (ask.blocks) console.log(`Unblocks: ${ask.blocks}`)
   if (ask.only_you) console.log(`\nOnly you: ${reasons[ask.only_you] ?? ask.only_you}`)
   if (ask.tried?.length) console.log(`\nTried:\n${ask.tried.map((s) => `  - ${s}`).join('\n')}`)
   if (ask.steps?.length) console.log(`\nSteps:\n${ask.steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`)
@@ -320,6 +320,7 @@ async function file(args) {
       tab_id: process.env.HERDR_TAB_ID,
       workspace_id: process.env.HERDR_WORKSPACE_ID,
       cwd: process.cwd(),
+      kind: process.env.UNBLOCK_ORIGIN_KIND,
     },
   })
   const link = stable(await request('/api/health'), ask.ticket)

@@ -96,7 +96,7 @@ function AskList({ asks, products, hiddenProducts, toggleProduct, showAll, choos
           {ask.kind === 'park' ? (
             <span className="status-pill paused"><Icon name="park" size={14} /> Agent paused</span>
           ) : !!ask.blocks?.length && (
-            <span className="ask-meta">unblocks: <PlainText text={ask.blocks.join(', ')} /></span>
+            <span className="ask-meta">unblocks: <PlainText text={ask.blocks} /></span>
           )}
         </span>
         {!expanded && <span className="row-answer">Answer →</span>}

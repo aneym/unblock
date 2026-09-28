@@ -69,6 +69,8 @@ test('the file fills unset variables and the environment wins', () => {
       allowed_users: ['a.neyman17@gmail.com'],
       port: 4488,
       secret_backend: 'env',
+      reping_after_ms: 1200,
+      refuseWorktreeOrigins: true,
     }),
   )
   const env = {}
@@ -78,18 +80,22 @@ test('the file fills unset variables and the environment wins', () => {
     'UNBLOCK_ALLOWED_USERS',
     'UNBLOCK_PORT',
     'UNBLOCK_PUBLIC_ORIGIN',
+    'UNBLOCK_REFUSE_WORKTREE_ORIGINS',
+    'UNBLOCK_REPING_AFTER_MS',
     'UNBLOCK_SECRET_BACKEND',
     'UNBLOCK_TRUSTED_PROXY',
   ])
   assert.equal(env.UNBLOCK_PUBLIC_ORIGIN, 'https://studio.tailf266ac.ts.net:8797')
   assert.equal(env.UNBLOCK_PORT, '4488')
   assert.equal(env.UNBLOCK_SECRET_BACKEND, 'env')
+  assert.equal(env.UNBLOCK_REPING_AFTER_MS, '1200')
+  assert.equal(env.UNBLOCK_REFUSE_WORKTREE_ORIGINS, 'true')
 
   const pinned = { UNBLOCK_PUBLIC_ORIGIN: 'http://127.0.0.1:4488', UNBLOCK_PORT: '0' }
   const second = applyConfig({ env: pinned, path: file })
   assert.equal(pinned.UNBLOCK_PUBLIC_ORIGIN, 'http://127.0.0.1:4488')
   assert.equal(pinned.UNBLOCK_PORT, '0')
-  assert.deepEqual(second.applied.sort(), ['UNBLOCK_ALLOWED_USERS', 'UNBLOCK_SECRET_BACKEND', 'UNBLOCK_TRUSTED_PROXY'])
+  assert.deepEqual(second.applied.sort(), ['UNBLOCK_ALLOWED_USERS', 'UNBLOCK_REFUSE_WORKTREE_ORIGINS', 'UNBLOCK_REPING_AFTER_MS', 'UNBLOCK_SECRET_BACKEND', 'UNBLOCK_TRUSTED_PROXY'])
 })
 
 test('an invalid origin in the file is dropped rather than half-applied', () => {

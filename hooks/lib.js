@@ -49,6 +49,7 @@ export async function origin() {
     workspace_id: process.env.HERDR_WORKSPACE_ID,
     session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
     cwd: process.cwd(),
+    kind: process.env.UNBLOCK_ORIGIN_KIND,
     workspace_name: extra.workspace_name,
     profiles: extra.profiles,
   }

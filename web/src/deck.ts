@@ -60,7 +60,7 @@ export interface Ask {
   summary?: string
   minutes?: number
   after?: string
-  blocks?: string[]
+  blocks?: string
   permission?: { tool: string; command?: string; path?: string; summary: string }
   tried?: string[]
   only_you?: string | null

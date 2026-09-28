@@ -123,6 +123,7 @@ function origin() {
     workspace_id: process.env.HERDR_WORKSPACE_ID,
     session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
     cwd: process.cwd(),
+    kind: process.env.UNBLOCK_ORIGIN_KIND,
   }
 }
 
@@ -142,9 +143,9 @@ const askProperties = {
   tried: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 20, maxLength: 400 }, description: 'What you already tried using CLI, API, computer use or docs and why that did not clear the blocker.' },
   why: { type: 'string', maxLength: 1200 },
   summary: { type: 'string', maxLength: 140 },
-  minutes: { type: 'integer', minimum: 1, maximum: 120 },
+  minutes: { type: 'integer', minimum: 1, maximum: 240, description: 'How many minutes Alex should expect to spend (1-240).' },
   after: { type: 'string', maxLength: 140 },
-  blocks: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 60 } },
+  blocks: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 60 } }], description: 'What work waits for this answer (one short line; older clients may send a list).' },
   permission: { type: 'object', properties: { tool: { type: 'string' }, command: { type: 'string', maxLength: 2000 }, path: { type: 'string' }, summary: { type: 'string', maxLength: 200 } }, required: ['tool', 'summary'] },
   consent_blocked_by: { type: 'string', enum: ['sign_in', 'not_signed_in', 'no_browser', 'types_secret', 'device'] },
   plan: { type: 'object', properties: { site: { type: 'string' }, start_url: { type: 'string' }, steps: { type: 'array', items: { type: 'string' } }, changes: { type: 'string' }, untouched: { type: 'string' } }, required: ['site', 'start_url', 'steps', 'changes', 'untouched'] },

@@ -68,7 +68,8 @@ export function unansweredFields(ask) {
 /** Parked first, then most dependent work, then oldest. */
 export function sortAsks(asks) {
   return [...asks].sort((a, b) => Number(Boolean(b.gating)) - Number(Boolean(a.gating)) ||
-    (b.blocks?.length ?? 0) - (a.blocks?.length ?? 0) || at(a.created_at) - at(b.created_at))
+    (Array.isArray(b.blocks) ? b.blocks.length : Number(Boolean(b.blocks))) -
+    (Array.isArray(a.blocks) ? a.blocks.length : Number(Boolean(a.blocks))) || at(a.created_at) - at(b.created_at))
 }
 
 /**

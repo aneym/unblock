@@ -64,7 +64,7 @@ try {
     ttl_seconds: 60 * 60 * 12,
   }
   validateAsk(ask)
-  const filed = await api('/api/asks', { ask, origin: { ...origin, agent, detected: true } })
+  const filed = await api('/api/asks', { ask, origin: { ...origin, agent, detected: true, kind: process.env.UNBLOCK_ORIGIN_KIND } })
   register(filed.ticket, String(paneId), 'detected')
 } catch {
   // Never let a hook failure disturb the session.

@@ -464,11 +464,15 @@ export function validateAsk(raw) {
   const summary = optionalStr(raw.summary, 'summary', { max: 140 })
   const after = optionalStr(raw.after, 'after', { max: 140 })
   const minutes = raw.minutes
-  if (minutes !== undefined && (!Number.isInteger(minutes) || minutes < 1 || minutes > 120)) {
-    throw new ValidationError('must be an integer from 1 to 120', 'minutes')
+  if (minutes !== undefined && (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > 240)) {
+    throw new ValidationError('must be an integer from 1 to 240', 'minutes')
   }
-  const blocks = raw.blocks === undefined ? [] : raw.blocks
-  if (!Array.isArray(blocks) || blocks.length > 5) throw new ValidationError('must have at most 5 items', 'blocks')
+  const blocks = raw.blocks === undefined ? undefined : Array.isArray(raw.blocks)
+    ? (() => {
+      if (raw.blocks.length > 5) throw new ValidationError('must have at most 5 items', 'blocks')
+      return raw.blocks.map((block, i) => plainWords(str(block, `blocks[${i}]`, { max: 60 }), `blocks[${i}]`)).join(', ')
+    })()
+    : plainWords(str(raw.blocks, 'blocks', { max: 200 }), 'blocks')
 
   return {
     kind,
@@ -487,7 +491,7 @@ export function validateAsk(raw) {
     summary: summary === undefined ? undefined : plainWords(summary, 'summary'),
     minutes,
     after: after === undefined ? undefined : plainWords(after, 'after'),
-    blocks: blocks.map((block, i) => plainWords(str(block, `blocks[${i}]`, { max: 60 }), `blocks[${i}]`)),
+    blocks,
   }
 }
 
@@ -614,6 +618,8 @@ export function normalizeOrigin(raw = {}) {
       : [],
     cwd: optionalStr(raw.cwd, 'origin.cwd', { max: 1000 }),
     repo: optionalStr(raw.repo, 'origin.repo', { max: 200 }),
+    kind: optionalStr(raw.kind, 'origin.kind', { max: 40 }),
+    detected: raw.detected === true,
   }
 }
 

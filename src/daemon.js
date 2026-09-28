@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { guardedAnswerNotice } from './pane-notice.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -324,6 +325,9 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // The config file fills in whatever the spawner's environment left unset,
   // so the daemon is reachable on its public origin no matter who started it.
   const config = applyConfig()
+  const configuredRepingMs = Number(process.env.UNBLOCK_REPING_AFTER_MS)
+  const repingAfterMs = Number.isSafeInteger(configuredRepingMs) && configuredRepingMs > 0 ? configuredRepingMs : 15 * 60 * 1000
+  const refuseWorktreeOrigins = process.env.UNBLOCK_REFUSE_WORKTREE_ORIGINS === 'true'
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
   const store = new Store()
@@ -716,7 +720,17 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
 
     if (req.method === 'POST' && pathname === '/api/asks') {
       const body = await readJson(req)
-      const ask = store.create(validateAsk(body.ask), normalizeOrigin(body.origin))
+      const origin = normalizeOrigin(body.origin)
+      const paths = [origin.cwd, origin.repo].filter(Boolean)
+      if (origin.kind?.toLowerCase() === 'eval' || paths.some((path) =>
+        path === '/Users/aneyman/.agent-rails/orch-lab' || path.startsWith('/Users/aneyman/.agent-rails/orch-lab/'))) {
+        return sendJson(res, 403, { error: 'eval seats cannot file asks for Alex', code: 'EVAL_ORIGIN' })
+      }
+      if (refuseWorktreeOrigins && paths.some((path) =>
+        path.includes('-wt/') || path.includes('/factory-worktrees/') || path.includes('/.claude/worktrees/'))) {
+        return sendJson(res, 403, { error: 'worktree origins cannot file asks while refuseWorktreeOrigins is enabled', code: 'WORKTREE_ORIGIN' })
+      }
+      const ask = store.create(validateAsk(body.ask), origin)
       emitQueue()
       return sendJson(res, 201, ask)
     }
@@ -1072,6 +1086,21 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     for (const ticket of store.sweepCandidates()) {
       const ask = await withTicket(ticket, () => store.sweepOne(ticket))
       if (ask) { changed = true; emitAsk(ask, ask.status) }
+    }
+    for (const ticket of store.repingCandidates(repingAfterMs)) {
+      await withTicket(ticket, async () => {
+        const ask = store.get(ticket)
+        // The question hook owns first delivery. Never prompt for permission,
+        // plugin-detected or ordinary filed asks, even if they carry a pane id.
+        if (ask?.status !== 'answered' || ask.repinged_at || ask.reping_unavailable_at ||
+            ask.kind !== 'file' || ask.purpose !== 'question' || ask.origin?.detected || !ask.origin?.pane_id) return
+        const outcome = await guardedAnswerNotice(ask.origin.pane_id, ask.ticket)
+        if (outcome === 'sent') store.markRepinged(ticket)
+        if (outcome === 'missing') {
+          store.markRepingUnavailable(ticket)
+          console.error(`unblock: re-ping skipped for ${ticket}; origin pane no longer exists`)
+        }
+      })
     }
     for (const ticket of store.sweepCleanup()) await withTicket(ticket, () => store.prune(ticket))
     await flushSecretDeletes()

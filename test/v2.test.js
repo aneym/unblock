@@ -252,7 +252,7 @@ test('pay claims and CLI mask card output and errors', async () => {
 
 test('revision two metadata and relay shapes cross HTTP and CLI', async () => {
   const rich = { ...shape('consent'), summary: 'Approve a setting update', minutes: 5,
-    after: 'The agent verifies the setting', blocks: ['Calendar on staging', 'nightly import'],
+    after: 'The agent verifies the setting', blocks: 'Calendar on staging and nightly import',
     steps: ['Open the settings page'], links: [{ url: 'https://example.com/settings/new' }] }
   const filed = await create(rich)
   for (const key of ['summary', 'minutes', 'after', 'blocks', 'steps']) assert.deepEqual(filed[key], rich[key])
@@ -263,8 +263,8 @@ test('revision two metadata and relay shapes cross HTTP and CLI', async () => {
   const listed = await cli('list')
   assert.equal(listed.status, 0, listed.stderr)
   assert.ok(listed.stdout.includes('~5 min'))
-  assert.ok(listed.stdout.includes('unblocks: Calendar on staging, nightly import'))
-  const changed = { summary: 'Approve the revised setting', minutes: 10, after: 'The agent continues', blocks: ['nightly import'] }
+  assert.ok(listed.stdout.includes('unblocks: Calendar on staging and nightly import'))
+  const changed = { summary: 'Approve the revised setting', minutes: 10, after: 'The agent continues', blocks: 'nightly import' }
   const revised = await post(`/api/asks/${filed.ticket}/update`, changed)
   assert.equal(revised.status, 200, JSON.stringify(revised.json))
   assert.equal(revised.json.ask.revision, 2)
@@ -341,15 +341,15 @@ test('revision two validates step indexes and option descriptions', async () => 
   assert.equal(badDescription.json.path, 'fields[0].choices[0].description')
 })
 
-test('revision two queue order prioritizes parked, dependencies, age', async () => {
+test('revision two queue order prioritizes parked, blocked work, age', async () => {
   const requests = [
-    { ticket: 'old', created_at: 1, blocks: [], gating: false },
-    { ticket: 'busy', created_at: 3, blocks: ['one', 'two'], gating: false },
-    { ticket: 'parked', created_at: 4, blocks: [], gating: true },
-    { ticket: 'middle', created_at: 2, blocks: ['one'], gating: false },
+    { ticket: 'old', created_at: 1, blocks: undefined, gating: false },
+    { ticket: 'busy', created_at: 3, blocks: 'blocked work', gating: false },
+    { ticket: 'parked', created_at: 4, blocks: undefined, gating: true },
+    { ticket: 'middle', created_at: 2, blocks: 'blocked work', gating: false },
   ]
   const { sortAsks } = await import('../src/queue-model.js')
-  assert.deepEqual(sortAsks(requests).map(({ ticket }) => ticket), ['parked', 'busy', 'middle', 'old'])
+  assert.deepEqual(sortAsks(requests).map(({ ticket }) => ticket), ['parked', 'middle', 'busy', 'old'])
 })
 
 test('question recommendations validate choice membership at HTTP boundary', async () => {
