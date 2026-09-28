@@ -62,18 +62,16 @@ function AskList({ asks, products, hiddenProducts, toggleProduct, showAll, choos
   choose: (ticket: string) => void; showAnswered: () => void
 }) {
   const controls = (products.length >= 2 || (!asks.length && products.length > 0)) && (
-    <div className="products-control" aria-label="Products">
-      <span className="products-title">Products</span>
-      <div className="products-pills">
-        {products.map(([name, count]) => (
-          <label className={`product-pill${hiddenProducts.has(name) ? ' hidden' : ''}`} key={name}>
-            <input type="checkbox" checked={!hiddenProducts.has(name)} onChange={() => toggleProduct(name)} />
-            <span className="product-name">{name}</span>
-            <span className="product-count">{count}</span>
-          </label>
-        ))}
-      </div>
-    </div>
+    <nav className="product-filter" aria-label="Filter by product">
+      {products.map(([name, count]) => {
+        const shown = !hiddenProducts.has(name)
+        return (
+          <button type="button" key={name} className={`product-toggle${shown ? '' : ' off'}`} aria-pressed={shown}
+            title={shown ? `Hide ${name}` : `Show ${name}`} onClick={() => toggleProduct(name)}
+          >{name}<span className="product-count">{count}</span></button>
+        )
+      })}
+    </nav>
   )
   if (!asks.length) return (
     <main className="list-page empty-list">

@@ -94,21 +94,19 @@ h1 { margin: 20px 0 8px; font-size: 28px; line-height: 34px; font-weight: 600; o
 .why-lead { margin: 20px 0 24px; overflow-wrap: anywhere; }
 .why-section { margin: 20px 0 28px; }
 .why-section p { margin: 0; max-width: 68ch; white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-section { margin: 0 0 28px; min-width: 0; }
-.review-section h2 { margin: 0 0 10px; }
-.review-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
-.review-image { display: block; min-width: 0; text-decoration: none; font-size: 12px; color: var(--dim); }
-.review-image img { display: block; max-width: 100%; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 6px; }
-.review-image span { display: block; margin-top: 4px; overflow-wrap: anywhere; }
-.review-page { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  min-width: 0; width: 100%; padding: 12px 14px; margin-top: 8px; border: 1px solid var(--border);
-  border-radius: 8px; text-decoration: none; }
-.review-page:hover { background: var(--gray-bg); }
-.review-page-text { min-width: 0; }
-.review-page strong { display: block; font-weight: 500; overflow-wrap: anywhere; }
-.review-address { display: block; color: var(--dim); font: 12px/18px 'JetBrains Mono Variable', monospace;
+.review-section { margin: -8px 0 24px; min-width: 0; }
+.review-section h2 { margin: 0 0 6px; }
+.review-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.review-image { display: block; min-width: 0; max-width: 100%; }
+.review-image img { display: block; height: 88px; width: auto; max-width: 100%; object-fit: cover;
+  border: 1px solid var(--border); border-radius: 6px; }
+.review-page { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding: 3px 0;
+  text-decoration: none; color: var(--ink); }
+.review-page strong { flex-shrink: 0; max-width: 60%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-page:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+.review-address { min-width: 0; color: var(--dim); font: 12px/20px 'JetBrains Mono Variable', monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review-page > span:last-child { flex-shrink: 0; }
+.review-page strong span { color: var(--dim); font-weight: 400; }
 .step-links { margin: 14px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .send-error { margin: 12px 0 20px; padding: 10px 12px; border: 1px solid var(--red-text);
   border-radius: 8px; color: var(--red-text); font-size: 13px; overflow-wrap: anywhere; }
@@ -222,18 +220,14 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .receipt-images img { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
 .list-page { max-width: 720px; margin: 0 auto; padding: 36px 24px 80px; }
 .list-title { margin: 0 0 20px; font-size: 28px; line-height: 34px; }
-.products-control { margin-bottom: 20px; text-align: left; }
-.products-title { display: block; margin-bottom: 8px; color: var(--dim); font-size: 12px; font-weight: 600; }
-.products-pills { display: flex; flex-wrap: wrap; gap: 8px; }
-.product-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0;
-  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
-  font-size: 13px; line-height: 18px; }
-.product-pill input { width: 15px; height: 15px; margin: 0; accent-color: var(--ink); cursor: pointer; }
+.product-filter { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: -12px 0 12px; font-size: 13px; line-height: 20px; }
+.product-toggle { max-width: 100%; min-width: 0; padding: 2px 0; border: 0; background: none; color: var(--ink);
+  cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.product-toggle:not(.off):hover { text-decoration: underline; text-underline-offset: 3px; }
+.product-toggle.off { color: var(--dim); text-decoration: line-through; }
+.product-toggle .product-count { margin-left: 5px; color: var(--dim);
+  font: 11px/20px 'JetBrains Mono Variable', monospace; font-variant-numeric: tabular-nums; }
 .empty-actions { display: inline-flex; gap: 16px; }
-.product-pill .product-name { min-width: 0; overflow-wrap: anywhere; }
-.product-pill.hidden { color: var(--dim); }
-.product-pill .product-count { flex-shrink: 0; color: var(--dim);
-  font: 11px/18px 'JetBrains Mono Variable', monospace; font-variant-numeric: tabular-nums; }
 .next-card { padding: 28px 32px; }
 .next-card h2 { margin: 16px 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; overflow-wrap: anywhere; }
 .next-card p { margin: 0 0 12px; overflow-wrap: anywhere; }
@@ -260,7 +254,7 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
   .action-bar { padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); gap: 12px; }
   .action-status { font-size: 12px; }
   .open-link { display: flex; width: 100%; }
-  .receipt-images, .review-images { grid-template-columns: 1fr; }
+  .receipt-images { grid-template-columns: 1fr; }
   .list-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; }
   .row-answer { grid-column: 2; margin-left: 0; }
 }

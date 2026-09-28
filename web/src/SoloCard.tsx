@@ -129,8 +129,7 @@ function ReviewSection({ images, pages }: { images: Link[]; pages: Link[] }) {
     } catch { /* Show the original URL if it cannot be parsed. */ }
     return (
       <a key={link.url} className="review-page" href={link.url} target="_blank" rel="noopener noreferrer">
-        <span className="review-page-text"><strong>{link.label}</strong><span className="review-address">{address}</span></span>
-        <span aria-hidden="true">↗</span>
+        <strong>{link.label} <span aria-hidden="true">↗</span></strong><span className="review-address">{address}</span>
       </a>
     )
   }
@@ -140,10 +139,9 @@ function ReviewSection({ images, pages }: { images: Link[]; pages: Link[] }) {
       {!!images.length && (
         <div className="review-images">
           {images.filter((link) => !failed.has(link.url)).map((link) => (
-            <a key={link.url} className="review-image" href={link.url} target="_blank" rel="noopener noreferrer">
+            <a key={link.url} className="review-image" href={link.url} title={link.label} target="_blank" rel="noopener noreferrer">
               <img src={link.url} alt={link.label} loading="lazy"
                 onError={() => setFailed((previous) => new Set(previous).add(link.url))} />
-              <span>{link.label}</span>
             </a>
           ))}
         </div>
