@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, BASE, FinishedError, VIEWER } from './lib/api'
-import { ago, askKind, groupOf, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
+import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
 import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
 import { SoloCard } from './SoloCard'
@@ -56,13 +56,33 @@ function QueueRow({ ask, active, choose }: { ask: Ask; active: boolean; choose: 
     </button>
   )
 }
-function AskList({ asks, choose, showAnswered }: {
-  asks: Ask[]; choose: (ticket: string) => void; showAnswered: () => void
+function AskList({ asks, products, hiddenProducts, toggleProduct, showAll, choose, showAnswered }: {
+  asks: Ask[]; products: [string, number][]; hiddenProducts: ReadonlySet<string>
+  toggleProduct: (name: string) => void; showAll: () => void
+  choose: (ticket: string) => void; showAnswered: () => void
 }) {
+  const controls = (products.length >= 2 || (!asks.length && products.length > 0)) && (
+    <div className="products-control" aria-label="Products">
+      <span className="products-title">Products</span>
+      <div className="products-pills">
+        {products.map(([name, count]) => (
+          <label className={`product-pill${hiddenProducts.has(name) ? ' hidden' : ''}`} key={name}>
+            <input type="checkbox" checked={!hiddenProducts.has(name)} onChange={() => toggleProduct(name)} />
+            <span className="product-name">{name}</span>
+            <span className="product-count">{count}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  )
   if (!asks.length) return (
     <main className="list-page empty-list">
-      <p>Nothing waiting</p>
-      <button className="text-button" type="button" onClick={showAnswered}>Show answered</button>
+      {controls}
+      <p>{products.length ? 'Nothing waiting in the products you picked' : 'Nothing waiting'}</p>
+      <span className="empty-actions">
+        {!!products.length && <button className="text-button" type="button" onClick={showAll}>Show all products</button>}
+        <button className="text-button" type="button" onClick={showAnswered}>Show answered</button>
+      </span>
     </main>
   )
   const [first, ...others] = asks
@@ -93,6 +113,7 @@ function AskList({ asks, choose, showAnswered }: {
   )
   return (
     <main className="list-page">
+      {controls}
       {renderRow(first, true)}
       {others.map((ask) => renderRow(ask, false))}
     </main>
@@ -105,6 +126,23 @@ export default function App() {
   const [selectedTicket, setSelectedTicket] = useState<string | null>(pinned)
   const [showAnswered, setShowAnswered] = useState(false)
   const [doneTickets, setDoneTickets] = useState<ReadonlySet<string>>(new Set())
+  const [hiddenProducts, setHiddenProducts] = useState<ReadonlySet<string>>(() => {
+    try {
+      const names = JSON.parse(localStorage.getItem('unblock.hiddenProducts') || '[]')
+      return new Set(Array.isArray(names) ? names.filter((name): name is string => typeof name === 'string') : [])
+    } catch { return new Set() }
+  })
+  const updateHiddenProducts = (names: ReadonlySet<string>) => {
+    setHiddenProducts(names)
+    try { localStorage.setItem('unblock.hiddenProducts', JSON.stringify([...names])) }
+    catch { /* storage may be unavailable */ }
+  }
+  const toggleProduct = (name: string) => {
+    const names = new Set(hiddenProducts)
+    if (names.has(name)) names.delete(name)
+    else names.add(name)
+    updateHiddenProducts(names)
+  }
   // A share link (BASE = `/u/<token>`) has no human path to the passkey
   // routes; only the canonical, trusted-proxy page can enroll or approve.
   const passkeyAvailable = !BASE
@@ -146,10 +184,13 @@ export default function App() {
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  const asks = useMemo(
+  const openAsks = useMemo(
     () => sortAsks((data?.asks || []).filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))),
     [data, doneTickets],
   )
+  const products = useMemo(() => projectCounts(openAsks), [openAsks])
+  const asks = useMemo(() => hideProducts(openAsks, hiddenProducts), [openAsks, hiddenProducts])
+  const hiddenCount = openAsks.length - asks.length
   const selected = data?.asks.find((ask) => ask.ticket === selectedTicket)
   const currentIndex = asks.findIndex((ask) => ask.ticket === selectedTicket)
   const choose = useCallback((ticket: string) => {
@@ -218,7 +259,7 @@ export default function App() {
       <header className="topbar">
         <div className="top-inner">
           <span className="wordmark">unblock</span>
-          <span className="top-count">{asks.length} waiting</span>
+          <span className="top-count">{asks.length} waiting{hiddenCount > 0 && ` · ${hiddenCount} hidden`}</span>
           {VIEWER && <span className="viewer" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
         </div>
       </header>
@@ -260,7 +301,9 @@ export default function App() {
             <QueueRow key={ask.ticket} ask={ask} active={false} choose={choose} />
           ))}
         </main>
-      ) : <AskList asks={asks} choose={choose} showAnswered={() => setShowAnswered(true)} />}
+      ) : <AskList asks={asks} products={products} hiddenProducts={hiddenProducts}
+        toggleProduct={toggleProduct} showAll={() => updateHiddenProducts(new Set())}
+        choose={choose} showAnswered={() => setShowAnswered(true)} />}
     </>
   )
 }

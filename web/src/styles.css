@@ -207,6 +207,18 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .receipt-images img { display: block; max-width: 100%; border: 1px solid var(--border); border-radius: 6px; }
 .list-page { max-width: 720px; margin: 0 auto; padding: 36px 24px 80px; }
 .list-title { margin: 0 0 20px; font-size: 28px; line-height: 34px; }
+.products-control { margin-bottom: 20px; text-align: left; }
+.products-title { display: block; margin-bottom: 8px; color: var(--dim); font-size: 12px; font-weight: 600; }
+.products-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.product-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0;
+  padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  font-size: 13px; line-height: 18px; }
+.product-pill input { width: 15px; height: 15px; margin: 0; accent-color: var(--ink); cursor: pointer; }
+.empty-actions { display: inline-flex; gap: 16px; }
+.product-pill .product-name { min-width: 0; overflow-wrap: anywhere; }
+.product-pill.hidden { color: var(--dim); }
+.product-pill .product-count { flex-shrink: 0; color: var(--dim);
+  font: 11px/18px 'JetBrains Mono Variable', monospace; font-variant-numeric: tabular-nums; }
 .next-card { padding: 28px 32px; }
 .next-card h2 { margin: 16px 0 8px; font-size: 20px; line-height: 28px; font-weight: 600; overflow-wrap: anywhere; }
 .next-card p { margin: 0 0 12px; overflow-wrap: anywhere; }

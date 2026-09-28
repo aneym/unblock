@@ -96,6 +96,11 @@ export function buildDeck(asks) {
   return items
 }
 
+export function hideProducts(asks, hidden) {
+  const names = new Set(hidden)
+  return asks.filter((ask) => !names.has(groupOf(ask)))
+}
+
 /** [[project, open ask count]], busiest first, then alphabetical. */
 export function projectCounts(asks) {
   const counts = new Map()

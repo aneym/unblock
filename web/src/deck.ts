@@ -8,7 +8,9 @@
 import {
   buildDeck as buildDeckJs,
   groupOf as groupOfJs,
+  hideProducts as hideProductsJs,
   isMissing as isMissingJs,
+  projectCounts as projectCountsJs,
   selectDeck as selectDeckJs,
   sortAsks as sortAsksJs,
   unansweredFields as unansweredFieldsJs,
@@ -121,6 +123,8 @@ export interface Selection {
 }
 
 export const groupOf: (ask: Ask) => string = groupOfJs
+export const hideProducts: (asks: Ask[], hidden: Iterable<string>) => Ask[] = hideProductsJs
+export const projectCounts: (asks: Ask[]) => [string, number][] = projectCountsJs
 export const isMissing: (value: FieldValue | undefined) => boolean = isMissingJs
 export const unansweredFields: (ask: Ask) => Field[] = (ask) => unansweredFieldsJs<Field, Ask>(ask)
 export const sortAsks: (asks: Ask[]) => Ask[] = sortAsksJs
