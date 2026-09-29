@@ -57,7 +57,9 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
     if (id) drafts.delete(id)
     renderCards()
   } else if (typeof result.thread?.anchor?.section === 'string' && result.thread.created_at) upsert(result.thread)
-  else accept(await api(endpoint))
+  else {
+    try { accept(await api(endpoint)) } catch { /* The write landed; the next event or poll supplies the view. */ }
+  }
   return result
 }
 async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { return write('', body) }

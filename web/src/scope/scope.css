@@ -282,7 +282,7 @@ button:disabled { opacity:.5; cursor:default; }
 .choices .btn { flex:1 1 0; } mark.hl.parked { background:none; box-shadow:none; } body.show-resolved mark.hl.parked { background:var(--hl-r); cursor:pointer; } .card.parked { background:var(--card); }
 
 .fig.mermaid svg .node text { text-anchor:middle; }
-body.embed .bar { display: none; }
+body.embed .bar, body.embed #title > .eyebrow, body.embed #title > h1 { display: none; }
 body.embed .side-head { top: 0; }
 html:has(body.embed) { scroll-padding-top: 24px; }
 
