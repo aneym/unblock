@@ -144,7 +144,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (status === 'working' || status === 'blocked') {
           const first = job.holds.get(key) ?? Date.now()
           job.holds.set(key, first)
-          if (Date.now() - first < delay(process.env.UNBLOCK_SCOPE_HOLD_MAX_MS, 900000)) {
+          // A pane blocked on a permission prompt is never typed into; only a working pane hits the cap.
+          if (status === 'blocked' || Date.now() - first < delay(process.env.UNBLOCK_SCOPE_HOLD_MAX_MS, 900000)) {
             mark('held')
             held = true
             return
@@ -164,7 +165,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         }
       }
       if (notes.length) await send('own', pane, line, (status) => {
-        emitNotes(store.markScopeNotes(notes.map((note) => note.id), status, status === 'delivered' ? new Date().toISOString() : null))
+        // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
+        const ids = notes.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
+        emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
       })
       const batches = new Map()
       for (const target of targets) {
