@@ -289,14 +289,17 @@ function updateCount() {
   $('#openCount').innerHTML = `${list.length} open${i >= 0 ? `<small>${i + 1} of ${list.length}</small>` : ''}`
   $('#openLabel').textContent = `${list.length} open`
 }
+// Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
+function seekMoment(id: string) {
+  const anchor = scope?.threads.find(t => t.id === id)?.anchor as Anchor | undefined
+  const video = figureFor(marks(id)[0])?.querySelector<HTMLVideoElement>('video')
+  if (video && anchor?.t != null) video.currentTime = anchor.t
+}
 function focus(id: string | null, scroll = false, openSheet = true) {
   focused = id
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
   syncFigureFocus()
-  const anchor = scope?.threads.find(t => t.id === id)?.anchor as Anchor | undefined
-  const video = id && figureFor(marks(id)[0])?.querySelector<HTMLVideoElement>('video')
-  if (video && anchor?.t != null) video.currentTime = anchor.t
   if (id && scroll) { const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
   if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
   updateCount(); layout()
@@ -442,8 +445,8 @@ document.addEventListener('click', e => {
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
-  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); return }
-  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) focus(node.dataset.t!, true)
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
+  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; drafts.set(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
 let selectionTimer = 0
