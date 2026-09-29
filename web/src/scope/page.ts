@@ -7,8 +7,11 @@ import { prepareAudio } from '../lib/voice-audio'
 import type { ScopeVoiceUi, ScopeFeedLine } from '../../../src/scope-voice.js'
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string, root: ParentNode = document) => root.querySelector<T>(selector)!
-const slug = (window as any).__SCOPE_BOOT__?.slug || location.pathname.match(/^\/s\/([^/]+)/)?.[1]
-document.body.classList.toggle('embed', new URLSearchParams(location.search).get('embed') === '1')
+const boot = (window as any).__SCOPE_BOOT__ || {}
+const slug = boot.slug || location.pathname.match(/^\/s\/([^/]+)/)?.[1]
+const apiBase = (boot.api || '/api/scope').replace(/\/$/, '')
+const embed = boot.embed === true || new URLSearchParams(location.search).get('embed') === '1'
+document.body.classList.toggle('embed', embed)
 const doc = $('#doc'), cards = $('#cards'), detached = $('#detached'), sheet = $('#sheet')
 const phone = () => matchMedia('(max-width:899px)').matches
 const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} } }
@@ -16,8 +19,10 @@ const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZon
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
 let showResolved = storage.get('scope:showResolved') === 'true'
 let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
+type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
+const sending = new Map<string, Sending>()
 const pending = new Set<string>()
-function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? 'composer' : card.dataset.t; if (key && pending.has(key)) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? 'composer' : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
 const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
@@ -28,18 +33,44 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`); return result
 }
-const endpoint = `/api/scope/${encodeURIComponent(slug)}`
+const endpoint = `${apiBase}/${encodeURIComponent(slug)}`
 function upsert(thread: Thread) {
   if (!scope) return
   const i = scope.threads.findIndex(t => t.id === thread.id)
   if (i < 0) scope.threads.push(thread); else scope.threads[i] = thread
   render()
 }
-async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads`, body); upsert(result.thread); return result }
-async function postReply(id: string, body: { text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/reply`, body); upsert(result.thread); return result }
-async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/resolve`, body); upsert(result.thread); return result }
-async function postReject(id: string, body: { text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/reject`, body); upsert(result.thread); return result }
-async function postPark(id: string, body: { via?: 'voice' } = {}) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/park`, body); upsert(result.thread); return result }
+function clientId() {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+async function write(route: string, body: Record<string, unknown>, id?: string) {
+  const client_id = clientId()
+  const res = await fetch(`${endpoint}/threads${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, client_id }) })
+  const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`)
+  if (res.status === 202 || result.queued === true) {
+    const key = id || client_id
+    if (!hasClientId(client_id)) sending.set(key, { clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
+    if (id) drafts.delete(id)
+    renderCards()
+  } else if (result.thread) upsert(result.thread)
+  return result
+}
+async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { return write('', body) }
+async function postReply(id: string, body: { text: string; via?: 'voice' }) { return write(`/${id}/reply`, body, id) }
+async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice' }) { return write(`/${id}/resolve`, body, id) }
+async function postReject(id: string, body: { text: string; via?: 'voice' }) { return write(`/${id}/reject`, body, id) }
+async function postPark(id: string, body: { via?: 'voice' } = {}) { return write(`/${id}/park`, body, id) }
+function hasClientId(clientId: string) { return scope?.threads.some(t => t.messages.some(m => (m as any).client_id === clientId) || (t.resolution as any)?.client_id === clientId || (t as any).parked_client_id === clientId) || false }
+function sendingLine(item: Sending) { return `<div class="waiting sending" data-client="${esc(item.clientId)}" role="status">${Date.now() - item.at >= 120_000 ? 'Still sending. Admin will keep trying.' : 'Sending…'}${item.text ? ` &quot;${esc(item.text)}&quot;` : ''}</div>` }
+setInterval(() => {
+  document.querySelectorAll<HTMLElement>('.sending[data-client]').forEach(line => {
+    const item = [...sending.values()].find(item => item.clientId === line.dataset.client)
+    if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
+  })
+}, 10_000)
 function delivery(id: string) {
   const note = [...notes.values()].filter(n => n.thread === id).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
   return note ? ({ delivered: 'Sent to the lane', sending: 'Sent to the lane', queued: 'Sent to the lane', retrying: 'Retrying', no_pane: 'No pane' } as Record<string, string>)[note.delivery] || 'Retrying' : ''
@@ -47,7 +78,7 @@ function delivery(id: string) {
 function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   const lastAlex = t.messages.map(m => m.from).lastIndexOf('alex')
-  const mode = modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null)
+  const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
   let body = ''
@@ -60,10 +91,10 @@ function cardHtml(t: Thread) {
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${i + 1 === lastAlex && delivery(t.id) ? `<div class="delivery">${delivery(t.id)}</div>` : ''}</div>`).join('')}</div>` : ''}
-  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
-  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; node.innerHTML = cardHtml(t); return node
+  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
 }
 function highlight() {
   missing.clear()
@@ -86,7 +117,7 @@ function render() {
   const scroll = scrollY
   if (!initialized) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
   const askOpen = doc.querySelector<HTMLDetailsElement>('.ask-fold')?.open || false
-  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}</p>` : ''}`}</section>`).join('')
+  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p>` : ''}`}</section>`).join('')
   doc.querySelector('.ask-fold')?.addEventListener('toggle', layout)
   document.title = scope.title; highlight(); renderCards(); renderFeed(); void renderMermaid(doc, layout)
   scrollTo({ top: scroll, behavior: 'instant' })
@@ -98,6 +129,11 @@ function renderCards() {
   detached.replaceChildren()
   const gone = visible.filter(t => missing.has(t.id))
   if (gone.length) { detached.append('Detached · the text it was on changed', ...gone.map(card)) }
+  for (const item of sending.values()) if (!item.id && item.anchor) {
+    const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
+    node.innerHTML = `<div class="head"><span class="who">You commented</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
+    cards.append(node)
+  }
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', showResolved)
   const toggle = $<HTMLInputElement>('#showResolved'); toggle.checked = showResolved; toggle.toggleAttribute('checked', showResolved)
@@ -109,8 +145,9 @@ function layout() {
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
   const want = nodes.map(n => {
+    const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? mark : mark?.closest('details:not([open])')?.querySelector('summary')
-    return Math.max(8, (n.classList.contains('composer') ? selectionTop : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
+    return Math.max(8, (n.classList.contains('composer') ? selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
@@ -138,6 +175,7 @@ function step(direction: number) { const list = open(); if (!list.length) return
 function renderSheet() {
   const t = scope?.threads.find(t => t.id === focused); if (!t) { closeSheet(); return }
   const i = open().findIndex(x => x.id === t.id)
+  sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
   sheet.innerHTML = `<div class="grab"></div><div class="quote">On <q>${esc(t.anchor.quote)}</q></div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
 }
 function closeSheet() { document.body.classList.remove('sheet-open') }
@@ -161,7 +199,7 @@ function renderComposer() {
 async function action(name: string, target: HTMLElement) {
   if (name === 'comment') { composing = selection; renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? 'composer' : id!
-  if (pending.has(key)) return
+  if (pending.has(key) || sending.has(key)) return
   const text = (drafts.get(key) || '').trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { composing = null; drafts.delete('composer'); closeSheet(); renderCards() }; return }
   if (t && name === 'option') {
@@ -180,7 +218,7 @@ async function action(name: string, target: HTMLElement) {
   if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
   pending.add(key); disablePending()
   try {
-    if (name === 'post' && composing && text) { const anchor = composing; const result = await api<{ thread: Thread }>(`${endpoint}/threads`, { anchor, text }); composing = null; selection = null; drafts.delete(key); upsert(result.thread); focus(result.thread.id); return }
+    if (name === 'post' && composing && text) { const anchor = composing; const result = await postThread({ anchor, text }); composing = null; selection = null; drafts.delete(key); errors.delete(key); if (result.thread) focus(result.thread.id); else closeSheet(); return }
     if (!t) return
     if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text })
     else if (name === 'send' && mode === 'no') await postReject(t.id, { text })
@@ -189,7 +227,7 @@ async function action(name: string, target: HTMLElement) {
     else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve' })
     else if (name === 'park') await postPark(t.id)
     if ((drafts.get(key) || '').trim() === text) drafts.delete(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
-    if (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else') { closeSheet(); focused = open()[0]?.id || null }
+    if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
     renderCards()
   } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
   finally { pending.delete(key); renderCards() }
@@ -219,7 +257,7 @@ const feedRows: (ScopeFeedLine & { at: Date })[] = []
 let feedExpanded = false, feedClosed = false
 const feed = document.createElement('div')
 feed.className = 'voice-feed'; feed.setAttribute('aria-live', 'polite'); feed.setAttribute('aria-label', 'Voice activity'); feed.hidden = true
-if (new URLSearchParams(location.search).get('embed') !== '1') document.body.append(feed)
+if (!embed) document.body.append(feed)
 function positionFeed() {
   const capsule = document.querySelector<HTMLElement>('.voice-capsule')
   const bottom = capsule ? innerHeight - capsule.getBoundingClientRect().top + 8 : phone() ? 84 : 24
@@ -244,10 +282,18 @@ function renderFeed() {
   positionFeed()
 }
 function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }); if (feedRows.length > 50) feedRows.shift(); renderFeed() }
-$('#talk').onclick = async () => { try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
-function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; scope = payload.scope; for (const note of payload.notes || []) notes.set(note.id, note); render() }
+$('#talk').hidden = boot.voice === false
+$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
+let lastPayload = ''
+function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+  scope = payload.scope
+  const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]))
+  for (const [key, item] of sending) if (settled.has(item.clientId)) sending.delete(key)
+  for (const note of payload.notes || []) notes.set(note.id, note); render() }
 async function start() {
-  if (!slug) { const { scopes } = await api<{ scopes: any[] }>('/api/scope'); doc.innerHTML = `<h1>Scoping</h1>${scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join('')}`; return }
+  if (!slug) { const { scopes } = await api<{ scopes: any[] }>(apiBase); doc.innerHTML = `<h1>Scoping</h1>${scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join('')}`; return }
+  const poll = async () => { try { accept(await api(endpoint)); $('#live').textContent = 'Live' } catch { $('#live').textContent = 'Reconnecting' } }
+  if (boot.events === false) { await poll(); setInterval(() => void poll(), 5000); return }
   accept(await api(endpoint)); $('#live').textContent = 'Live'
   const events = new EventSource(`${endpoint}/events`)
   events.addEventListener('state', e => accept(JSON.parse((e as MessageEvent).data)))

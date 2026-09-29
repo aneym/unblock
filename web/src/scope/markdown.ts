@@ -64,6 +64,20 @@ export function markdown(source: string): string {
   }
   return out.join('')
 }
+const diagramSheets = new Map<HTMLElement, CSSStyleSheet[]>()
+function mountDiagram(node: HTMLElement, svg: string) {
+  for (const [owner, sheets] of diagramSheets) if (!owner.isConnected || owner === node) {
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(sheet => !sheets.includes(sheet)); diagramSheets.delete(owner)
+  }
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml')
+  const sheets: CSSStyleSheet[] = []
+  parsed.querySelectorAll('style').forEach(style => { const sheet = new CSSStyleSheet(); sheet.replaceSync(style.textContent || ''); sheets.push(sheet); style.remove() })
+  const styles: string[] = []
+  parsed.querySelectorAll('[style]').forEach(el => { el.setAttribute('data-scope-style', String(styles.length)); styles.push(el.getAttribute('style')!); el.removeAttribute('style') })
+  node.innerHTML = sanitizeSvg(new XMLSerializer().serializeToString(parsed.documentElement))
+  node.querySelectorAll<SVGElement>('[data-scope-style]').forEach(el => { el.style.cssText = styles[Number(el.getAttribute('data-scope-style'))]; el.removeAttribute('data-scope-style') })
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, ...sheets]; diagramSheets.set(node, sheets)
+}
 export async function renderMermaid(root: HTMLElement, onLoad: () => void) {
   const nodes = [...root.querySelectorAll<HTMLElement>('[data-mermaid]')]
   if (!nodes.length) return
@@ -72,7 +86,7 @@ export async function renderMermaid(root: HTMLElement, onLoad: () => void) {
     const style = getComputedStyle(document.documentElement)
     mermaid.initialize({ htmlLabels: false, flowchart: { htmlLabels: false }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: 'base', themeVariables: { primaryTextColor: style.getPropertyValue('--ink').trim(), primaryColor: style.getPropertyValue('--surface').trim(), primaryBorderColor: style.getPropertyValue('--hairline').trim(), lineColor: style.getPropertyValue('--accent').trim() } })
     for (const [i, node] of nodes.entries()) {
-      try { const { svg } = await mermaid.render(`scope-diagram-${Date.now()}-${i}`, node.dataset.mermaid!); if (node.isConnected) node.innerHTML = sanitizeSvg(svg) } catch { /* The source remains readable when a diagram is invalid. */ }
+      try { const { svg } = await mermaid.render(`scope-diagram-${Date.now()}-${i}`, node.dataset.mermaid!); if (node.isConnected) mountDiagram(node, svg) } catch { /* The source remains readable when a diagram is invalid. */ }
     }
   } catch { /* Offline diagrams retain their source. */ }
   onLoad()

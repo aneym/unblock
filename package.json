@@ -13,7 +13,8 @@
     "start": "node src/daemon.js",
     "test": "node --test test/*.test.js",
     "web:dev": "vite web",
-    "web:build": "vite build web"
+    "web:build": "vite build web",
+    "build:scope-bundle": "vite build web --mode scope-bundle"
   },
   "license": "MIT",
   "files": [
