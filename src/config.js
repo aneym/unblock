@@ -122,6 +122,9 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
     ['UNBLOCK_SECRET_BACKEND', normalizeSecretBackend(file.secret_backend)],
     ['UNBLOCK_REPING_AFTER_MS', normalizePositiveInteger(file.reping_after_ms)],
     ['UNBLOCK_REFUSE_WORKTREE_ORIGINS', normalizeBoolean(file.refuseWorktreeOrigins)],
+    ['UNBLOCK_VOICE_KEY_REF', typeof file.voice_key_ref === 'string' && file.voice_key_ref.trim() ? file.voice_key_ref.trim() : null],
+    ['UNBLOCK_VOICE_MODEL', typeof file.voice_model === 'string' && file.voice_model.trim() ? file.voice_model.trim() : null],
+    ['UNBLOCK_VOICE_NAME', typeof file.voice_name === 'string' && file.voice_name.trim() ? file.voice_name.trim() : null],
   ]
   for (const [name, value] of settings) {
     if (env[name] !== undefined && env[name] !== '') continue

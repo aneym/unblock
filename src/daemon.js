@@ -13,6 +13,7 @@ import {
 } from './passkey.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
+import { mintVoiceToken } from './voice-token.js'
 import { CLOSED_TO_ANSWERS, finished, PASSKEY_VERDICTS, Store } from './store.js'
 
 const VERSION = '0.1.0'
@@ -1005,6 +1006,19 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         hidden: store.countHidden(profile),
         profile,
       })
+    }
+    if (pathname === '/api/voice/session' && req.method === 'POST') {
+      requireHumanPath(req)
+      try {
+        return sendJson(res, 200, await mintVoiceToken({
+          keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key',
+          model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live',
+          voice: process.env.UNBLOCK_VOICE_NAME || 'Kore',
+        }))
+      } catch (error) {
+        if (error.code === 'VOICE_NOT_CONFIGURED') return sendJson(res, 503, { error: 'Voice is not configured', code: error.code })
+        return sendJson(res, 502, { error: 'Voice token service unavailable' })
+      }
     }
     if (pathname === '/api/answer' && req.method === 'POST') {
       const body = await readJson(req)

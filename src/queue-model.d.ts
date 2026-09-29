@@ -23,6 +23,9 @@ export const MAX_GROUP_ASKS: number
 export const MAX_GROUP_FIELDS: number
 
 export function groupOf<A>(ask: A): string
+export function hideProducts<A>(asks: A[], hidden: Iterable<string>): A[]
+export function isImageUrl(url: string): boolean
+export function reviewLinks<L = unknown, A = unknown>(ask: A): { images: L[]; pages: L[] }
 export function isMissing(value: unknown): boolean
 export function unansweredFields<F = unknown, A = unknown>(ask: A): F[]
 export function sortAsks<A>(asks: A[]): A[]

@@ -3,7 +3,7 @@ import type { Ask } from './deck'
 
 type Name = 'key' | 'click' | 'decision' | 'question' | 'permission' | 'consent' | 'spend' | 'message'
   | 'waiting' | 'answered' | 'park' | 'draft' | 'sent' | 'detected' | 'lock' | 'diamond' | 'arrow'
-  | 'fingerprint' | 'shield'
+  | 'fingerprint' | 'shield' | 'mic'
 export function Icon({ name, size = 18 }: { name: Name; size?: number }) {
   const paths: Record<Name, ReactNode> = {
     key: <><circle cx="7" cy="8" r="4" /><path d="m10 11 9 9m-3-3 2-2m-5-1 2-2" /></>,
@@ -35,6 +35,7 @@ export function Icon({ name, size = 18 }: { name: Name; size?: number }) {
       <path d="M9 6.8a6 6 0 0 1 9 5.2v2" />
     </>,
     shield: <path d="M12 2 4 5v6c0 5 3 8 8 11 5-3 8-6 8-11V5z" />,
+    mic: <><rect x="9" y="2" width="6" height="13" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8" /></>,
   }
   return (
     <svg

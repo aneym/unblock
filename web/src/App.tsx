@@ -5,6 +5,9 @@ import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
 import { SoloCard } from './SoloCard'
 import { dismissBanner, listPasskeys, type BannerEvent } from './lib/passkey'
+import { TalkButton, VoiceBar } from './VoiceBar'
+import type { TranscriptLine, VoiceState } from './lib/voice-live'
+import { prepareAudio } from './lib/voice-audio'
 
 function pinned() {
   const match = location.hash.match(/#ask=([^&]+)/)
@@ -169,6 +172,44 @@ export default function App() {
       else setError(cause instanceof Error ? cause.message : 'Unknown error')
     }
   }, [])
+  const [voiceState, setVoiceState] = useState<VoiceState | null>(null)
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([])
+  const call = useRef<{ stop(): void } | null>(null)
+  const starting = useRef(0)
+  const startCall = () => {
+    const attempt = ++starting.current
+    call.current?.stop()
+    call.current = null
+    setTranscript([])
+    let audio: AudioContext
+    try { audio = prepareAudio() }
+    catch (cause) {
+      setVoiceState({ name: 'error', message: cause instanceof Error ? cause.message : 'Audio is unavailable.' })
+      return
+    }
+    setVoiceState({ name: 'connecting' })
+    void import('./lib/voice-live').then(({ startVoiceCall }) => {
+      if (attempt !== starting.current) { void audio.close(); return }
+      call.current = startVoiceCall(audio, {
+        onState: setVoiceState,
+        onTranscript: (line) => setTranscript((previous) => {
+          const last = previous.at(-1)
+          return last?.who === line.who ? [...previous.slice(0, -1), line] : [...previous, line]
+        }),
+        onTicket: (ticket) => {
+          if (pinned() !== ticket) location.hash = `ask=${encodeURIComponent(ticket)}`
+          setSelectedTicket(ticket)
+          window.scrollTo(0, 0)
+          void load()
+        },
+        onChanged: () => { void load() },
+      })
+    }).catch((cause) => {
+      void audio.close()
+      if (attempt === starting.current) setVoiceState({ name: 'error', message: cause instanceof Error ? cause.message : 'Voice is unavailable.' })
+    })
+  }
+  useEffect(() => () => { starting.current++; call.current?.stop() }, [])
   useEffect(() => {
     void load()
     const timer = window.setInterval(() => {
@@ -259,8 +300,11 @@ export default function App() {
           <span className="wordmark">unblock</span>
           <span className="top-count">{asks.length} waiting{hiddenCount > 0 && ` · ${hiddenCount} hidden`}</span>
           {VIEWER && <span className="viewer" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
+          {VIEWER && !BASE && !finished && <TalkButton active={voiceState?.name === 'connecting' || voiceState?.name === 'listening' || voiceState?.name === 'speaking'} onClick={startCall} />}
         </div>
       </header>
+      {VIEWER && !BASE && <VoiceBar state={voiceState} transcript={transcript}
+        onEnd={() => { starting.current++; call.current?.stop(); call.current = null; setVoiceState({ name: 'ended' }) }} onRetry={startCall} />}
       {finished ? (
         <div className="empty"><h2>This link is done.</h2><p>The answer reached the agent.</p></div>
       ) : !data ? (
