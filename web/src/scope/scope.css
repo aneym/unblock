@@ -309,6 +309,9 @@ html:has(body.embed) { scroll-padding-top: 24px; }
 .fig.on { outline: 2px solid var(--accent); outline-offset: 3px; }
 .shots { min-width: 0; --shot-height: 360px; }
 .shots-row { display: flex; align-items: start; gap: 12px; min-width: 0; }
+.shots:not(.storyboard) .shots-row { flex-wrap: wrap; }
+.shots:not(.storyboard) button.shot { flex: none; }
+@media (min-width: 900px) { .shots:not(.storyboard) .shot picture, .shots:not(.storyboard) .shot img { height: 100%; object-fit: contain; } }
 button.shot { position: relative; display: block; flex-basis: 0; min-width: 0; padding: 0; border: 1px solid var(--hairline); border-radius: 10px; background: transparent; overflow: hidden; }
 button.shot[data-frame="phone"] { border-radius: 20px; }
 button.shot:hover, button.shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

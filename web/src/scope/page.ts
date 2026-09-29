@@ -148,7 +148,40 @@ function renderCards() {
 }
 function figureFor(mark: HTMLElement | undefined) { return mark?.closest('figcaption')?.closest<HTMLElement>('figure.fig') }
 function syncFigureFocus() { const figure = focused ? figureFor(marks(focused)[0]) : null; doc.querySelectorAll('figure.fig').forEach(node => node.classList.toggle('on', node === figure)) }
+function layoutShots() {
+  doc.querySelectorAll<HTMLElement>('.shots:not(.storyboard) .shots-row').forEach(row => {
+    const buttons = [...row.querySelectorAll<HTMLButtonElement>('button.shot')]
+    if (phone()) {
+      buttons.forEach(button => { button.style.width = ''; button.style.height = ''; button.style.flexGrow = ''; button.style.marginLeft = ''; button.style.marginRight = '' })
+      return
+    }
+    const width = row.getBoundingClientRect().width, gap = parseFloat(getComputedStyle(row).gap) || 0
+    if (!width) return
+    const aspect = (button: HTMLButtonElement) => {
+      const image = button.querySelector('img')!
+      return (Number(image.getAttribute('width')) || image.naturalWidth || 1) / (Number(image.getAttribute('height')) || image.naturalHeight || 1)
+    }
+    const lines: HTMLButtonElement[][] = []
+    let line: HTMLButtonElement[] = [], sum = 0
+    for (const button of buttons) {
+      const ratio = aspect(button)
+      if (line.length && (width - gap * line.length) / (sum + ratio) < 320) { lines.push(line); line = []; sum = 0 }
+      line.push(button); sum += ratio
+    }
+    if (line.length) lines.push(line)
+    for (const shots of lines) {
+      const sum = shots.reduce((sum, button) => sum + aspect(button), 0)
+      const height = Math.min((width - gap * (shots.length - 1)) / sum, 560)
+      const margin = Math.max(0, (width - gap * (shots.length - 1) - sum * height) / 2)
+      shots.forEach((button, i) => {
+        button.style.flexGrow = '0'; button.style.width = `${aspect(button) * height}px`; button.style.height = `${height}px`
+        button.style.marginLeft = i === 0 ? `${margin}px` : '0'; button.style.marginRight = i === shots.length - 1 ? `${margin}px` : '0'
+      })
+    }
+  })
+}
 function layout() {
+  layoutShots()
   if (phone()) return
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
