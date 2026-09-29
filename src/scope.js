@@ -1,11 +1,10 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
+import { normalizeAnchor, quoteSnippet, sectionLabel } from './scope-anchor.js'
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
 const QID = /^Q\d{1,3}$/
@@ -111,8 +110,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         job.again = false
         break
       }
-      const joined = notes.map((note) => `${note.qid ? `Alex on ${note.qid}` : 'Alex'}: ${compact(note.text)}`).join(' | ')
-      let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} "<one line>")`
+      const joined = notes.map((note) => {
+        const alex = note.via === 'voice' ? 'Alex (by voice)' : 'Alex'
+        const on = note.qid ? ` on ${note.qid}` : note.anchor ? ` on ${sectionLabel(note.anchor.section)} "${quoteSnippet(note.anchor.quote)}"` : ''
+        return `${alex}${on}: ${compact(note.text)} (#${note.id})`
+      }).join(' | ')
+      let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} [--to <#>] "<one line>")`
       if (line.length > 700) line = `[scoping ${slug}] Alex sent ${notes.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${notes[0].id - 1}`
       try {
         await promptPane(['agent', 'prompt', pane, line])
@@ -142,8 +145,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   function page(res, slug) {
     let html
     try {
-      const built = join(webRoot(), 'scope.html')
-      html = readFileSync(existsSync(built) ? built : join(ROOT, 'web', 'public', 'scope.html'), 'utf8')
+      html = readFileSync(join(webRoot(), 'scope.html'), 'utf8')
+        .replace(/(["'])\.\/assets\//g, '$1/assets/')
+        .replace(/(["'])\.\/favicon\.svg/g, '$1/favicon.svg')
     } catch {
       html = '<!doctype html><html><head><meta charset="utf-8"></head><body>Scoping page is not built.</body></html>'
     }
@@ -193,7 +197,18 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (action === 'note' && qid !== undefined && (!QID.test(qid) || !Array.isArray(state.scope?.questions) || !state.scope.questions.some((q) => q?.id === qid))) {
         return sendJson(res, 400, { error: 'invalid qid' })
       }
-      const note = store.addScopeNote({ slug, author: action === 'note' ? 'alex' : 'agent', kind: action === 'reply' ? 'reply' : qid ? 'answer' : 'thought', qid: action === 'note' ? qid : null, text, who: action === 'note' ? proxyIdentity(req).login : null })
+      let anchor = null
+      if (action === 'note') {
+        if (body.anchor !== undefined) {
+          anchor = normalizeAnchor(body.anchor)
+          if (!anchor || qid !== undefined) return sendJson(res, 400, { error: 'invalid anchor' })
+        }
+        if (body.via !== undefined && body.via !== 'voice') return sendJson(res, 400, { error: 'invalid via' })
+      }
+      if (action === 'reply' && body.to !== undefined && (!Number.isInteger(body.to) || !store.scopeNotes(slug, { author: 'alex' }).some((note) => note.id === body.to))) {
+        return sendJson(res, 400, { error: 'no such note to reply to' })
+      }
+      const note = store.addScopeNote({ slug, author: action === 'note' ? 'alex' : 'agent', kind: action === 'reply' ? 'reply' : qid ? 'answer' : 'thought', qid: action === 'note' ? qid : null, text, who: action === 'note' ? proxyIdentity(req).login : null, anchor, reply_to: action === 'reply' ? body.to ?? null : null, via: action === 'note' ? body.via ?? null : null })
       emit(slug, 'note', note)
       if (action === 'note') schedule(slug)
       return sendJson(res, 201, { note })

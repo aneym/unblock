@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
+import { quoteSnippet, sectionLabel } from '../src/scope-anchor.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const [command = 'list', ...input] = process.argv.slice(2)
@@ -350,8 +351,14 @@ async function scope(args) {
     const [sub, slug, ...words] = args
     if (!slug || !words.length) fail('usage: unblock scope reply <slug> <text...> [--json]')
     if (words.at(-1) === '--json') { json = true; words.pop() }
-    if (!words.length) fail('usage: unblock scope reply <slug> <text...> [--json]')
-    const data = await request(`/api/scope/${encodeURIComponent(slug)}/reply`, { text: words.join(' ') })
+    let to
+    if (words[0] === '--to') {
+      if (!/^\d+$/.test(words[1] ?? '') || !Number.isSafeInteger(Number(words[1]))) fail('--to must be an integer note id')
+      to = Number(words[1])
+      words.splice(0, 2)
+    }
+    if (!words.length) fail('usage: unblock scope reply <slug> [--to N] <text...> [--json]')
+    const data = await request(`/api/scope/${encodeURIComponent(slug)}/reply`, { text: words.join(' '), ...(to !== undefined ? { to } : {}) })
     return output(data, `replied #${data.note.id}`)
   }
   const { rest, opts } = flags(args, { '--since': true, '--from': true })
@@ -377,7 +384,7 @@ async function scope(args) {
     if (opts['--since'] !== undefined) query.set('since', opts['--since'])
     if (opts['--from']) query.set('from', opts['--from'])
     const data = await request(`/api/scope/${encodeURIComponent(slug)}/notes?${query}`)
-    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.qid ? ` [${note.qid}]` : ''} ${note.text}`).join('\n'))
+    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''}${note.qid ? ` [${note.qid}]` : ''}${note.anchor ? ` on ${sectionLabel(note.anchor.section)} "${quoteSnippet(note.anchor.quote)}"` : ''}${typeof note.reply_to === 'number' ? ` ↳ #${note.reply_to}` : ''} ${note.text}`).join('\n'))
   }
   fail('usage: unblock scope [list] | url <slug> | notes <slug> [--since N] [--from alex|agent] | reply <slug> <text...> [--json]')
 }

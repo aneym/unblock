@@ -1,4 +1,4 @@
-import { createVoiceSession, type VoiceProvider, type VoiceSessionToken, type VoiceSpend, type VoiceUi } from '../../../src/voice.js'
+import { createVoiceSession, type VoiceProvider, type VoiceSessionToken, type VoiceSpend, type VoiceUi, type VoiceToolDeclaration, VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from '../../../src/voice.js'
 import type { Ask } from '../deck'
 import { api, ApiError } from './api'
 import { createPlayer, startMic, voiceAudioError } from './voice-audio'
@@ -29,6 +29,13 @@ export interface VoiceAdapterCallbacks {
   onClose(clean: boolean, reason: string): void
 }
 
+export interface VoiceProfile {
+  prompt: string
+  tools: VoiceToolDeclaration[]
+  rules: { handle(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; speech: string; ui?: any; changed?: boolean }> }
+  session?: Record<string, unknown>
+}
+
 interface VoiceCallbacks {
   onState(state: VoiceState): void
   onTranscript(line: TranscriptLine): void
@@ -43,7 +50,7 @@ function messageOf(error: unknown): string {
 
 /** The AudioContext must be created and resumed by the tap handler before import(). */
 export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onUi, onChanged, onSession }: VoiceCallbacks,
-  options: { provider?: VoiceProvider } = {}): { stop(): void } {
+  options: { provider?: VoiceProvider; profile?: VoiceProfile } = {}): { stop(): void } {
   let stopped = false
   let live: VoiceAdapter | undefined
   let mic: { stop(): void } | undefined
@@ -63,7 +70,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   let awaitingGoodbyeAudio = false
   const cancelledCalls = new Set<string>()
   const player = createPlayer(audio)
-  const rules = createVoiceSession<Ask>({
+  const rules = options.profile?.rules ?? createVoiceSession<Ask>({
     getAsks: async () => (await api<{ asks: Ask[] }>('/api/queue')).asks,
     postAnswer: (body) => api('/api/answer', body),
     fileIssue: (issue) => api('/api/voice/issue', issue),
@@ -180,7 +187,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       // Fetch directly to retain the spend cap in a 402 response.
       const response = await fetch('/api/voice/session', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: options.provider }), cache: 'no-store',
+        body: JSON.stringify({ provider: options.provider, ...options.profile?.session }), cache: 'no-store',
       })
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { code?: string; error?: string; cap_usd?: number; spend?: VoiceSpend }
@@ -203,7 +210,8 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       }
       onSession({ provider: token.provider, spend: token.spend, maxMinutes: token.max_minutes })
       endTimer = window.setTimeout(end, token.max_minutes * 60_000)
-      live = token.provider === 'xai' ? await connectXai(token, callbacks) : await connectGemini(token, callbacks)
+      const profile = options.profile || { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }
+      live = token.provider === 'xai' ? await connectXai(token, callbacks, profile) : await connectGemini(token, callbacks, profile)
       if (stopped) { live.close(); return }
       await audio.resume()
       if (stopped) return

@@ -1,14 +1,14 @@
 import { GoogleGenAI, Modality, type FunctionDeclaration, type Session } from '@google/genai'
-import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, type VoiceSessionToken } from '../../../src/voice.js'
+import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, type VoiceSessionToken, type VoiceToolDeclaration } from '../../../src/voice.js'
 import type { VoiceAdapter, VoiceAdapterCallbacks } from './voice-live'
 
-export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks): Promise<VoiceAdapter> {
+export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[] } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
   const ai = new GoogleGenAI({ apiKey: token.token, httpOptions: { apiVersion: 'v1alpha' } })
   const live: Session = await ai.live.connect({
     model: token.model,
     config: {
-      responseModalities: [Modality.AUDIO], systemInstruction: VOICE_SYSTEM_PROMPT,
-      tools: [{ functionDeclarations: VOICE_TOOLS.map(({ name, description, parameters }) =>
+      responseModalities: [Modality.AUDIO], systemInstruction: profile.prompt,
+      tools: [{ functionDeclarations: profile.tools.map(({ name, description, parameters }) =>
         ({ name, description, parameters: parameters as FunctionDeclaration['parameters'] }) satisfies FunctionDeclaration) }],
       inputAudioTranscription: {}, outputAudioTranscription: {},
     },

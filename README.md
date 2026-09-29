@@ -281,6 +281,15 @@ prints the page URL, `unblock scope notes <slug> [--since N] [--from alex|agent]
 reads the thread, and `unblock scope reply <slug> <text...>` posts an agent reply.
 All support `--json`.
 
+Select text to leave an anchored comment: its quote follows the note to the
+lane and stays attached across plan rewrites. Reply under an Alex note with
+`unblock scope reply <slug> --to N <text...>`. Notes show their quote, reply
+target and whether they came by voice.
+
+Voice can read the scope, answer questions, send thoughts and comment on the
+selected or visible part. It uses the queue’s voice keys, spend ledger and
+$20 monthly cap; scoping calls have their own prompt and tools.
+
 ## Layout
 
 ```

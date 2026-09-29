@@ -1,7 +1,7 @@
-import { VOICE_SYSTEM_PROMPT, xaiTools, type VoiceSessionToken } from '../../../src/voice.js'
+import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, xaiTools, type VoiceSessionToken, type VoiceToolDeclaration } from '../../../src/voice.js'
 import type { VoiceAdapter, VoiceAdapterCallbacks } from './voice-live'
 
-export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks): Promise<VoiceAdapter> {
+export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[] } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`wss://api.x.ai/v1/realtime?model=${encodeURIComponent(token.model)}`,
       [`xai-client-secret.${token.token}`])
@@ -15,12 +15,12 @@ export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCall
       if (closed) { socket.close(); return }
       opened = true
       send({ type: 'session.update', session: {
-        voice: token.voice, instructions: VOICE_SYSTEM_PROMPT, turn_detection: { type: 'server_vad' },
+        voice: token.voice, instructions: profile.prompt, turn_detection: { type: 'server_vad' },
         audio: {
           input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'grok-transcribe' } },
           output: { format: { type: 'audio/pcm', rate: 24000 } },
         },
-        tools: xaiTools(),
+        tools: xaiTools(profile.tools),
       } })
       send({ type: 'conversation.item.create', item: {
         type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Start the call.' }],

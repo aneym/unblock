@@ -7,6 +7,7 @@ import test from 'node:test'
 import { startDaemon, loadOrCreateSecret } from '../src/daemon.js'
 import { mintVoiceToken, mintXaiToken } from '../src/voice-token.js'
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from '../src/voice.js'
+import { SCOPE_VOICE_PROMPT, SCOPE_VOICE_TOOLS } from '../src/scope-voice.js'
 
 test('mint locks the Live setup and carries the key only in a header', async () => {
   const key = 'test-only-value'
@@ -118,4 +119,21 @@ test('authenticated daemon voice session returns 503 when no key is configured',
     }
     rmSync(state, { recursive: true, force: true })
   }
+})
+
+// The provider pins these declarations: queue tools cannot handle scoping calls.
+test('scoping token pins the scoping prompt and tools', async () => {
+  let setup
+  await mintVoiceToken({
+    prompt: SCOPE_VOICE_PROMPT, tools: SCOPE_VOICE_TOOLS,
+    model: 'gemini-3.8-live-extended-thinking', readKey: async () => 'test-only-value',
+    fetch: async (_url, options) => {
+      setup = JSON.parse(options.body).bidiGenerateContentSetup
+      return { ok: true, json: async () => ({ name: 'auth_tokens/scope' }) }
+    },
+  })
+  assert.equal(setup.systemInstruction.parts[0].text, SCOPE_VOICE_PROMPT)
+  assert.deepEqual(setup.tools[0].functionDeclarations.map((tool) => tool.name),
+    ['scope_overview', 'scope_read', 'answer_question', 'comment', 'thought', 'show', 'end_call'])
+  assert.ok(setup.tools[0].functionDeclarations.every((tool) => tool.behavior === 'NON_BLOCKING'))
 })

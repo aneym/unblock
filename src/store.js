@@ -230,6 +230,7 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS scope_notes_slug_idx ON scope_notes(slug, id);
     `)
+    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT']]) this.#addColumn('scope_notes', name, type)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
@@ -269,14 +270,15 @@ export class Store {
       id: row.id, slug: row.slug, from: row.author, kind: row.kind,
       qid: row.qid, text: row.text, at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
+      anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: row.via === 'voice' ? 'voice' : null,
     }
   }
 
-  addScopeNote({ slug, author, kind, qid, text, who }) {
+  addScopeNote({ slug, author, kind, qid, text, who, anchor = null, reply_to = null, via = null }) {
     const at = new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO scope_notes
-      (slug, author, kind, qid, text, who, created_at, delivery)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null)
+      (slug, author, kind, qid, text, who, created_at, delivery, anchor, reply_to, via)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via)
     return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))
   }
 

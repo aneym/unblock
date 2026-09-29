@@ -1097,7 +1097,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         }
         try {
           const { keyRef, model, voice } = settings[provider]
-          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice }) : await mintXaiToken({ keyRef, model, voice })
+          const scopeVoice = body.profile === 'scope' && provider === 'gemini' ? await import('./scope-voice.js') : null
+          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice, ...(scopeVoice ? { prompt: scopeVoice.SCOPE_VOICE_PROMPT, tools: scopeVoice.SCOPE_VOICE_TOOLS } : {}) }) : await mintXaiToken({ keyRef, model, voice })
           return sendJson(res, 200, { ...token, ...reservation, spend: ledger.status() })
         } catch {
           ledger.settle(reservation.session_id, 0)
