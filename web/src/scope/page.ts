@@ -117,13 +117,19 @@ function render() {
   const scroll = scrollY
   if (!initialized) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
   const askOpen = doc.querySelector<HTMLDetailsElement>('.ask-fold')?.open || false
-  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p>` : ''}`}</section>`).join('')
+  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p>` : ''}`}</section>`).join('')
   doc.querySelector('.ask-fold')?.addEventListener('toggle', layout)
-  document.title = scope.title; highlight(); renderCards(); renderFeed(); void renderMermaid(doc, layout)
+  doc.querySelectorAll<HTMLButtonElement>('button.shot').forEach(button => {
+    const image = button.querySelector('img')!
+    const size = () => { const ratio = (Number(image.getAttribute('width')) || image.naturalWidth || 1) / (Number(image.getAttribute('height')) || image.naturalHeight || 1); button.style.flexGrow = String(ratio); button.style.width = `calc(var(--shot-height) * ${ratio})`; layout() }
+    image.addEventListener('load', size); size()
+  })
+  document.title = scope.title; highlight(); syncFigureFocus(); renderCards(); renderFeed(); void renderMermaid(doc, layout)
   scrollTo({ top: scroll, behavior: 'instant' })
   if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caret) }
 }
 function renderCards() {
+  syncFigureFocus()
   const visible = ordered().filter(t => t.status === 'open' || showResolved)
   cards.replaceChildren(...visible.filter(t => !missing.has(t.id)).map(card))
   detached.replaceChildren()
@@ -140,13 +146,15 @@ function renderCards() {
   if (!composing && phone() && document.body.classList.contains('sheet-open')) renderSheet()
   updateCount(); layout(); disablePending()
 }
+function figureFor(mark: HTMLElement | undefined) { return mark?.closest('figcaption')?.closest<HTMLElement>('figure.fig') }
+function syncFigureFocus() { const figure = focused ? figureFor(marks(focused)[0]) : null; doc.querySelectorAll('figure.fig').forEach(node => node.classList.toggle('on', node === figure)) }
 function layout() {
   if (phone()) return
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
   const want = nodes.map(n => {
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
-    const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? mark : mark?.closest('details:not([open])')?.querySelector('summary')
+    const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
     return Math.max(8, (n.classList.contains('composer') ? selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
@@ -167,8 +175,9 @@ function focus(id: string | null, scroll = false, openSheet = true) {
   focused = id
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
-  if (id && scroll) { const mark = marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
-  if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
+  syncFigureFocus()
+  if (id && scroll) { const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
+  if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
   updateCount(); layout()
 }
 function step(direction: number) { const list = open(); if (!list.length) return; const index = list.findIndex(t => t.id === focused); focus(list[Math.max(0, Math.min(list.length - 1, index < 0 ? 0 : index + direction))].id, true) }
@@ -187,6 +196,7 @@ function showSelection() {
   else { button.style.top = `${selectionTop - scrollY - cards.getBoundingClientRect().top - 4}px`; cards.append(button) }
 }
 function readSelection() {
+  if (!zoom.hidden) return
   const sel = getSelection(); if (!sel?.rangeCount || sel.isCollapsed) { if (!document.activeElement?.closest('.card,.add')) { selection = null; showSelection() } return }
   const range = sel.getRangeAt(0), anchor = anchorFromRange(range)
   if (anchor) { selection = anchor; selectionTop = range.getBoundingClientRect().top + scrollY; showSelection() }
@@ -232,8 +242,57 @@ async function action(name: string, target: HTMLElement) {
   } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
   finally { pending.delete(key); renderCards() }
 }
+const zoom = document.createElement('div')
+zoom.className = 'zoom'; zoom.hidden = true; zoom.setAttribute('role', 'dialog'); zoom.setAttribute('aria-modal', 'true')
+zoom.innerHTML = '<div class="zoom-view"><img alt=""></div><div class="zoom-bar"><span class="zoom-caption"></span><span class="zoom-count"></span><a target="_blank" rel="noopener">Open live mock</a><button type="button" aria-label="Close">Close</button></div>'
+document.body.append(zoom)
+const zoomImage = $<HTMLImageElement>('img', zoom), zoomView = $('.zoom-view', zoom)
+let zoomShots: HTMLButtonElement[] = [], zoomIndex = 0, zoomScroll = 0, zoomFigureIndex = 0
+function showZoomShot() {
+  const button = zoomShots[zoomIndex], image = button.querySelector('img')!, asset = scope?.doc.assets?.[button.dataset.asset!]
+  const caption = button.closest('figure')?.querySelector('figcaption')?.textContent || image.alt
+  zoom.setAttribute('aria-label', caption); $('.zoom-caption', zoom).textContent = caption
+  $('.zoom-count', zoom).textContent = zoomShots.length > 1 ? ` ${zoomIndex + 1} of ${zoomShots.length} ` : ''
+  const link = $<HTMLAnchorElement>('a', zoom); link.hidden = asset?.type !== 'mock'; link.textContent = asset?.type === 'mock' ? 'Open live mock' : ''
+  if (asset?.type === 'mock') link.href = `${endpoint}/assets/${encodeURIComponent(asset.html)}`
+  zoom.classList.remove('actual'); zoomImage.style.width = ''; zoomView.scrollTo(0, 0)
+  zoomImage.alt = image.alt
+  zoomImage.src = asset?.type === 'mock' ? `${endpoint}/assets/${encodeURIComponent(matchMedia('(prefers-color-scheme: dark)').matches && asset.dark ? asset.dark : asset.light)}` : image.src
+}
+function openZoom(button: HTMLButtonElement) {
+  zoomFigureIndex = [...doc.querySelectorAll('figure.fig.shots')].indexOf(button.closest('figure')!)
+  zoomShots = [...button.closest('figure')!.querySelectorAll<HTMLButtonElement>('button.shot')]; zoomIndex = zoomShots.indexOf(button); zoomScroll = scrollY
+  zoom.hidden = false; document.body.classList.add('zoom-open'); showZoomShot(); $('button', zoom).focus({ preventScroll: true })
+}
+function closeZoom() {
+  zoom.hidden = true; document.body.classList.remove('zoom-open'); scrollTo({ top: zoomScroll, behavior: 'instant' })
+  const stored = zoomShots[zoomIndex]
+  const figure = doc.querySelectorAll('figure.fig.shots')[zoomFigureIndex]
+  const current = figure && [...figure.querySelectorAll<HTMLButtonElement>('button.shot')]
+  const target = stored?.isConnected ? stored : current && (current.find(button => button.dataset.asset === stored?.dataset.asset) || current[zoomIndex])
+  target?.focus({ preventScroll: true })
+}
+function moveZoom(direction: number) { const next = zoomIndex + direction; if (next >= 0 && next < zoomShots.length) { zoomIndex = next; showZoomShot() } }
+$('button', zoom).onclick = closeZoom
+zoom.onclick = e => { if (e.target === zoom || e.target === zoomView) closeZoom() }
+zoomImage.onclick = () => { const actual = zoom.classList.toggle('actual'); zoomImage.style.width = actual ? `${zoomImage.naturalWidth / devicePixelRatio}px` : '' }
+let swipeStart: { x: number; y: number } | null = null
+zoom.addEventListener('touchstart', e => { const t = e.touches[0]; swipeStart = { x: t.clientX, y: t.clientY } }, { passive: true })
+zoom.addEventListener('touchend', e => { const t = e.changedTouches[0]; if (!zoom.classList.contains('actual') && swipeStart && Math.abs(t.clientX - swipeStart.x) >= 40 && Math.abs(t.clientX - swipeStart.x) > Math.abs(t.clientY - swipeStart.y)) moveZoom(t.clientX < swipeStart.x ? 1 : -1); swipeStart = null }, { passive: true })
+document.addEventListener('keydown', e => {
+  if (zoom.hidden) return
+  e.stopImmediatePropagation()
+  if (['Escape', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key)) e.preventDefault()
+  if (e.key === 'Escape') closeZoom()
+  else if (e.key === 'ArrowLeft') moveZoom(-1)
+  else if (e.key === 'ArrowRight') moveZoom(1)
+  else if (e.key === 'Tab') { const controls = [...zoom.querySelectorAll<HTMLElement>('a:not([hidden]),button')]; const i = controls.indexOf(document.activeElement as HTMLElement); controls[(i + (e.shiftKey ? -1 : 1) + controls.length) % controls.length].focus() }
+})
 document.addEventListener('click', e => {
-  const target = e.target as HTMLElement, button = target.closest<HTMLElement>('[data-action]')
+  const target = e.target as HTMLElement
+  const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
+  if (!zoom.hidden) return
+  const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
   const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); return }
@@ -247,10 +306,10 @@ $('#next').onclick = $('#chipNext').onclick = () => step(1)
 $('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
 $('#scrim').onclick = closeSheet
 $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
+document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
 addEventListener('resize', layout); document.fonts.ready.then(layout)
 let scrollTimer = 0
-addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { showSelection(); const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
+addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 const feedRows: (ScopeFeedLine & { at: Date })[] = []

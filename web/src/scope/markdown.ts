@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import type { DocAsset } from '../../../src/scope-doc.js'
 
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 export function sanitizeSvg(source: string): string {
@@ -23,15 +24,36 @@ function inline(text: string): string {
   const expand = (html: string): string => html.replace(/\u0000(\d+)\u0000/g, (_, index: string) => expand(tokens[Number(index)]))
   return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>'))
 }
-export function markdown(source: string): string {
+export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = ''): string {
   const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
   let i = 0
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
   const caption = () => /^Figure:\s*/.test(lines[i] || '') ? `<figcaption>${inline(lines[i++].replace(/^Figure:\s*/, ''))}</figcaption>` : ''
+  const imageLine = (line: string) => line?.match(/^\s*!\[[^\]\n]*\]\([^\n]*\)\s*$/)
+  const assetUrl = (id: string) => esc(`${assetBase}/${encodeURIComponent(id)}`)
   const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
   while (i < lines.length) {
     const line = lines[i]
     if (!line.trim()) { i++; continue }
+    if (imageLine(line)) {
+      const shots: string[] = []
+      let count = 0
+      while (imageLine(lines[i])) {
+        const match = lines[i++].match(/^\s*!\[([^\]\n]*)\]\(asset:(\S+?)(?: "([^"\n]*)")?\)\s*$/)
+        const [, alt, id, title] = match || []
+        const asset = id && Object.hasOwn(assets, id) ? assets[id] : undefined
+        if (!asset) { shots.push('<div class="shot-missing" data-cm-skip>Image unavailable</div>'); continue }
+        const frame = asset.type === 'mock' ? asset.frame === 'phone' ? 'phone' : 'desktop' : title === 'phone' ? 'phone' : 'image'
+        const src = asset.type === 'mock' ? asset.light : id
+        count++
+        shots.push(`<button type="button" class="shot" data-asset="${esc(id)}" data-frame="${frame}" aria-label="Zoom: ${esc(alt)}"><picture>${asset.type === 'mock' && asset.dark ? `<source media="(prefers-color-scheme: dark)" srcset="${assetUrl(asset.dark)}">` : ''}<img src="${assetUrl(src)}"${asset.width && asset.height ? ` width="${asset.width}" height="${asset.height}"` : ''} alt="${esc(alt)}" loading="lazy" decoding="async"></picture><span class="shot-n">${count}</span></button>`)
+      }
+      const cap = caption()
+      const row = shots.map(shot => count > 1 ? shot : shot.replace(/<span class="shot-n">\d+<\/span>/, '')).join('')
+      if (count) out.push(`<figure class="fig shots${count >= 4 ? ' storyboard' : ''}"><div class="shots-row" data-cm-skip>${row}</div>${cap}</figure>`)
+      else out.push(row + cap)
+      continue
+    }
     if (/^```/.test(line)) {
       const f = fence()
       if (f.lang === 'svg') {
@@ -42,7 +64,7 @@ export function markdown(source: string): string {
       continue
     }
     const callout = line.match(/^>\s*\[!(NOTE|TIP|WARNING)\]\s*(.*)/)
-    if (callout) { const body = [callout[2]]; i++; while (/^>/.test(lines[i] || '')) body.push(lines[i++].replace(/^>\s?/, '')); out.push(`<div class="callout ${callout[1].toLowerCase()}">${markdown(body.join('\n'))}</div>`); continue }
+    if (callout) { const body = [callout[2]]; i++; while (/^>/.test(lines[i] || '')) body.push(lines[i++].replace(/^>\s?/, '')); out.push(`<div class="callout ${callout[1].toLowerCase()}">${markdown(body.join('\n'), assets, assetBase)}</div>`); continue }
     if (/^>/.test(line)) {
       const quotes: string[] = []
       while (/^>/.test(lines[i] || '')) { const text = lines[i++].replace(/^>\s?/, ''); const src = /^>\s*—/.test(lines[i] || '') ? lines[i++].replace(/^>\s*/, '') : ''; quotes.push(`<li><q>${inline(text.replace(/^["“]|["”]$/g, ''))}</q>${src ? `<span class="src">${inline(src)}</span>` : ''}</li>`) }
@@ -59,7 +81,7 @@ export function markdown(source: string): string {
       out.push(`<${tag}>${items.join('')}</${tag}>`); continue
     }
     const para = [lines[i++]]
-    while (i < lines.length && lines[i].trim() && !/^(?:```|>|#{1,4}\s|\s*[-*]\s|\s*\d+[.)]\s)/.test(lines[i])) para.push(lines[i++])
+    while (i < lines.length && lines[i].trim() && !imageLine(lines[i]) && !/^(?:```|>|#{1,4}\s|\s*[-*]\s|\s*\d+[.)]\s)/.test(lines[i])) para.push(lines[i++])
     out.push(`<p>${inline(para.join(' '))}</p>`)
   }
   return out.join('')
