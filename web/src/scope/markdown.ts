@@ -106,7 +106,7 @@ export async function renderMermaid(root: HTMLElement, onLoad: () => void) {
   try {
     const { default: mermaid } = await import('mermaid')
     const style = getComputedStyle(document.documentElement)
-    mermaid.initialize({ htmlLabels: false, flowchart: { htmlLabels: false }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: 'base', themeVariables: { primaryTextColor: style.getPropertyValue('--ink').trim(), primaryColor: style.getPropertyValue('--surface').trim(), primaryBorderColor: style.getPropertyValue('--hairline').trim(), lineColor: style.getPropertyValue('--accent').trim() } })
+    mermaid.initialize({ layout: 'dagre', htmlLabels: false, flowchart: { htmlLabels: false }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: 'base', themeVariables: { primaryTextColor: style.getPropertyValue('--ink').trim(), primaryColor: style.getPropertyValue('--surface').trim(), primaryBorderColor: style.getPropertyValue('--hairline').trim(), lineColor: style.getPropertyValue('--accent').trim() } })
     for (const [i, node] of nodes.entries()) {
       try { const { svg } = await mermaid.render(`scope-diagram-${Date.now()}-${i}`, node.dataset.mermaid!); if (node.isConnected) mountDiagram(node, svg) } catch { /* The source remains readable when a diagram is invalid. */ }
     }

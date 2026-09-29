@@ -321,6 +321,14 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight') moveZoom(1)
   else if (e.key === 'Tab') { const controls = [...zoom.querySelectorAll<HTMLElement>('a:not([hidden]),button')]; const i = controls.indexOf(document.activeElement as HTMLElement); controls[(i + (e.shiftKey ? -1 : 1) + controls.length) % controls.length].focus() }
 })
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.isComposing) return
+  const target = e.target
+  if (!(target instanceof HTMLTextAreaElement) || !target.matches('textarea[data-draft]')) return
+  e.preventDefault()
+  const button = target.closest('.reply')?.querySelector<HTMLElement>('.btn.primary[data-action]')
+  if (button) void action(button.dataset.action!, button)
+})
 document.addEventListener('click', e => {
   const target = e.target as HTMLElement
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }

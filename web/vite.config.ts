@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const bundle = mode === 'scope-bundle'
   return {
     base: './',
+    resolve: { alias: { 'elkjs/lib/elk.bundled.js': resolve(dir, 'src/scope/elk-stub.ts') } },
     build: { outDir: bundle ? 'dist-scope' : 'dist', rollupOptions: { input: bundle ? resolve(dir, 'scope.html') : { main: resolve(dir, 'index.html'), scope: resolve(dir, 'scope.html') } } },
     plugins: [react(), tailwindcss(), ...(bundle ? [{
       name: 'scope-bundle',
