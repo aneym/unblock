@@ -152,7 +152,7 @@ test('set_speed returns steps and rounded, clamped multipliers only on Grok', as
       [{ speed: 1.3 }, { do: 'speed', value: 1.3 }, 'Okay, 1.3 times.'],
       [{ speed: 3 }, { do: 'speed', value: 1.5 }, 'Okay, 1.5 times.'],
       [{ speed: 0.1 }, { do: 'speed', value: 0.7 }, 'Okay, 0.7 times.'],
-      [{ speed: 1.234 }, { do: 'speed', value: 1.23 }, 'Okay, 1.23 times.'],
+      [{ speed: 1.234 }, { do: 'speed', value: 1.2 }, 'Okay, 1.2 times.'],
     ]) assert.deepEqual(await voice.handle('set_speed', args), { ok: true, speech, ui })
   }
   const gemini = createVoiceSession({ provider: 'gemini', getAsks: async () => [], postAnswer: async () => ({}) })

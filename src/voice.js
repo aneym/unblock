@@ -237,7 +237,7 @@ export function createVoiceSession(deps) {
         if (name === 'set_speed') {
           if (deps.provider === 'gemini') return fail('I can only change my speed on Grok. Tap Switch to Grok to use it.')
           if (typeof args.speed === 'number' && Number.isFinite(args.speed)) {
-            const value = Math.round(Math.max(0.7, Math.min(1.5, args.speed)) * 100) / 100
+            const value = Math.round(Math.max(0.7, Math.min(1.5, args.speed)) * 10) / 10
             return { ok: true, speech: `Okay, ${value} times.`, ui: { do: 'speed', value } }
           }
           if (!['faster', 'slower', 'normal'].includes(args.change)) return fail('Tell me a speed, or say faster, slower, or normal.')

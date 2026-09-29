@@ -134,6 +134,19 @@ test('scoping token pins the scoping prompt and tools', async () => {
   })
   assert.equal(setup.systemInstruction.parts[0].text, SCOPE_VOICE_PROMPT)
   assert.deepEqual(setup.tools[0].functionDeclarations.map((tool) => tool.name),
-    ['next_question', 'previous_question', 'read_thread', 'next_section', 'previous_section', 'go_to_section', 'show_resolved', 'scroll', 'answer', 'take_recommendation', 'reject', 'park', 'confirm', 'cancel', 'resolve', 'comment', 'reply', 'end_call'])
+    ['next_question', 'previous_question', 'read_thread', 'next_section', 'previous_section', 'go_to_section', 'show_resolved', 'scroll', 'answer', 'take_recommendation', 'reject', 'park', 'confirm', 'cancel', 'resolve', 'comment', 'reply', 'set_speed', 'end_call'])
   assert.ok(setup.tools[0].functionDeclarations.every((tool) => tool.behavior === 'NON_BLOCKING'))
+})
+
+test('Gemini locks a brisk instruction into queue and scope tokens only above normal speed', async () => {
+  for (const prompt of [VOICE_SYSTEM_PROMPT, SCOPE_VOICE_PROMPT]) {
+    for (const speed of [1, 1.5]) {
+      let setup
+      await mintVoiceToken({ prompt, speed, readKey: async () => 'test-only-value', fetch: async (_url, options) => {
+        setup = JSON.parse(options.body).bidiGenerateContentSetup
+        return { ok: true, json: async () => ({ name: 'auth_tokens/brisk' }) }
+      } })
+      assert.equal(setup.systemInstruction.parts[0].text, prompt + (speed > 1 ? '\nSpeak quickly, at a brisk pace, with no pauses between sentences.' : ''))
+    }
+  }
 })

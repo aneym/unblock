@@ -14,7 +14,7 @@
  */
 import type { Anchor } from './scope-anchor.js'
 import type { ScopeV2, Thread } from './scope-doc.js'
-import type { VoiceToolDeclaration } from './voice.js'
+import type { VoiceProvider, VoiceToolDeclaration } from './voice.js'
 
 /** Everything the model may call on a scoping page (Gemini schema; xaiTools() converts). */
 export const SCOPE_VOICE_TOOLS: VoiceToolDeclaration[]
@@ -36,6 +36,8 @@ export type ScopeVoiceUi =
   | { do: 'scroll'; direction: 'up' | 'down' }
   /** End the call once the goodbye has played. */
   | { do: 'end_call' }
+  /** Speaking speed (voice-live applies it; same shape as VoiceUi 'speed'): value is exact, change steps by 0.1 ('normal' = 1). */
+  | { do: 'speed'; value?: number; change?: 'faster' | 'slower' | 'normal' }
 
 export interface ScopeToolResult {
   ok: boolean
@@ -44,7 +46,38 @@ export interface ScopeToolResult {
   ui?: ScopeVoiceUi
 }
 
+/**
+ * One row of the page's live tool feed (Alex, 2026-09-29: "live tool call feed and more visibility into what's going on").
+ * The session calls deps.onFeed once per handle(), after the tool ran, success or not. Feed text is shown, never spoken,
+ * so it may carry thread ids and § headings. <q> is a thread's first message or his words, cut to 10 words with '…'.
+ * Labels (exact):
+ * - next_question / previous_question → "Next question: T3" / "Previous question: T3"; read_thread → "Read T3 aloud".
+ * - next_section / previous_section / go_to_section → "Went to §<heading>".
+ * - show_resolved → "Showing resolved" / "Hiding resolved"; scroll → "Scrolled down" / "Scrolled up".
+ * - answer on a question, or resolve with a decision → 'Proposed for T3: "<q>"'; cancel → "Dropped the proposal".
+ * - confirm → 'Resolved T3: "<q of the decision>"'; take_recommendation → "Took the recommendation on T3";
+ *   resolve at once on a comment → "Resolved T4".
+ * - reject → "Said No on T3", plus ': "<q of the reason>"' when he gave one; park → "Parked T3".
+ * - comment → "Commented on §<heading> (T7)" (the new thread); reply, or answer on a comment → "Replied on T3".
+ * - end_call → "Ended the call".
+ * - set_speed → "Speed 1.3×" (a set value, as the ui carries it) / "Faster" / "Slower" / "Normal speed".
+ * - Any ok:false result → "Not done: <its speech>".
+ * write = true only for a call that posted (confirm, take_recommendation, reject, park, an immediate resolve,
+ * comment, reply, answer on a comment) and succeeded; thread = the thread it acted on (or moved to), when there is one.
+ */
+export interface ScopeFeedLine {
+  tool: string
+  label: string
+  ok: boolean
+  write: boolean
+  thread?: string
+}
+
 export interface ScopeVoiceDeps {
+  /** Optional: receives one feed line per tool call (see ScopeFeedLine). Never affects the tool result, even if it throws. */
+  onFeed?(line: ScopeFeedLine): void
+  /** Optional: the provider this call runs on, once known. Speaking speed works only on 'xai'. */
+  getProvider?(): VoiceProvider | undefined
   /** Current scope (GET /api/scope/<slug>). Called before every tool. */
   getScope(): Promise<{ slug: string; scope: ScopeV2 }>
   /**
@@ -101,7 +134,11 @@ export interface ScopeVoiceSession {
  *   else the title; postThread at once; speech "Posted."
  * - reply { text }: on the focused thread, postReply at once; speech "Sent."
  * - end_call {}: speech "Talk soon.", ui end_call.
- * Any new tool call other than confirm drops a pending proposal. Blank text → ok:false "I didn't catch that."
+ * - set_speed { speed?: NUMBER, change?: 'faster'|'slower'|'normal' }: "talk faster", "slow down", "normal speed",
+ *   "go 1.3". Not a proposal: it never touches a pending one. getProvider() === 'gemini' → ok:false
+ *   "I can only change speed on Grok." A finite speed → clamp to 0.7–1.5, round to 0.1, speech "Okay." ui { do:'speed', value };
+ *   else a valid change → speech "Okay." ui { do:'speed', change }; else ok:false "Say faster, slower, or a number."
+ * Any new tool call other than confirm and set_speed drops a pending proposal. Blank text → ok:false "I didn't catch that."
  * A post that rejects → ok:false "That didn't send: <message>."
  */
 export function createScopeVoiceSession(deps: ScopeVoiceDeps): ScopeVoiceSession

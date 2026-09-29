@@ -53,8 +53,8 @@ function messageOf(error: unknown): string {
 /** The AudioContext must be created and resumed by the tap handler before import(). */
 export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onUi, onChanged, onSession }: VoiceCallbacks,
   options: { provider?: VoiceProvider; profile?: VoiceProfile } = {}): { stop(): void; setSpeed(v: number): void } {
-  const clampSpeed = (v: number) => Math.round(Math.max(0.7, Math.min(1.5, Number.isFinite(v) ? v : 1)) * 100) / 100
-  let speed = 1
+  const clampSpeed = (v: number) => Math.round(Math.max(0.7, Math.min(1.5, Number.isFinite(v) ? v : 1.5)) * 10) / 10
+  let speed = 1.5
   try {
     const saved = localStorage.getItem('unblock.voice.speed')
     if (saved !== null) speed = clampSpeed(Number(saved))
@@ -176,7 +176,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
             }
             if (result.ui.do === 'speed') {
               const ui = result.ui as Extract<VoiceUi, { do: 'speed' }>
-              setSpeed(ui.value ?? (ui.change === 'normal' ? 1 : speed + (ui.change === 'faster' ? 0.15 : ui.change === 'slower' ? -0.15 : 0)))
+              setSpeed(ui.value ?? (ui.change === 'normal' ? 1 : speed + (ui.change === 'faster' ? 0.1 : ui.change === 'slower' ? -0.1 : 0)))
             }
             if (result.ui.do === 'filed') {
               window.dispatchEvent(new CustomEvent('unblock:voice-filed', { detail: result.ui }))
@@ -206,7 +206,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       // Fetch directly to retain the spend cap in a 402 response.
       const response = await fetch('/api/voice/session', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: options.provider, ...options.profile?.session }), cache: 'no-store',
+        body: JSON.stringify({ provider: options.provider, speed, ...options.profile?.session }), cache: 'no-store',
       })
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { code?: string; error?: string; cap_usd?: number; spend?: VoiceSpend }

@@ -51,8 +51,18 @@
   .voice-capsule { gap: 9px; padding: 10px 12px; }
 }
 @media (max-width: 480px) {
-  .voice-capsule { width: calc(100vw - 24px); }
+  .voice-capsule { width: calc(100vw - 32px); }
   .voice-desktop-switch { display: none; }
   .voice-mobile-switch { display: inline; }
   .voice-mobile-switch .voice-switch { padding: 0; font-size: inherit; line-height: inherit; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 }
+
+.voice-speed { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; vertical-align: middle; }
+.voice-speed button { width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.voice-speed button:hover:not(:disabled) { background: var(--gray-bg); color: var(--ink); }
+.voice-speed button:disabled { opacity: .35; cursor: default; }
+.voice-speed button:focus-visible { outline: 1px solid var(--dim); outline-offset: 2px; }
+.voice-speed-value { font-variant-numeric: tabular-nums; }
+@media (pointer: coarse) { .voice-speed button { width: 32px; height: 32px; } }
+
+@media (max-width: 480px) { .voice-spend { display: none; } }

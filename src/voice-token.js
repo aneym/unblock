@@ -15,7 +15,7 @@ export async function defaultReadKey(ref, envName = 'GEMINI_API_KEY') {
   }
 }
 
-export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalThis.fetch, now = Date.now, keyRef = 'gemini-api-key', model = 'gemini-3.8-live', voice = 'Kore', prompt = VOICE_SYSTEM_PROMPT, tools = VOICE_TOOLS } = {}) {
+export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalThis.fetch, now = Date.now, keyRef = 'gemini-api-key', model = 'gemini-3.8-live', voice = 'Kore', prompt = VOICE_SYSTEM_PROMPT, tools = VOICE_TOOLS, speed = 1 } = {}) {
   const key = await readKey(keyRef, 'GEMINI_API_KEY')
   if (!key) {
     const error = new Error('Voice is not configured')
@@ -32,7 +32,7 @@ export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalT
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
       ...(extendedThinking ? { thinkingConfig: { thinkingLevel: 'LOW' } } : {}),
     },
-    systemInstruction: { role: 'user', parts: [{ text: prompt }] },
+    systemInstruction: { role: 'user', parts: [{ text: speed > 1 ? prompt + '\nSpeak quickly, at a brisk pace, with no pauses between sentences.' : prompt }] },
     tools: [{ functionDeclarations: extendedThinking ? tools.map((tool) => ({ ...tool, behavior: 'NON_BLOCKING' })) : tools }],
     inputAudioTranscription: {},
     outputAudioTranscription: {},

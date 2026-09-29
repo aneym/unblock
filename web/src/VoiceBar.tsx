@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { VoiceProvider, VoiceSpend } from '../../src/voice.js'
 import { Icon } from './icons'
 import { voiceAudioError } from './lib/voice-audio'
@@ -15,17 +16,13 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
   provider?: VoiceProvider; bothConfigured: boolean; onSwitch(): void; spend?: VoiceSpend
   minutesLeft: boolean; blockedLink: { url: string; label: string } | null
 }) {
-  const [speed, setSpeed] = useState(1)
+  const [speed, setSpeed] = useState(1.5)
   useEffect(() => {
-    const onSpeed = (event: Event) => setSpeed((event as CustomEvent<number>).detail)
+    const onSpeed = (event: Event) => flushSync(() => setSpeed((event as CustomEvent<number>).detail))
     window.addEventListener('unblock:voice-speed', onSpeed)
     return () => window.removeEventListener('unblock:voice-speed', onSpeed)
   }, [])
-  const cycleSpeed = () => {
-    const steps = [1, 1.15, 1.3, 1.5, 0.85]
-    const next = steps[(steps.indexOf(speed) + 1) % steps.length]
-    window.dispatchEvent(new CustomEvent('unblock:voice-set-speed', { detail: next }))
-  }
+  const stepSpeed = (step: number) => window.dispatchEvent(new CustomEvent('unblock:voice-set-speed', { detail: Math.round((speed + step) * 10) / 10 }))
   const [filed, setFiled] = useState<{ number: number; url: string } | null>(null)
   const [lastState, setLastState] = useState<VoiceState | null>(null)
   useEffect(() => {
@@ -61,9 +58,12 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
   const switchButton = bothConfigured && provider && <button className="voice-switch" type="button" onClick={onSwitch}
     title={`Switch to ${other}`}>Switch to {other}</button>
   const meta = <>{provider && (provider === 'xai' ? 'Grok' : 'Gemini')}
-    {provider === 'xai' && <> · <button className="voice-speed" type="button" onClick={cycleSpeed}
-      aria-label={`Speaking speed, ${speed} times. Tap to change.`}>{speed}×</button></>}
-    {spend && <> · ${spend.spent_usd.toFixed(2)} of ${spend.cap_usd}</>}
+    {provider === 'xai' && <> · <span className="voice-speed">
+      <button type="button" data-voice-speed="down" aria-label="Slower" disabled={speed <= 0.7} onClick={() => stepSpeed(-0.1)}>−</button>
+      <span className="voice-speed-value">{speed.toFixed(1)}×</span>
+      <button type="button" data-voice-speed="up" aria-label="Faster" disabled={speed >= 1.5} onClick={() => stepSpeed(0.1)}>+</button>
+    </span></>}
+    {spend && <span className="voice-spend"> · ${spend.spent_usd.toFixed(2)} of ${spend.cap_usd}</span>}
     {minutesLeft && <> · 1 min left</>}</>
 
   return <div className={`voice-capsule${inactive ? ' voice-capsule-inactive' : ''}${exiting ? ' voice-exiting' : ''}`}
