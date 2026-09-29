@@ -1,6 +1,9 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/jetbrains-mono';
 @import './voice-capsule.css';
+.voice-speed { border: 0; border-radius: 4px; background: transparent; padding: 0 2px; color: inherit; font: inherit; cursor: pointer; }
+.voice-speed:hover { background: var(--gray-bg); color: var(--ink); }
+.voice-speed:focus-visible { outline: 1px solid var(--dim); outline-offset: 2px; }
 :root {
   --page: #FFFFFF; --rail: #F9F8F7; --card: #FFFFFF;
   --border: #E7E6E4; --ink: #111111; --dim: #6F6D69;

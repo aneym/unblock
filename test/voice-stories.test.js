@@ -251,6 +251,22 @@ test('19. end call sends the goodbye UI', async () => {
   assert.deepEqual((await voice([]).handle('end_call', {})).ui, { do: 'end_call' })
 })
 
+test('20. talk faster changes speed without posting an answer or issue', async () => {
+  const a = await file(), posted = []
+  const session = voice([a], {
+    provider: 'xai',
+    postAnswer: async (body) => { posted.push(body); return {} },
+    fileIssue: async (issue) => { posted.push(issue); return { number: 1, url: '' } },
+  })
+  await session.handle('ask_read', { n: 1 })
+  assert.deepEqual(await session.handle('set_speed', { change: 'faster' }), {
+    ok: true, speech: 'Okay, faster.', ui: { do: 'speed', change: 'faster' },
+  })
+  assert.deepEqual(posted, [])
+  assert.equal((await getAsk(a.ticket)).status, 'open')
+  assert.deepEqual((await getAsk(a.ticket)).answers, {})
+})
+
 test('issue endpoint enforces the human path and validates the body', async () => {
   assert.equal((await post('/api/voice/issue', { title: 'Valid', details: '', about: 'other' })).status, 403)
   for (const issue of [{ title: ' ', details: '', about: 'other' }, { title: 'x'.repeat(121), details: '', about: 'other' },

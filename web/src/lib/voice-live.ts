@@ -14,6 +14,7 @@ export type TranscriptLine = { who: 'you' | 'agent'; text: string }
 export interface VoiceAdapter {
   sampleRate: 16000 | 24000
   sendAudio(audio: string): void
+  setSpeed?(v: number): void
   sendToolResults(results: { id: string; name: string; ok: boolean; speech: string }[]): void
   close(): void
 }
@@ -51,7 +52,13 @@ function messageOf(error: unknown): string {
 
 /** The AudioContext must be created and resumed by the tap handler before import(). */
 export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onUi, onChanged, onSession }: VoiceCallbacks,
-  options: { provider?: VoiceProvider; profile?: VoiceProfile } = {}): { stop(): void } {
+  options: { provider?: VoiceProvider; profile?: VoiceProfile } = {}): { stop(): void; setSpeed(v: number): void } {
+  const clampSpeed = (v: number) => Math.round(Math.max(0.7, Math.min(1.5, Number.isFinite(v) ? v : 1)) * 100) / 100
+  let speed = 1
+  try {
+    const saved = localStorage.getItem('unblock.voice.speed')
+    if (saved !== null) speed = clampSpeed(Number(saved))
+  } catch { /* Storage may be unavailable. */ }
   let stopped = false
   let live: VoiceAdapter | undefined
   let mic: { stop(): void } | undefined
@@ -71,15 +78,22 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   let awaitingGoodbyeAudio = false
   const cancelledCalls = new Set<string>()
   const player = createPlayer(audio)
-  const rules = options.profile?.rules ?? createVoiceSession<Ask>({
-    getAsks: async () => (await api<{ asks: Ask[] }>('/api/queue')).asks,
-    postAnswer: (body) => api('/api/answer', body),
-    fileIssue: (issue) => api('/api/voice/issue', issue),
-  })
+  let rules = options.profile?.rules
+  const tellSpeed = () => window.dispatchEvent(new CustomEvent('unblock:voice-speed', { detail: speed }))
+  const setSpeed = (v: number) => {
+    if (stopped || session?.provider === 'gemini') return
+    speed = clampSpeed(v)
+    try { localStorage.setItem('unblock.voice.speed', String(speed)) } catch { /* Storage may be unavailable. */ }
+    live?.setSpeed?.(speed)
+    tellSpeed()
+  }
+  const onSpeedRequest = (event: Event) => setSpeed((event as CustomEvent<number>).detail)
+  window.addEventListener('unblock:voice-set-speed', onSpeedRequest)
   const transcripts: Record<TranscriptLine['who'], string> = { you: '', agent: '' }
   const release = () => {
     if (stopped) return
     stopped = true
+    window.removeEventListener('unblock:voice-set-speed', onSpeedRequest)
     window.clearTimeout(endTimer)
     window.clearTimeout(goodbyeTimer)
     mic?.stop()
@@ -149,7 +163,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
         for (const call of calls) {
           if (stopped) return
           if (call.id && cancelledCalls.has(call.id)) continue
-          const result = await rules.handle(call.name, call.args)
+          const result = await rules!.handle(call.name, call.args)
           if (stopped) return
           if (result.ui) {
             if (result.ui.do === 'end_call' && !endingRequested) {
@@ -159,6 +173,10 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
                 awaitingGoodbyeAudio = true
               }
               goodbyeTimer = window.setTimeout(end, 6000)
+            }
+            if (result.ui.do === 'speed') {
+              const ui = result.ui as Extract<VoiceUi, { do: 'speed' }>
+              setSpeed(ui.value ?? (ui.change === 'normal' ? 1 : speed + (ui.change === 'faster' ? 0.15 : ui.change === 'slower' ? -0.15 : 0)))
             }
             if (result.ui.do === 'filed') {
               window.dispatchEvent(new CustomEvent('unblock:voice-filed', { detail: result.ui }))
@@ -201,6 +219,12 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       }
       const token = await response.json() as VoiceSessionToken
       session = token
+      rules ??= createVoiceSession<Ask>({
+        getAsks: async () => (await api<{ asks: Ask[] }>('/api/queue')).asks,
+        postAnswer: (body) => api('/api/answer', body),
+        fileIssue: (issue) => api('/api/voice/issue', issue),
+        provider: token.provider,
+      })
       startedAt = Date.now()
       if (stopped) {
         void fetch('/api/voice/end', {
@@ -212,8 +236,9 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       onSession({ provider: token.provider, spend: token.spend, maxMinutes: token.max_minutes })
       endTimer = window.setTimeout(end, token.max_minutes * 60_000)
       const profile = options.profile || { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }
-      live = token.provider === 'xai' ? await connectXai(token, callbacks, profile) : await connectGemini(token, callbacks, profile)
+      live = token.provider === 'xai' ? await connectXai(token, callbacks, profile, { speed }) : await connectGemini(token, callbacks, profile)
       if (stopped) { live.close(); return }
+      if (token.provider === 'xai') { live.setSpeed?.(speed); tellSpeed() }
       await audio.resume()
       if (stopped) return
       mic = await startMic(audio, live.sampleRate, (data) => { if (!stopped) live?.sendAudio(data) }, () => stopped)
@@ -226,5 +251,5 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       } else fail(messageOf(error))
     }
   })()
-  return { stop: end }
+  return { stop: end, setSpeed }
 }

@@ -1,7 +1,7 @@
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, xaiTools, type VoiceSessionToken, type VoiceToolDeclaration } from '../../../src/voice.js'
 import type { VoiceAdapter, VoiceAdapterCallbacks } from './voice-live'
 
-export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[]; kickoff?: string } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
+export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[]; kickoff?: string } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }, options: { speed?: number } = {}): Promise<VoiceAdapter> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`wss://api.x.ai/v1/realtime?model=${encodeURIComponent(token.model)}`,
       [`xai-client-secret.${token.token}`])
@@ -18,7 +18,7 @@ export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCall
         voice: token.voice, instructions: profile.prompt, turn_detection: { type: 'server_vad' },
         audio: {
           input: { format: { type: 'audio/pcm', rate: 24000 }, transcription: { model: 'grok-transcribe' } },
-          output: { format: { type: 'audio/pcm', rate: 24000 } },
+          output: { format: { type: 'audio/pcm', rate: 24000 }, speed: options.speed ?? 1 },
         },
         tools: xaiTools(profile.tools),
       } })
@@ -29,6 +29,7 @@ export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCall
       callbacks.onOpen()
       resolve({
         sampleRate: 24000,
+        setSpeed: (speed) => send({ type: 'session.update', session: { audio: { output: { speed } } } }),
         sendAudio: (audio) => send({ type: 'input_audio_buffer.append', audio }),
         sendToolResults: (results) => {
           for (const result of results) send({ type: 'conversation.item.create', item: {

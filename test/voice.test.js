@@ -142,6 +142,25 @@ test('file_issue includes the shown ask and reports no provider or a filing fail
   assert.equal((await broken.handle('file_issue', { title: 'Show dates', details: '', about: 'other' })).speech, "That didn't file. Try again.")
 })
 
+test('set_speed returns steps and rounded, clamped multipliers only on Grok', async () => {
+  for (const provider of [undefined, 'xai']) {
+    const voice = createVoiceSession({ provider, getAsks: async () => [], postAnswer: async () => ({}) })
+    for (const [args, ui, speech] of [
+      [{ change: 'faster' }, { do: 'speed', change: 'faster' }, 'Okay, faster.'],
+      [{ change: 'slower' }, { do: 'speed', change: 'slower' }, 'Okay, slower.'],
+      [{ change: 'normal' }, { do: 'speed', change: 'normal' }, 'Back to normal speed.'],
+      [{ speed: 1.3 }, { do: 'speed', value: 1.3 }, 'Okay, 1.3 times.'],
+      [{ speed: 3 }, { do: 'speed', value: 1.5 }, 'Okay, 1.5 times.'],
+      [{ speed: 0.1 }, { do: 'speed', value: 0.7 }, 'Okay, 0.7 times.'],
+      [{ speed: 1.234 }, { do: 'speed', value: 1.23 }, 'Okay, 1.23 times.'],
+    ]) assert.deepEqual(await voice.handle('set_speed', args), { ok: true, speech, ui })
+  }
+  const gemini = createVoiceSession({ provider: 'gemini', getAsks: async () => [], postAnswer: async () => ({}) })
+  assert.deepEqual(await gemini.handle('set_speed', { change: 'faster' }), {
+    ok: false, speech: 'I can only change my speed on Grok. Tap Switch to Grok to use it.',
+  })
+})
+
 test('speech does not double punctuate titles or labels ending in punctuation', async () => {
   const item = ask('ub_punctuation', [field('decision', { label: 'Which fix?', type: 'choice', choices: [{ value: 'yes', label: 'Fix (#2253)?' }] })], { title: 'Fix (#2253)?' })
   const { voice } = session([item])

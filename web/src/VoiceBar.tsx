@@ -15,6 +15,17 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
   provider?: VoiceProvider; bothConfigured: boolean; onSwitch(): void; spend?: VoiceSpend
   minutesLeft: boolean; blockedLink: { url: string; label: string } | null
 }) {
+  const [speed, setSpeed] = useState(1)
+  useEffect(() => {
+    const onSpeed = (event: Event) => setSpeed((event as CustomEvent<number>).detail)
+    window.addEventListener('unblock:voice-speed', onSpeed)
+    return () => window.removeEventListener('unblock:voice-speed', onSpeed)
+  }, [])
+  const cycleSpeed = () => {
+    const steps = [1, 1.15, 1.3, 1.5, 0.85]
+    const next = steps[(steps.indexOf(speed) + 1) % steps.length]
+    window.dispatchEvent(new CustomEvent('unblock:voice-set-speed', { detail: next }))
+  }
   const [filed, setFiled] = useState<{ number: number; url: string } | null>(null)
   const [lastState, setLastState] = useState<VoiceState | null>(null)
   useEffect(() => {
@@ -49,9 +60,11 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
   const other = provider === 'xai' ? 'Gemini' : 'Grok'
   const switchButton = bothConfigured && provider && <button className="voice-switch" type="button" onClick={onSwitch}
     title={`Switch to ${other}`}>Switch to {other}</button>
-  const meta = [provider && (provider === 'xai' ? 'Grok' : 'Gemini'),
-    spend && `$${spend.spent_usd.toFixed(2)} of $${spend.cap_usd}`,
-    minutesLeft && '1 min left'].filter(Boolean).join(' · ')
+  const meta = <>{provider && (provider === 'xai' ? 'Grok' : 'Gemini')}
+    {provider === 'xai' && <> · <button className="voice-speed" type="button" onClick={cycleSpeed}
+      aria-label={`Speaking speed, ${speed} times. Tap to change.`}>{speed}×</button></>}
+    {spend && <> · ${spend.spent_usd.toFixed(2)} of ${spend.cap_usd}</>}
+    {minutesLeft && <> · 1 min left</>}</>
 
   return <div className={`voice-capsule${inactive ? ' voice-capsule-inactive' : ''}${exiting ? ' voice-exiting' : ''}`}
     role={current.name === 'error' ? 'alert' : 'status'} aria-live="polite">

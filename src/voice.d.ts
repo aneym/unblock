@@ -54,6 +54,8 @@ export type VoiceUi =
   | { do: 'end_call' }
   /** An issue was filed; the capsule shows a small "Filed #n ↗" chip linking to it. */
   | { do: 'filed'; number: number; url: string }
+  /** Change how fast the agent talks. `value` is an exact multiplier; `change` steps from the current one. The page clamps to 0.7–1.5. */
+  | { do: 'speed'; value?: number; change?: 'faster' | 'slower' | 'normal' }
 
 /** What a tool call returns: `speech` is read aloud as-is; only { ok, speech } goes to the model. */
 export interface ToolResult {
@@ -85,6 +87,8 @@ export interface VoiceSessionDeps<A> {
   postAnswer(body: AnswerBody): Promise<{ complete?: boolean }>
   /** POST /api/voice/issue. Files the owner's request for the agents to pick up. Rejects with an Error on failure. */
   fileIssue?(issue: VoiceIssue): Promise<{ number: number; url: string }>
+  /** Which provider this call runs on. Speaking speed only works on 'xai'. */
+  provider?: VoiceProvider
   now?: () => number
 }
 
