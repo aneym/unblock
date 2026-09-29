@@ -278,9 +278,10 @@ are questions or comments; resolved threads hold decisions. The page lives at
 Lanes use the CLI instead of editing that file. A No keeps a question open; a
 new option uses `scope reply <slug> T# --rec "option" [--why "reason"] "reply"`.
 ```bash
-unblock scope ask demo --section plan --quote "phones first" --rec "Phones first" "Which screen ships first?"
+unblock scope ask demo --section plan --quote "phones first" --rec "Phones first" --option "Phones first" --option "Desktop first" "Which screen ships first?"
 unblock scope reply demo T4 "Moved voice to round two."
 unblock scope doc demo --from plan.md
+unblock scope edit demo T4 --section plan --quote "We build for phones first" --option "Phones first" --option "Desktop first"
 unblock scope resolve demo T4
 unblock scope threads demo --open
 ```
@@ -289,6 +290,12 @@ A markdown doc starts with `# Title`; `## Heading {#stable-id}` starts a section
 JSON input is a sections array or `{sections}`. Doc rewrites keep all threads;
 threads whose quotes disappeared are reported as detached. Each rewrite saves
 a revision. `scope doc <slug>` exports markdown; `--json` gives revision and sections.
+`scope edit <slug> T# [--section id --quote "text"] [--option "text" ...]` moves a thread to
+its new sentence and/or sets its options without adding a message, changing its status or notifying the pane.
+Only lanes can edit threads. Questions accept 2–5 options of 1–200 characters, with the
+current recommendation first. Repeat `--option` on `ask`, `edit` or a `reply --rec`;
+a new recommendation without options removes the old list. The API also accepts an
+empty options array to remove it. `scope threads` lists options after the recommendation.
 Existing v1 files are read as v2 and backed up on their first write.
 A trusted tailnet viewer can select text to comment, reply or resolve a thread.
 Their actions reach the lane's pane; Not now parks a thread. Tags such as

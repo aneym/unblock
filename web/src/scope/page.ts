@@ -8,6 +8,7 @@ import type { ScopeVoiceUi } from '../../../src/scope-voice.js'
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string, root: ParentNode = document) => root.querySelector<T>(selector)!
 const slug = (window as any).__SCOPE_BOOT__?.slug || location.pathname.match(/^\/s\/([^/]+)/)?.[1]
+document.body.classList.toggle('embed', new URLSearchParams(location.search).get('embed') === '1')
 const doc = $('#doc'), cards = $('#cards'), detached = $('#detached'), sheet = $('#sheet')
 const phone = () => matchMedia('(max-width:899px)').matches
 const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} } }
@@ -20,6 +21,7 @@ function disablePending() { document.querySelectorAll<HTMLElement>('.card').forE
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
 const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
+const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
 const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
 async function api<T>(path: string, body?: unknown): Promise<T> {
@@ -55,6 +57,7 @@ function cardHtml(t: Thread) {
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
+  ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${i + 1 === lastAlex && delivery(t.id) ? `<div class="delivery">${delivery(t.id)}</div>` : ''}</div>`).join('')}</div>` : ''}
   ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
@@ -81,8 +84,10 @@ function render() {
   if (!scope) return
   const active = document.activeElement as HTMLTextAreaElement | null, activeKey = active?.dataset.draft, caret = active?.selectionStart
   const scroll = scrollY
-  if (!initialized) { focused = phone() ? null : open()[0]?.id || null; initialized = true }
-  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}</p>` : ''}</section>`).join('')
+  if (!initialized) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
+  const askOpen = doc.querySelector<HTMLDetailsElement>('.ask-fold')?.open || false
+  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}</p>` : ''}`}</section>`).join('')
+  doc.querySelector('.ask-fold')?.addEventListener('toggle', layout)
   document.title = scope.title; highlight(); renderCards(); void renderMermaid(doc, layout)
   scrollTo({ top: scroll, behavior: 'instant' })
   if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caret) }
@@ -103,7 +108,10 @@ function layout() {
   if (phone()) return
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
-  const want = nodes.map(n => Math.max(8, (n.classList.contains('composer') ? selectionTop : marks(n.dataset.t!)[0]?.getBoundingClientRect().top + scrollY || base + scrollY) - scrollY - base - 12))
+  const want = nodes.map(n => {
+    const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? mark : mark?.closest('details:not([open])')?.querySelector('summary')
+    return Math.max(8, (n.classList.contains('composer') ? selectionTop : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
+  })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
   for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
@@ -120,6 +128,7 @@ function updateCount() {
 }
 function focus(id: string | null, scroll = false, openSheet = true) {
   focused = id
+  if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
   if (id && scroll) { const mark = marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
   if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
@@ -155,6 +164,13 @@ async function action(name: string, target: HTMLElement) {
   if (pending.has(key)) return
   const text = (drafts.get(key) || '').trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { composing = null; drafts.delete('composer'); closeSheet(); renderCards() }; return }
+  if (t && name === 'option') {
+    const option = t.options?.[Number(target.dataset.option)]
+    if (option == null || t.kind !== 'question' || t.status !== 'open') return
+    menus.delete(t.id); modes.set(t.id, 'else'); drafts.set(t.id, option); focus(t.id, false, false); renderCards()
+    const input = $<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`, phone() ? sheet : cards)
+    input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); return
+  }
   if (t && ['menu', 'no', 'else', 'menu-reply'].includes(name)) {
     if (name === 'menu') { if (menus.has(t.id)) menus.delete(t.id); else menus.add(t.id) }
     else { menus.delete(t.id); modes.set(t.id, name === 'menu-reply' ? 'reply' : name as 'no' | 'else') }
@@ -196,7 +212,7 @@ $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElemen
 document.addEventListener('keydown', e => { if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Escape') closeSheet() })
 addEventListener('resize', layout); document.fonts.ready.then(layout)
 let scrollTimer = 0
-addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { showSelection(); const current = focused && marks(focused)[0]?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
+addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { showSelection(); const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 $('#talk').onclick = async () => { try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark }, voiceUi, active => $('#talk').classList.toggle('active', active)) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }

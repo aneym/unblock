@@ -347,24 +347,31 @@ async function link(args) {
   output(data, `${data.url}\nexpires in ${Math.max(1, Math.round((data.expires_at - Date.now()) / 60000))}m`)
 }
 async function scope(args) {
-  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] <text...> | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | threads <slug> [--open] [--json]'
+  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | threads <slug> [--open] [--json]'
   const [sub = 'list', slug, ...words] = args
-  if (['ask', 'reply', 'resolve'].includes(sub)) {
+  if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
-    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why']
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why', '--option']
     let threadId
     if (sub !== 'ask' && THREAD_ID.test(words[0] ?? '')) threadId = words.shift()
     while (allowed.includes(words[0])) {
       const option = words.shift(), value = words.shift()
       if (value === undefined) fail(`${option} needs a value`)
-      opts[option] = value
+      if (option === '--option') (opts[option] ??= []).push(value)
+      else opts[option] = value
     }
     if (!slug) fail(usage)
     const base = `/api/scope/${encodeURIComponent(slug)}`
+    const options = opts['--option'] !== undefined ? { options: opts['--option'] } : {}
+    if (sub === 'edit') {
+      if (!threadId || words.length || !Object.keys(opts).length || (!!opts['--section'] !== !!opts['--quote'])) fail(usage)
+      const data = await request(`${base}/threads/${threadId}/edit`, { ...(opts['--section'] !== undefined ? { section: opts['--section'], quote: opts['--quote'] } : {}), ...options })
+      return output(data, `edited ${data.thread.id}`)
+    }
     if (sub === 'ask') {
       if (!opts['--section'] || !opts['--quote'] || !words.length) fail(usage)
-      const data = await request(`${base}/threads`, { section: opts['--section'], quote: opts['--quote'], text: words.join(' '), ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
+      const data = await request(`${base}/threads`, { section: opts['--section'], quote: opts['--quote'], text: words.join(' '), ...options, ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
       return output(data, `asked ${data.thread.id} on §${opts['--section']}`)
     }
     if (sub === 'resolve') {
@@ -374,8 +381,9 @@ async function scope(args) {
     }
     if (!words.length || words[0] === '--to') fail(usage)
     let data
-    if (threadId) data = await request(`${base}/threads/${threadId}/reply`, { text: words.join(' '), ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
+    if (threadId) data = await request(`${base}/threads/${threadId}/reply`, { text: words.join(' '), ...options, ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
     else {
+      if (opts['--option'] !== undefined) fail(usage)
       const { scope } = await request(base)
       data = await request(`${base}/threads`, { section: 'title', quote: scope.title, kind: 'comment', text: words.join(' ') })
     }
@@ -415,7 +423,7 @@ async function scope(args) {
     if (opts['--from'] || opts['--since']) fail(usage)
     const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
     const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')
-    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
+    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
   }
   if (verb === 'notes') {
     if (opts['--open']) fail(usage)
@@ -556,8 +564,9 @@ unblock peek <ticket>                            what they have typed so far
 unblock reveal <ticket> <field>                  print a stored secret (this machine only)
 unblock mirror [path]                            write BLOCKERS.md from the queue
 unblock scope [list|url|notes|threads]           scoping docs and anchored threads
-unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] <question...>
-unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] <text...>
+unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
+unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
+unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope doc <slug> [--from <file.md|file.json>]
 unblock ui                                       interactive queue in the terminal

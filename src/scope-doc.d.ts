@@ -66,6 +66,13 @@ export interface Thread {
   status: 'open' | 'resolved' | 'parked'
   /** Questions only. The current recommendation (a new option after a No replaces it). */
   recommendation?: string
+  /**
+   * Questions only. The choices the lane offers, recommended first (options[0] === recommendation when both are
+   * set), 2–5 items, each ≤ 200 chars. The card lists them; picking a non-recommended one prefills Something else.
+   * Set by ask (--option, repeatable), by an agent reply with a new recommendation (replaces them; absent → removed),
+   * or by edit.
+   */
+  options?: string[]
   why?: string
   /** Set by Alex's No; cleared when the lane replies with a new recommendation. The thread stays open. */
   rejected_at?: string | null

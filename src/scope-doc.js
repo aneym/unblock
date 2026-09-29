@@ -147,6 +147,7 @@ export function validateScope(scope) {
     check(['question', 'comment'].includes(thread.kind), 'invalid thread kind')
     check(['open', 'resolved', 'parked'].includes(thread.status), 'invalid thread status')
     check(['alex', 'agent'].includes(thread.author), 'invalid thread author')
+    if (thread.options !== undefined) check(thread.kind === 'question' && Array.isArray(thread.options) && thread.options.length >= 2 && thread.options.length <= 5 && thread.options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200) && typeof thread.recommendation === 'string' && thread.options[0] === thread.recommendation, 'invalid thread options')
     check(Array.isArray(thread.messages) && thread.messages.length > 0, 'invalid thread messages')
     for (const key of ['rejected_at', 'parked_at']) check(thread[key] == null || typeof thread[key] === 'string', `invalid ${key}`)
     for (const message of Array.isArray(thread.messages) ? thread.messages : []) check(object(message) && ['alex', 'agent'].includes(message.from) && typeof message.text === 'string' && (!!message.text.trim() || message.kind === 'reject') && typeof message.at === 'string' && (message.via === undefined || message.via === 'voice') && (message.kind === undefined || ['reject', 'option'].includes(message.kind)) && (message.recommendation === undefined || typeof message.recommendation === 'string'), 'invalid thread message')

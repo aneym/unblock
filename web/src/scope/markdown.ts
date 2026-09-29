@@ -7,7 +7,10 @@ export function sanitizeSvg(source: string): string {
   root.querySelectorAll('*').forEach(node => {
     for (const attr of [...node.attributes]) {
       const value = attr.value.replace(/\\(?:([0-9a-f]{1,6})\s?|(.))/gi, (_, hex: string, char: string) => hex ? String.fromCodePoint(parseInt(hex, 16) || 0xfffd) : char).replace(/\s/g, '').toLowerCase()
-      if (attr.value.includes('\\') || /^on/i.test(attr.name) || /^(?:href|xlink:href)$/i.test(attr.name) && !attr.value.startsWith('#') || value.includes('url(') && !/^url\(#[\w-]+\)$/.test(value)) node.removeAttribute(attr.name)
+      const transform = /^(?:transform|gradienttransform)$/i.test(attr.name)
+      const calls = [...value.matchAll(/([\w-]+)\(/g)].map(match => match[1])
+      const unsafeCall = calls.some(name => name === 'url' ? !/^url\(#[\w-]+\)$/.test(value) : !/^(?:rgb|rgba|hsl|hsla)$/.test(name) && !(transform && /^(?:translate|rotate|scale|matrix|skewx|skewy)$/.test(name)))
+      if (attr.value.includes('\\') || /^on/i.test(attr.name) || /^(?:href|xlink:href)$/i.test(attr.name) && !attr.value.startsWith('#') || unsafeCall) node.removeAttribute(attr.name)
     }
   })
   return root.innerHTML
@@ -21,7 +24,7 @@ function inline(text: string): string {
   return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>'))
 }
 export function markdown(source: string): string {
-  const lines = source.replace(/\r/g, '').split('\n'), out: string[] = []
+  const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
   let i = 0
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
   const caption = () => /^Figure:\s*/.test(lines[i] || '') ? `<figcaption>${inline(lines[i++].replace(/^Figure:\s*/, ''))}</figcaption>` : ''

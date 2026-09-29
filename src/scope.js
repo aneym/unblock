@@ -216,12 +216,16 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const docWrite = req.method === 'PUT' && parts.length === 2 && action === 'doc'
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
-    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park'].includes(verb)
+    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
     if (!docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const human = proxyIdentity(req)
     if (['reject', 'park'].includes(verb)) requireHumanPath(req)
     if (docWrite && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
+      error.code = 'HUMAN_ONLY'; error.status = 403; throw error
+    }
+    if (verb === 'edit' && human) {
+      const error = new Error('lanes edit threads through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
     const body = await readJson(req)
@@ -261,6 +265,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!cleaned || cleaned.length > limit) bad('invalid text')
       return cleaned
     }
+    const setOptions = (thread) => {
+      if (thread.kind !== 'question') bad('only questions have options')
+      const options = body.options
+      if (!Array.isArray(options) || (options.length !== 0 && (options.length < 2 || options.length > 5)) || !options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200)) bad('invalid options')
+      if (options.length && (!thread.recommendation || options[0] !== thread.recommendation)) bad('options[0] must equal the recommendation')
+      if (options.length) thread.options = options
+      else delete thread.options
+    }
     let thread, noteData = null, result
     if (docWrite) {
       scope.doc = { sections: body.sections }
@@ -282,17 +294,33 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...(body.via === 'voice' ? { via: 'voice' } : {}) }], created_at: at }
       if (!human && body.recommendation !== undefined) thread.recommendation = text(body.recommendation, 600)
       if (!human && body.why !== undefined) thread.why = text(body.why, 600)
+      if (body.options !== undefined) {
+        if (human || !thread.recommendation) bad('options require an agent recommendation')
+        setOptions(thread)
+      }
       scope.threads.push(thread)
       if (human) noteData = { event: 'new', text: thread.messages[0].text }
       result = { thread }
     } else {
       thread = scope.threads.find((t) => t.id === threadId)
       if (!thread) bad('no such thread', 404)
-      if (verb === 'reply') {
+      if (verb === 'edit') {
+        if (body.section === undefined && body.quote === undefined && body.options === undefined) bad('edit needs section and quote or options')
+        if (body.section !== undefined || body.quote !== undefined) {
+          const section = scope.doc.sections.find((s) => s.id === body.section)
+          const anchor = section && typeof body.quote === 'string' ? anchorInSection(section, body.quote) : null
+          if (!anchor) bad(`quote not found in §${body.section}`)
+          thread.anchor = anchor
+        }
+        if (body.options !== undefined) setOptions(thread)
+      } else if (verb === 'reply') {
+        if (body.options !== undefined && (human || body.recommendation === undefined)) bad('options require an agent recommendation')
         const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...(body.via === 'voice' ? { via: 'voice' } : {}) }
         if (!human && body.recommendation !== undefined) {
           if (thread.kind !== 'question') bad('only questions have recommendations')
           thread.recommendation = text(body.recommendation, 600)
+          if (body.options !== undefined) setOptions(thread)
+          else delete thread.options
           if (body.why !== undefined) thread.why = text(body.why, 600)
           else delete thread.why
           delete thread.rejected_at
