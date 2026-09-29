@@ -342,8 +342,16 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   const refuseWorktreeOrigins = process.env.UNBLOCK_REFUSE_WORKTREE_ORIGINS === 'true'
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
+  const relaySecret = process.env.UNBLOCK_ADMIN_RELAY_TOKEN || await defaultReadKey(process.env.UNBLOCK_ADMIN_RELAY_KEY_REF || 'unblock-admin-relay', 'UNBLOCK_ADMIN_RELAY_TOKEN')
+  function relayIdentity(req) {
+    if (relaySecret.length < 32 || !sameSecret(req.headers['x-unblock-relay'], relaySecret)) return null
+    if (Object.keys(req.headers).some((header) => header === 'x-forwarded-for' || header === 'x-forwarded-host' || header.startsWith('tailscale-user-'))) return null
+    const host = String(req.headers.host || '')
+    if (!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host) && host !== '::1') return null
+    return { login: process.env.UNBLOCK_ALLOWED_USERS?.split(',')[0].trim() || 'alex', name: 'Alex', via: 'admin' }
+  }
   const store = new Store()
-  const scopeRoutes = createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity })
+  const scopeRoutes = createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity, relayIdentity })
   // A delayed store can be injected by tests to exercise the real async put boundary.
   const secretStore = injectedSecretStore ?? new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
   // Resolve the secret backend now rather than on the first /api/health. In
@@ -672,6 +680,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   }
 
   async function handle(req, res) {
+    const relay = relayIdentity(req)
+    if (req.headers['x-unblock-relay'] !== undefined && !relay) {
+      return sendJson(res, 401, { error: 'unauthorized' })
+    }
     if (!validateHostHeader(req)) {
       return sendJson(res, 403, { error: 'invalid host' })
     }
@@ -680,6 +692,14 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
     const url = new URL(req.url, `http://${HOST}:${actualPort}`)
     const pathname = url.pathname
+
+    if (relay) {
+      const slug = '[a-z0-9][a-z0-9-]{0,63}'
+      const allowed = req.method === 'GET'
+        ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}$`).test(pathname)
+        : req.method === 'POST' && new RegExp(`^/api/scope/${slug}/threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park))?$`).test(pathname)
+      if (!allowed) return sendJson(res, 403, { code: 'RELAY_SCOPE_ONLY' })
+    }
 
     if (req.method === 'GET' && pathname === '/api/health') {
       // Health must answer fast: every spawner polls it to decide whether
@@ -717,7 +737,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       // its link token, which is checked in handleTokenRoute.
       staticAsset(pathname) !== null ||
       pathname.startsWith('/u/')
-    if (!isPublic && !isAuthorized(req, authSecret)) {
+    if (!isPublic && !relay && !isAuthorized(req, authSecret)) {
       return sendJson(res, 401, { error: 'unauthorized' })
     }
 

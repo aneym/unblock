@@ -276,7 +276,7 @@ export class Store {
       id: row.id, slug: row.slug, from: row.author, kind: row.kind,
       qid: row.qid, text: row.text, at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
-      anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: row.via === 'voice' ? 'voice' : null,
+      anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: ['voice', 'admin'].includes(row.via) ? row.via : null,
       thread: row.thread ?? null, event: row.event ?? null, words: row.words ?? null,
     }
   }

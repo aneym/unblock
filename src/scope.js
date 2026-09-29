@@ -7,11 +7,12 @@ import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID } from './scope-doc.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
 const compact = (text) => text.replace(/\s+/g, ' ').trim()
 const delay = (value, fallback) => Number(value) > 0 ? Number(value) : fallback
 
-export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity }) {
+export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity, relayIdentity = () => null }) {
   const root = process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
   const cache = new Map()
   const listeners = new Map()
@@ -51,7 +52,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const scope = data.scope
       const threads = Array.isArray(scope.threads) ? scope.threads : []
       return [{ slug: dir.name, title: scope.title ?? '', updated_at: scope.updated_at ?? '',
-        pane: scope.pane ?? '', open: threads.filter((t) => t.status === 'open').length }]
+        pane: scope.pane ?? '', revision: scope.revision, open: threads.filter((t) => t.status === 'open').length }]
     }).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
   }
 
@@ -115,7 +116,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       const scope = readScope(slug)?.scope
       const joined = notes.map((note) => {
-        const alex = note.via === 'voice' ? 'Alex (by voice)' : 'Alex'
+        const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
         const heading = headingOf(scope, note.anchor?.section ?? 'title')
         const quote = quoteSnippet(note.anchor?.quote ?? '')
         const text = compact(note.text)
@@ -152,7 +153,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       })
       for (const target of targets) {
         if (closed) break
-        const alex = target.via === 'voice' ? 'Alex (by voice)' : 'Alex'
+        const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
         const heading = headingOf(scope, target.anchor.section)
         const pointer = `[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`
         await send(`${target.id}:${target.pane}`, target.pane, pointer, (status) => store.markScopeTarget(target.id, target.pane, status))
@@ -218,8 +219,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
     if (!docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
-    const human = proxyIdentity(req)
-    if (['reject', 'park'].includes(verb)) requireHumanPath(req)
+    const relay = relayIdentity(req)
+    const human = proxyIdentity(req) || relay
+    if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (docWrite && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
@@ -230,13 +232,15 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const body = await readJson(req)
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
-    if (body.via !== undefined && body.via !== 'voice') return sendJson(res, 400, { error: 'invalid via' })
+    if (body.via !== undefined && body.via !== (relay ? 'admin' : 'voice')) return sendJson(res, 400, { error: 'invalid via' })
+    if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
+    if (relay) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
     const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, docWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
-      return sendJson(res, newThread ? 201 : 200, result)
+      return sendJson(res, newThread && !result.duplicate ? 201 : 200, result)
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
@@ -259,6 +263,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
+    if (body.client_id !== undefined) {
+      const duplicate = scope.threads.find((thread) => thread.messages.some((message) => message.client_id === body.client_id)
+        || thread.resolution?.client_id === body.client_id || thread.parked_client_id === body.client_id)
+      if (duplicate) return { thread: duplicate, duplicate: true }
+    }
+    const client = body.client_id === undefined ? {} : { client_id: body.client_id }
+    const via = body.via === undefined ? {} : { via: body.via }
     const at = new Date().toISOString()
     const text = (value, limit = human ? 4000 : 600) => {
       const cleaned = typeof value === 'string' ? human ? value.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim() : compact(value) : ''
@@ -291,7 +302,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       const kind = human ? 'comment' : body.kind ?? 'question'
       if (!['question', 'comment'].includes(kind) || (kind === 'comment' && (body.recommendation !== undefined || body.why !== undefined))) bad('invalid kind')
-      thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...(body.via === 'voice' ? { via: 'voice' } : {}) }], created_at: at }
+      thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client }], created_at: at }
       if (!human && body.recommendation !== undefined) thread.recommendation = text(body.recommendation, 600)
       if (!human && body.why !== undefined) thread.why = text(body.why, 600)
       if (body.options !== undefined) {
@@ -315,7 +326,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (body.options !== undefined) setOptions(thread)
       } else if (verb === 'reply') {
         if (body.options !== undefined && (human || body.recommendation === undefined)) bad('options require an agent recommendation')
-        const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...(body.via === 'voice' ? { via: 'voice' } : {}) }
+        const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client }
         if (!human && body.recommendation !== undefined) {
           if (thread.kind !== 'question') bad('only questions have recommendations')
           thread.recommendation = text(body.recommendation, 600)
@@ -335,11 +346,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (thread.status !== 'open' || thread.kind !== 'question' || !thread.recommendation) bad('only open questions with recommendations can be rejected')
         const reason = body.text == null || (typeof body.text === 'string' && !body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()) ? '' : text(body.text)
         thread.rejected_at = at
-        thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...(body.via === 'voice' ? { via: 'voice' } : {}) })
+        thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client })
         noteData = { event: 'reject', text: reason }
       } else if (verb === 'park') {
         if (thread.status !== 'open') bad('only open threads can be parked')
         thread.status = 'parked'; thread.parked_at = at
+        if (body.client_id !== undefined) thread.parked_client_id = body.client_id
         noteData = { event: 'park', text: '' }
       } else if (human) {
         const how = body.how ?? 'resolve'
@@ -347,11 +359,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const decision = text(body.decision, 600)
         const words = body.alex_words == null ? decision : text(body.alex_words)
         thread.status = 'resolved'
-        thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null }
+        thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client }
         noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
       } else if (thread.status === 'open') {
         thread.status = 'resolved'
-        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision }
+        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
       } else return { thread }
