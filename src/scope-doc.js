@@ -19,6 +19,7 @@ function uniqueId(id, used) {
 
 export function sectionPlain(section) {
   const body = section.body_md.replace(/^\s*```(?:svg|mermaid)[^\n]*\n[\s\S]*?^\s*```\s*$/gm, '')
+    .replace(/^\s*!\[[^\]\n]*\]\([^\n]*\)\s*$/gm, '')
     .replace(/^\s*Figure:\s*(.*)$/gm, '$1').replace(/^\s*>\s*\[!(?:NOTE|WARNING|TIP)\]\s*$/gm, '')
   return `${section.heading}\n${plainText(body)}`
 }
@@ -135,6 +136,15 @@ export function validateScope(scope) {
       ids.add(section.id)
       check(typeof section.heading === 'string' && section.heading.trim().length > 0 && section.heading.length <= 200, 'invalid section heading')
       check(typeof section.body_md === 'string' && section.body_md.length <= 200000, 'invalid section body')
+    }
+  }
+  if (scope.doc?.assets !== undefined) {
+    check(object(scope.doc.assets), 'invalid assets')
+    if (object(scope.doc.assets)) for (const [id, asset] of Object.entries(scope.doc.assets)) {
+      const assetId = (value) => typeof value === 'string' && /^[0-9a-f]{16}\.(png|jpg|webp|gif|svg|html|mock)$/.test(value)
+      const dimension = (value) => value === null || (Number.isFinite(value) && value > 0)
+      check(assetId(id) && object(asset) && ['image', 'mock'].includes(asset.type) && dimension(asset.width) && dimension(asset.height)
+        && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }
   check(Array.isArray(scope.threads), 'invalid threads')

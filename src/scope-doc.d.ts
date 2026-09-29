@@ -85,6 +85,9 @@ export interface Thread {
   legacy_id?: string
 }
 
+export type DocAsset = { type: 'image'; width: number | null; height: number | null }
+  | { type: 'mock'; width: number | null; height: number | null; light: string; dark: string | null; html: string; frame: 'desktop' | 'phone' }
+
 export interface ScopeV2 {
   version: 2
   slug: string
@@ -93,7 +96,7 @@ export interface ScopeV2 {
   /** Increments on every doc rewrite (not on thread changes). Starts at 1. */
   revision: number
   updated_at: string
-  doc: { sections: DocSection[] }
+  doc: { sections: DocSection[]; assets?: Record<string, DocAsset> }
   threads: Thread[]
 }
 

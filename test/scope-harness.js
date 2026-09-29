@@ -122,5 +122,5 @@ export async function startScopeHarness(initial) {
     rmSync(temp, { recursive: true, force: true })
   }
 
-  return { request, stream, until, paneLines, writeScope, bearer, close }
+  return { request, stream, until, paneLines, writeScope, bearer, close, port: daemon.port }
 }

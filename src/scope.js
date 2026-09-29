@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
+import { readAsset, readAssetBody, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID } from './scope-doc.js'
 
@@ -215,6 +216,26 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!/^\d+$/.test(raw) || (author && !['alex', 'agent'].includes(author))) return sendJson(res, 400, { error: 'invalid notes filter' })
       return sendJson(res, 200, { notes: store.scopeNotes(slug, { since: Number(raw), author: author || undefined }) })
     }
+    if (action === 'assets') {
+      const dir = join(root, slug, 'assets')
+      if (req.method === 'GET' && parts.length === 3) {
+        const asset = readAsset(dir, threadId)
+        return asset ? serveAsset(res, asset) : sendJson(res, 404, { error: 'no such asset' })
+      }
+      if (req.method === 'POST' && parts.length === 2) {
+        if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'only lanes upload assets' })
+        const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
+        const bytes = await readAssetBody(req)
+        const previous = writes.get(slug) ?? Promise.resolve()
+        const pending = previous.catch(() => {}).then(() => storeAsset(dir, bytes, contentType))
+        writes.set(slug, pending)
+        try {
+          const { status, asset } = await pending
+          return sendJson(res, status, asset)
+        } finally { if (writes.get(slug) === pending) writes.delete(slug) }
+      }
+      return sendJson(res, 404, { error: 'not found' })
+    }
     const docWrite = req.method === 'PUT' && parts.length === 2 && action === 'doc'
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
@@ -286,7 +307,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     let thread, noteData = null, result
     if (docWrite) {
-      scope.doc = { sections: body.sections }
+      scope.doc = { sections: body.sections, assets: docAssets(join(dir, 'assets'), body.sections) }
       scope.revision++
       result = { revision: scope.revision }
     } else if (newThread) {

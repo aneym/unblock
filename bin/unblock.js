@@ -2,9 +2,11 @@
 /** The CLI is a local client. Only reveal resolves a secret, and only here. */
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
-import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { dirname, extname, join, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { IMAGE_LINE } from '../src/scope-assets.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
@@ -346,6 +348,85 @@ async function link(args) {
   const data = await request('/api/links', { ticket, ttl_seconds: 900 })
   output(data, `${data.url}\nexpires in ${Math.max(1, Math.round((data.expires_at - Date.now()) / 60000))}m`)
 }
+const assetMime = (file) => ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.html': 'text/html', '.css': 'text/css', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf' })[extname(file).toLowerCase()] || 'application/octet-stream'
+const localUrl = (url) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url)
+function localFile(base, url) { return resolve(base, decodeURIComponent(url.split(/[?#]/)[0])) }
+function dataUri(base, url) {
+  const file = localFile(base, url)
+  return `data:${assetMime(file)};base64,${readFileSync(file).toString('base64')}`
+}
+function inlineMock(file) {
+  const cssUrls = (css, base) => css.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi, (all, double, single, bare) => {
+    const url = (double ?? single ?? bare).trim()
+    return url && localUrl(url) ? `url("${dataUri(base, url)}")` : all
+  })
+  const attribute = (tag, name) => tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'))?.slice(1).find((value) => value !== undefined)
+  let html = readFileSync(file, 'utf8')
+  html = html.replace(/<link\b[^>]*>/gi, (tag) => {
+    const href = attribute(tag, 'href')
+    if (!href || !localUrl(href) || !(attribute(tag, 'rel') ?? '').split(/\s+/).includes('stylesheet')) return tag
+    const cssFile = localFile(dirname(file), href)
+    return `<style>${cssUrls(readFileSync(cssFile, 'utf8'), dirname(cssFile)).replace(/<\/style/gi, '<\\/style')}</style>`
+  })
+  html = html.replace(/<style\b([^>]*)>([\s\S]*?)<\/style>/gi, (all, attrs, css) => `<style${attrs}>${cssUrls(css, dirname(file))}</style>`)
+  html = html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = attribute(tag, 'src')
+    return src && localUrl(src) ? tag.replace(/\ssrc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i, ` src="${dataUri(dirname(file), src)}"`) : tag
+  })
+  return html
+}
+async function uploadScopeAsset(slug, bytes, type) {
+  const base = await daemon(), token = authToken()
+  const response = await fetch(`${base}/api/scope/${encodeURIComponent(slug)}/assets`, {
+    method: 'POST', headers: { 'content-type': type, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: bytes,
+    signal: AbortSignal.timeout(30_000),
+  })
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || `asset upload: HTTP ${response.status}`)
+  return data
+}
+async function uploadDocImages(slug, doc, source) {
+  for (const section of Array.isArray(doc) ? doc : doc.sections ?? []) {
+    if (typeof section.body_md !== 'string') continue
+    const lines = section.body_md.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const image = lines[i].match(IMAGE_LINE)
+      if (!image || image[2].startsWith('asset:')) continue
+      if (image[3] !== undefined && image[3] !== 'phone') throw new Error('image title must be "phone"')
+      if (!localUrl(image[2])) throw new Error(`image ${image[1]} must be a local file or asset: ref`)
+      const file = localFile(dirname(resolve(source)), image[2])
+      let asset
+      if (extname(file).toLowerCase() === '.html') {
+        const html = inlineMock(file)
+        const uploaded = await uploadScopeAsset(slug, Buffer.from(html), 'text/html')
+        const temp = mkdtempSync(join(tmpdir(), 'unblock-mock-'))
+        try {
+          const page = join(temp, 'mock.html')
+          writeFileSync(page, html)
+          const frame = image[3] === 'phone' ? 'phone' : 'desktop'
+          const args = [pathToFileURL(page).href, '--widths', frame === 'phone' ? '390' : '1280', '--themes', 'light,dark', '--out', temp, ...(frame === 'phone' ? ['--touch'] : [])]
+          let rendered
+          try {
+            const { stdout } = await promisify(execFile)(process.env.UNBLOCK_PAGE_SHOT || join(homedir(), '.local', 'bin', 'page-shot'), args, { timeout: 120_000, maxBuffer: 1024 * 1024 })
+            rendered = JSON.parse(stdout)
+            if (!rendered.ok) throw new Error('page-shot failed')
+          } catch (error) {
+            const tail = String(error.stderr || error.message || '').split('\n').slice(-5).join('\n')
+            throw new Error(`can't render ${file}: page-shot not found (render it to PNG yourself and reference the PNG)${tail ? `\n${tail}` : ''}`)
+          }
+          const light = rendered.shots?.find((shot) => shot.theme === 'light'), dark = rendered.shots?.find((shot) => shot.theme === 'dark')
+          if (!light?.file || !dark?.file) throw new Error(`can't render ${file}: page-shot did not return light and dark files`)
+          const lightAsset = await uploadScopeAsset(slug, readFileSync(light.file), assetMime(light.file))
+          const darkAsset = await uploadScopeAsset(slug, readFileSync(dark.file), assetMime(dark.file))
+          asset = await uploadScopeAsset(slug, Buffer.from(JSON.stringify({ kind: 'mock', html: uploaded.id, light: lightAsset.id, dark: darkAsset.id, frame })), 'application/json')
+        } finally { rmSync(temp, { recursive: true, force: true }) }
+      } else asset = await uploadScopeAsset(slug, readFileSync(file), assetMime(file))
+      lines[i] = `![${image[1]}](asset:${asset.id}${image[3] === 'phone' ? ' "phone"' : ''})`
+    }
+    section.body_md = lines.join('\n')
+  }
+}
+
 async function scope(args) {
   const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | threads <slug> [--open] [--json]'
   const [sub = 'list', slug, ...words] = args
@@ -416,6 +497,7 @@ async function scope(args) {
       const raw = readFileSync(opts['--from'], 'utf8')
       doc = opts['--from'].endsWith('.json') ? JSON.parse(raw) : docFromMarkdown(raw)
     } catch (error) { fail(error.message) }
+    try { await uploadDocImages(name, doc, opts['--from']) } catch (error) { fail(error.message, 1) }
     const data = await request(`/api/scope/${encodeURIComponent(name)}/doc`, { sections: Array.isArray(doc) ? doc : doc.sections }, { method: 'PUT' })
     return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
   }
@@ -569,6 +651,7 @@ unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" .
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope doc <slug> [--from <file.md|file.json>]
+  --from uploads local image lines and renders HTML mocks ("phone" = 390px).
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
 unblock mcp                                      run the MCP server

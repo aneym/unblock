@@ -305,13 +305,23 @@ and confirms it with `scope resolve`. A reply without T# is a general comment.
 all scoping commands support `--json`. Voice uses the same thread paths and the
 queue's voice keys, spend ledger and $20 monthly cap.
 
+### Scope images and mocks
+
+Put each image on its own line: `![Inbox](mocks/inbox.png)` or
+`![Phone inbox](mocks/inbox.html "phone")`. `unblock scope doc <slug> --from doc.md`
+uploads local images and inlines and renders HTML mocks in light and dark themes;
+`"phone"` renders at 390 pixels (desktop at 1280). Adjacent image lines share a
+following `Figure: <caption>` line. Questions anchor to that caption, not the image's
+alt text. Exports keep the stored `asset:` references, so re-importing needs no render.
+
 ### Rails Admin relay
 
 The `unblock-admin-relay` agent-secret handle (override with
 `admin_relay_key_ref` / `UNBLOCK_ADMIN_RELAY_KEY_REF`, or set
 `UNBLOCK_ADMIN_RELAY_TOKEN`) enables a scope-only relay when the token has at
 least 32 characters. Send it in `X-Unblock-Relay` on loopback hosts only.
-The relay may read `GET /api/scope` and `GET /api/scope/<slug>`, create human
+The relay may read `GET /api/scope`, `GET /api/scope/<slug>` and
+`GET /api/scope/<slug>/assets/<id>`, create human
 comments with `POST /api/scope/<slug>/threads`, and use the four thread write
 verbs `reply`, `resolve`, `reject`, and `park`. Each write requires a unique
 `client_id` (1–64 letters, digits, underscores or hyphens) so retries do not
