@@ -189,7 +189,7 @@ function render() {
     if (doc.children[position] !== node) doc.insertBefore(node, doc.children[position] || null)
     position++
   }
-  for (const node of [...doc.children]) if (!signatures.has(node.id)) { node.remove(); clearTimeout(changeTimers.get(node.id)); changeTimers.delete(node.id) }
+  for (const node of [...doc.childNodes] as Element[]) if (!signatures.has(node.id)) { node.remove(); clearTimeout(changeTimers.get(node.id)); changeTimers.delete(node.id) }
   sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
