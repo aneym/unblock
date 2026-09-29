@@ -1,5 +1,5 @@
 import './scope.css'
-import { orderThreads, type ScopeV2, type Thread } from '../../../src/scope-doc.js'
+import { orderThreads, type ScopeV2, type Thread, type DocSection } from '../../../src/scope-doc.js'
 import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
@@ -71,13 +71,41 @@ setInterval(() => {
     if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
-function delivery(id: string) {
-  const note = [...notes.values()].filter(n => n.thread === id).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
-  return note ? ({ delivered: 'Sent to the lane', sending: 'Sent to the lane', queued: 'Sent to the lane', retrying: 'Retrying', no_pane: 'No pane' } as Record<string, string>)[note.delivery] || 'Retrying' : ''
+type CommentState = 'In the doc' | 'Waiting for the lane to pause' | 'With the lane' | 'Retrying' | 'Not sent' | 'No lane pane'
+const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
+function delivery(id: string): CommentState | '' {
+  const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex').sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
+  if (!note) return ''
+  const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
+  if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'In the doc'
+  return ({ held: 'Waiting for the lane to pause', delivered: 'With the lane', queued: 'With the lane', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
+}
+function updateCommentStates() {
+  for (const t of scope?.threads || []) {
+    const state = delivery(t.id), previous = commentStates.get(t.id)
+    if (!state || previous?.state === state) continue
+    if (previous?.timer) clearTimeout(previous.timer)
+    const entry: { state: CommentState; takenAt?: number; timer?: number } = { state }
+    if (state === 'In the doc') {
+      entry.takenAt = previous ? Date.now() : 0
+      if (previous) entry.timer = window.setTimeout(render, 30_000)
+    }
+    commentStates.set(t.id, entry)
+  }
+}
+function deliveryChip(id: string) {
+  const entry = commentStates.get(id)
+  return entry && (entry.state !== 'In the doc' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${entry.state}</span>` : ''
+}
+function inflight() {
+  const count = (state: CommentState) => scope!.threads.filter(t => delivery(t.id) === state).length
+  const waiting = count('Waiting for the lane to pause'), withLane = count('With the lane'), taken = count('In the doc')
+  if (!waiting && !withLane) return ''
+  const total = waiting + withLane + taken
+  return `${total} comment${total === 1 ? '' : 's'} · ` + [[taken, 'taken'], [waiting, 'waiting for the lane to pause'], [withLane, 'with the lane']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
 function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
-  const lastAlex = t.messages.map(m => m.from).lastIndexOf('alex')
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
@@ -86,11 +114,11 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${deliveryChip(t.id)}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
-  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${i + 1 === lastAlex && delivery(t.id) ? `<div class="delivery">${delivery(t.id)}</div>` : ''}</div>`).join('')}</div>` : ''}
+  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div></div>`).join('')}</div>` : ''}
   ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
@@ -111,22 +139,72 @@ function highlight() {
     }
   }
 }
+const sectionSignatures = new Map<string, string>(), sectionContents = new Map<string, string>(), changeTimers = new Map<string, number>()
+function contentSignature(s: DocSection) {
+  const assets = [...s.body_md.matchAll(/!\[[^\]\n]*\]\(asset:(\S+?)(?: "[^"\n]*")?\)/g)].map(m => {
+    const asset = scope!.doc.assets?.[m[1]]
+    return [m[1], asset, asset?.type === 'mock' ? [asset.light, asset.dark, asset.html].map(id => id && scope!.doc.assets?.[id]) : null]
+  })
+  return JSON.stringify([s.heading, s.body_md, (s as DocSection & { updated_at?: string }).updated_at, assets])
+}
+function signature(s: DocSection, line: string) {
+  return JSON.stringify([contentSignature(s), s.id === 'title' ? [scope!.revision, scope!.updated_at, line] : null])
+}
 function render() {
   if (!scope) return
-  const active = document.activeElement as HTMLTextAreaElement | null, activeKey = active?.dataset.draft, caret = active?.selectionStart
-  const scroll = scrollY
-  if (!initialized) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
+  const active = document.activeElement as HTMLTextAreaElement | null, activeKey = active?.dataset.draft, caret = active?.selectionStart, caretEnd = active?.selectionEnd, direction = active?.selectionDirection
+  const first = !initialized
+  if (first) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
+  updateCommentStates()
+  const line = inflight(), signatures = new Map(scope.doc.sections.map(s => [s.id, signature(s, line)]))
+  const unchanged = (id: string) => signatures.get(id) === sectionSignatures.get(id)
+  const candidates = [...doc.querySelectorAll<HTMLElement>('h1,h2,p,li,figure,pre,table')].filter(n => n.closest('section[data-section]') && n.getClientRects().length && n.getBoundingClientRect().top >= 0)
+  const reading = candidates.find(n => unchanged(n.closest('section')!.id)) || candidates[0]
+  const readingTop = reading?.getBoundingClientRect().top, readingSection = reading?.closest('section')?.id
+  const sel = getSelection(), selected = sel?.rangeCount && !sel.isCollapsed ? anchorFromRange(sel.getRangeAt(0)) : null
+  const keepSelection = selected && unchanged(selected.section) ? selected : null
+  const backward = !!sel?.rangeCount && sel.anchorNode === sel.getRangeAt(0).endContainer && sel.anchorOffset === sel?.getRangeAt(0)?.endOffset
   const askOpen = doc.querySelector<HTMLDetailsElement>('.ask-fold')?.open || false
-  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p>` : ''}`}</section>`).join('')
-  doc.querySelector('.ask-fold')?.addEventListener('toggle', layout)
-  doc.querySelectorAll<HTMLButtonElement>('button.shot').forEach(button => {
-    const image = button.querySelector('img')!
-    const size = () => { const ratio = (Number(image.getAttribute('width')) || image.naturalWidth || 1) / (Number(image.getAttribute('height')) || image.naturalHeight || 1); button.style.flexGrow = String(ratio); button.style.width = `calc(var(--shot-height) * ${ratio})`; layout() }
-    image.addEventListener('load', size); size()
-  })
-  document.title = scope.title; highlight(); syncFigureFocus(); renderCards(); renderFeed(); void renderMermaid(doc, layout)
-  scrollTo({ top: scroll, behavior: 'instant' })
-  if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caret) }
+  const redrawn: HTMLElement[] = []
+  let position = 0
+  for (const s of scope.doc.sections) {
+    let node = [...doc.children].find(n => n.id === s.id) as HTMLElement | undefined
+    if (!node || !unchanged(s.id)) {
+      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
+      const next = replacement.firstElementChild as HTMLElement
+      if (node) node.replaceWith(next)
+      node = next; redrawn.push(node)
+      if (!first && (s.id !== 'title' || contentSignature(s) !== sectionContents.get(s.id))) {
+        node.classList.add('changed')
+        clearTimeout(changeTimers.get(s.id))
+        changeTimers.set(s.id, window.setTimeout(() => { node!.classList.remove('changed'); changeTimers.delete(s.id) }, 4000))
+      }
+      node.querySelector('.ask-fold')?.addEventListener('toggle', layout)
+      node.querySelectorAll<HTMLButtonElement>('button.shot').forEach(button => {
+        const image = button.querySelector('img')!
+        const size = () => { const ratio = (Number(image.getAttribute('width')) || image.naturalWidth || 1) / (Number(image.getAttribute('height')) || image.naturalHeight || 1); button.style.flexGrow = String(ratio); button.style.width = `calc(var(--shot-height) * ${ratio})`; layout() }
+        image.addEventListener('load', size); size()
+      })
+    }
+    if (doc.children[position] !== node) doc.insertBefore(node, doc.children[position] || null)
+    position++
+  }
+  for (const node of [...doc.children]) if (!signatures.has(node.id)) { node.remove(); clearTimeout(changeTimers.get(node.id)); changeTimers.delete(node.id) }
+  sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
+  sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
+  doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
+  document.title = scope.title; highlight(); syncFigureFocus(); renderCards(); renderFeed()
+  const restoreReading = () => {
+    const anchor = reading?.isConnected ? reading : readingSection ? document.getElementById(readingSection)?.querySelector('h1,h2') : null
+    if (anchor && readingTop != null) scrollTo({ top: scrollY + anchor.getBoundingClientRect().top - readingTop, behavior: 'instant' })
+  }
+  restoreReading()
+  for (const node of redrawn) void renderMermaid(node, () => { layout(); restoreReading() })
+  if (keepSelection) {
+    const range = rangeFromAnchor(keepSelection)?.range
+    if (range && sel) sel.setBaseAndExtent(backward ? range.endContainer : range.startContainer, backward ? range.endOffset : range.startOffset, backward ? range.startContainer : range.endContainer, backward ? range.startOffset : range.endOffset)
+  }
+  if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
 }
 function renderCards() {
   syncFigureFocus()
@@ -371,7 +449,7 @@ function renderFeed() {
   if (feed.hidden) return
   const limit = phone() ? 2 : 6
   const visible = feedExpanded ? feedRows : feedRows.slice(-limit)
-  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(delivery(row.thread))}</span>` : ''}</button>`).join('')}</div>`
+  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(delivery(row.thread) === 'With the lane' || delivery(row.thread) === 'In the doc' ? 'Sent to the lane' : delivery(row.thread))}</span>` : ''}</button>`).join('')}</div>`
   feed.querySelector<HTMLButtonElement>('.voice-feed-toggle')?.addEventListener('click', () => { feedExpanded = !feedExpanded; renderFeed() })
   feed.querySelector<HTMLButtonElement>('.voice-feed-close')!.onclick = () => { feedClosed = true; renderFeed() }
   feed.querySelectorAll<HTMLButtonElement>('.voice-feed-row[data-thread]').forEach(row => row.onclick = () => {
@@ -393,7 +471,7 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if
 async function start() {
   if (!slug) { const { scopes } = await api<{ scopes: any[] }>(apiBase); doc.innerHTML = `<h1>Scoping</h1>${scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join('')}`; return }
   const poll = async () => { try { accept(await api(endpoint)); $('#live').textContent = 'Live' } catch { $('#live').textContent = 'Reconnecting' } }
-  if (boot.events === false) { await poll(); setInterval(() => void poll(), 5000); return }
+  if (boot.events === false) { await poll(); setInterval(() => void poll(), 2000); return }
   accept(await api(endpoint)); $('#live').textContent = 'Live'
   const events = new EventSource(`${endpoint}/events`)
   events.addEventListener('state', e => accept(JSON.parse((e as MessageEvent).data)))
