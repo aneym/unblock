@@ -1,6 +1,8 @@
 import './scope.css'
 import { orderThreads, type ScopeV2, type Thread, type DocSection } from '../../../src/scope-doc.js'
-import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
+import { locateAnchor, type Anchor as TextAnchor } from '../../../src/scope-anchor.js'
+type Anchor = TextAnchor & { t?: number; t_end?: number }
+const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
 import { prepareAudio } from '../lib/voice-audio'
@@ -114,7 +116,7 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${deliveryChip(t.id)}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${deliveryChip(t.id)}${(t.anchor as Anchor).t != null ? `<span class="moment">at ${moment((t.anchor as Anchor).t!)}</span>` : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
@@ -141,7 +143,7 @@ function highlight() {
 }
 const sectionSignatures = new Map<string, string>(), sectionContents = new Map<string, string>(), changeTimers = new Map<string, number>()
 function contentSignature(s: DocSection) {
-  const assets = [...s.body_md.matchAll(/!\[[^\]\n]*\]\(asset:(\S+?)(?: "[^"\n]*")?\)/g)].map(m => {
+  const assets = [...s.body_md.matchAll(/asset:([^\s)]+)/g)].map(m => {
     const asset = scope!.doc.assets?.[m[1]]
     return [m[1], asset, asset?.type === 'mock' ? [asset.light, asset.dark, asset.html].map(id => id && scope!.doc.assets?.[id]) : null]
   })
@@ -179,6 +181,11 @@ function render() {
         clearTimeout(changeTimers.get(s.id))
         changeTimers.set(s.id, window.setTimeout(() => { node!.classList.remove('changed'); changeTimers.delete(s.id) }, 4000))
       }
+      node.querySelectorAll<HTMLElement>('.demo-stage').forEach(stage => { stage.style.height = `${stage.dataset.height}px`; stage.dataset.title = stage.closest('figure')?.querySelector('figcaption')?.textContent || 'Demo' })
+      node.querySelectorAll<HTMLVideoElement>('figure.video video').forEach(video => {
+        const update = () => { const button = video.closest('figure')?.querySelector('button.fig-comment'); if (button) button.textContent = video.currentTime >= .5 ? `Comment at ${moment(video.currentTime)}` : 'Comment on this recording' }
+        for (const event of ['timeupdate', 'seeked', 'pause']) video.addEventListener(event, update)
+      })
       node.querySelector('.ask-fold')?.addEventListener('toggle', layout)
       node.querySelectorAll<HTMLButtonElement>('button.shot').forEach(button => {
         const image = button.querySelector('img')!
@@ -287,6 +294,9 @@ function focus(id: string | null, scroll = false, openSheet = true) {
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
   syncFigureFocus()
+  const anchor = scope?.threads.find(t => t.id === id)?.anchor as Anchor | undefined
+  const video = id && figureFor(marks(id)[0])?.querySelector<HTMLVideoElement>('video')
+  if (video && anchor?.t != null) video.currentTime = anchor.t
   if (id && scroll) { const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
   if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
   updateCount(); layout()
@@ -313,7 +323,7 @@ function readSelection() {
   if (anchor) { selection = anchor; selectionTop = range.getBoundingClientRect().top + scrollY; showSelection() }
 }
 function renderComposer() {
-  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply"><textarea rows="2" data-draft="composer" placeholder="Comment on this text">${esc(drafts.get('composer'))}</textarea><p class="error">${esc(errors.get('composer'))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="composer" placeholder="${composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(drafts.get('composer'))}</textarea><p class="error">${esc(errors.get('composer'))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
   if (phone()) { sheet.replaceChildren(node); document.body.classList.add('sheet-open') }
   else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
 }
@@ -411,6 +421,24 @@ document.addEventListener('click', e => {
   const target = e.target as HTMLElement
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
   if (!zoom.hidden) return
+  const demo = target.closest<HTMLButtonElement>('button.demo-try')
+  if (demo) {
+    const stage = demo.closest<HTMLElement>('.demo-stage')!, frame = document.createElement('iframe')
+    frame.src = stage.dataset.src!; frame.setAttribute('sandbox', stage.dataset.sandbox!); if (stage.dataset.allow) frame.setAttribute('allow', stage.dataset.allow)
+    frame.referrerPolicy = 'no-referrer'; frame.title = stage.dataset.title || 'Demo'; frame.loading = 'lazy'; frame.style.height = `${stage.dataset.height}px`
+    stage.replaceChildren(frame); layout(); return
+  }
+  const figureButton = target.closest<HTMLButtonElement>('button.fig-comment')
+  if (figureButton) {
+    const figure = figureButton.closest('figure')!, caption = figure.querySelector('figcaption')!
+    const range = document.createRange(); range.selectNodeContents(caption)
+    const anchor = anchorFromRange(range) as Anchor | null
+    if (!anchor) return
+    const video = figure.querySelector('video')
+    if (video && video.currentTime >= .5) anchor.t = Math.round(video.currentTime * 10) / 10
+    composing = anchor; selection = null; selectionTop = figure.getBoundingClientRect().top + scrollY
+    renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return
+  }
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }

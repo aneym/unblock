@@ -24,7 +24,8 @@ function inline(text: string): string {
   const expand = (html: string): string => html.replace(/\u0000(\d+)\u0000/g, (_, index: string) => expand(tokens[Number(index)]))
   return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>'))
 }
-export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = ''): string {
+type MediaAsset = DocAsset | { type: 'video' | 'html'; width?: number | null; height?: number | null }
+export function markdown(source: string, assets: Record<string, MediaAsset> = {}, assetBase = ''): string {
   const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
   let i = 0
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
@@ -60,7 +61,28 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
         let phone = ''; if (/^```svg phone\s*$/.test(lines[i] || '')) phone = `<div class="fig-phone" data-cm-skip>${sanitizeSvg(fence().source)}</div>`
         out.push(`<figure class="fig"><div class="fig-wide" data-cm-skip>${sanitizeSvg(f.source)}</div>${phone}${caption()}</figure>`)
       } else if (f.lang === 'mermaid') out.push(`<figure class="fig mermaid"><div data-mermaid="${esc(f.source)}" data-cm-skip><pre>${esc(f.source)}</pre></div>${caption()}</figure>`)
-      else out.push(`<pre><code>${esc(f.source)}</code></pre>`)
+      else if (f.lang === 'demo' || f.lang === 'video') {
+        const values: Record<string, string> = {}
+        for (const line of f.source.split('\n')) { const match = line.match(/^\s*([^:]+):\s*(.*?)\s*$/); if (match) values[match[1].trim()] = match[2] }
+        const mediaUrl = (value: string | undefined, type: MediaAsset['type']) => {
+          if (!value) return ''
+          try { if (new URL(value).protocol === 'https:') return esc(value) } catch {}
+          const id = value.startsWith('asset:') ? value.slice(6) : ''
+          return id && Object.hasOwn(assets, id) && assets[id].type === type ? assetUrl(id) : ''
+        }
+        const demo = f.lang === 'demo', src = mediaUrl(values.src, demo ? 'html' : 'video'), cap = caption()
+        if (!src) { out.push(`<figure class="fig ${f.lang}"><div class="shot-missing" data-cm-skip>${demo ? 'Demo' : 'Recording'} unavailable</div>${cap}</figure>`); continue }
+        if (demo) {
+          const height = /^-?\d+$/.test(values.height || '') ? Math.max(240, Math.min(1200, Number(values.height))) : 560
+          const allow = (values.allow || '').split(',').map(v => v.trim()).filter(v => ['microphone', 'camera', 'autoplay', 'clipboard-write'].includes(v)).join('; ')
+          const sandbox = values.src.startsWith('asset:') ? 'allow-scripts allow-forms' : 'allow-scripts allow-forms allow-same-origin allow-popups'
+          const title = document.createElement('div'); title.innerHTML = cap
+          out.push(`<figure class="fig demo" data-frame="${values.frame === 'phone' ? 'phone' : 'desktop'}"><div class="demo-stage" data-cm-skip data-src="${src}" data-sandbox="${esc(sandbox)}" data-allow="${esc(allow)}" data-height="${height}" data-title="${esc(title.textContent || 'Demo')}"><button type="button" class="btn demo-try">Try it</button></div>${cap}<div class="fig-actions" data-cm-skip>${cap ? '<button type="button" class="btn fig-comment">Comment on this demo</button>' : ''}<a class="demo-open" href="${src}" target="_blank" rel="noopener">Open in a new tab</a></div></figure>`)
+        } else {
+          const poster = mediaUrl(values.poster, 'image')
+          out.push(`<figure class="fig video"><div class="video-stage" data-cm-skip><video controls preload="metadata" playsinline src="${src}"${poster ? ` poster="${poster}"` : ''}></video></div>${cap}${cap ? '<div class="fig-actions" data-cm-skip><button type="button" class="btn fig-comment">Comment on this recording</button></div>' : ''}</figure>`)
+        }
+      } else out.push(`<pre><code>${esc(f.source)}</code></pre>`)
       continue
     }
     const callout = line.match(/^>\s*\[!(NOTE|TIP|WARNING)\]\s*(.*)/)
@@ -86,6 +108,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
   }
   return out.join('')
 }
+let diagramId = 0
 const diagramSheets = new Map<HTMLElement, CSSStyleSheet[]>()
 function mountDiagram(node: HTMLElement, svg: string) {
   for (const [owner, sheets] of diagramSheets) if (!owner.isConnected || owner === node) {
@@ -107,8 +130,8 @@ export async function renderMermaid(root: HTMLElement, onLoad: () => void) {
     const { default: mermaid } = await import('mermaid')
     const style = getComputedStyle(document.documentElement)
     mermaid.initialize({ layout: 'dagre', htmlLabels: false, flowchart: { htmlLabels: false }, startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, theme: 'base', themeVariables: { primaryTextColor: style.getPropertyValue('--ink').trim(), primaryColor: style.getPropertyValue('--surface').trim(), primaryBorderColor: style.getPropertyValue('--hairline').trim(), lineColor: style.getPropertyValue('--accent').trim() } })
-    for (const [i, node] of nodes.entries()) {
-      try { const { svg } = await mermaid.render(`scope-diagram-${Date.now()}-${i}`, node.dataset.mermaid!); if (node.isConnected) mountDiagram(node, svg) } catch { /* The source remains readable when a diagram is invalid. */ }
+    for (const node of nodes) {
+      try { const { svg } = await mermaid.render(`scope-diagram-${diagramId++}`, node.dataset.mermaid!); if (node.isConnected) mountDiagram(node, svg) } catch { /* The source remains readable when a diagram is invalid. */ }
     }
   } catch { /* Offline diagrams retain their source. */ }
   onLoad()
