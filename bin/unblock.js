@@ -455,12 +455,12 @@ async function uploadDocImages(slug, doc, source) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
-    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why', '--option']
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why', '--option']
     for (let i = 0; i < words.length; i++) {
       if (words[i] !== '--keep') continue
       if (words[i + 1] === undefined) fail('--keep needs a value')
@@ -482,7 +482,7 @@ async function scope(args) {
     const options = { ...keep, ...(opts['--option'] !== undefined ? { options: opts['--option'] } : {}) }
     if (sub === 'edit') {
       if (!threadId || words.length || !Object.keys(opts).length || (!!opts['--section'] !== !!opts['--quote'])) fail(usage)
-      const data = await request(`${base}/threads/${threadId}/edit`, { ...(opts['--section'] !== undefined ? { section: opts['--section'], quote: opts['--quote'] } : {}), ...options })
+      const data = await request(`${base}/threads/${threadId}/edit`, { ...(opts['--section'] !== undefined ? { section: opts['--section'], quote: opts['--quote'] } : {}), ...options, ...(opts['--text'] !== undefined ? { text: opts['--text'] } : {}) })
       return output(data, `edited ${data.thread.id}`)
     }
     if (sub === 'ask') {
@@ -708,7 +708,7 @@ unblock mirror [path]                            write BLOCKERS.md from the queu
 unblock scope [list|url|notes|threads]           scoping docs and anchored threads
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
-unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json]
+unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]

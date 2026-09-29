@@ -298,13 +298,13 @@ export class Store {
 
   pendingScopeNotes(slug) {
     return this.#db.prepare(`SELECT * FROM scope_notes WHERE slug = ? AND author = 'alex'
-      AND delivered_at IS NULL AND delivery IN ('queued','retrying','no_pane') ORDER BY id ASC`)
+      AND delivered_at IS NULL AND delivery IN ('queued','retrying','no_pane','held') ORDER BY id ASC`)
       .all(slug).map((row) => this.#scopeNote(row))
   }
 
   pendingScopeTargets(slug) {
     return this.#db.prepare(`SELECT n.*, t.pane FROM scope_note_targets t JOIN scope_notes n ON n.id = t.note_id
-      WHERE n.slug = ? AND t.delivery IN ('queued', 'retrying') ORDER BY n.id, t.pane`).all(slug)
+      WHERE n.slug = ? AND t.delivery IN ('queued', 'retrying', 'held') ORDER BY n.id, t.pane`).all(slug)
       .map((row) => ({ ...this.#scopeNote(row), pane: row.pane }))
   }
 

@@ -99,7 +99,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   function schedule(slug) {
     let job = delivering.get(slug)
     if (job) { job.again = true; return }
-    job = { again: false, timer: null, failures: new Map() }
+    job = { again: false, timer: null, failures: new Map(), holds: new Map() }
     delivering.set(slug, job)
     void deliver(slug, job)
   }
@@ -136,11 +136,24 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }).join(' | ')
       let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
       if (line.length > 700) line = `[scoping ${slug}] Alex sent ${notes.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${notes[0].id - 1}`
-      let retry = false
+      let retry = false, held = false
       async function send(key, targetPane, text, mark) {
+        let status
+        try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
+        if (closed) return
+        if (status === 'working' || status === 'blocked') {
+          const first = job.holds.get(key) ?? Date.now()
+          job.holds.set(key, first)
+          if (Date.now() - first < delay(process.env.UNBLOCK_SCOPE_HOLD_MAX_MS, 900000)) {
+            mark('held')
+            held = true
+            return
+          }
+        }
         try {
           await promptPane(['agent', 'prompt', targetPane, text])
           mark('delivered')
+          job.holds.delete(key)
           job.failures.delete(key)
         } catch {
           if (closed) return
@@ -153,17 +166,26 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (notes.length) await send('own', pane, line, (status) => {
         emitNotes(store.markScopeNotes(notes.map((note) => note.id), status, status === 'delivered' ? new Date().toISOString() : null))
       })
+      const batches = new Map()
       for (const target of targets) {
-        if (closed) break
-        const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
-        const heading = headingOf(scope, target.anchor.section)
-        const pointer = `[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`
-        await send(`${target.id}:${target.pane}`, target.pane, pointer, (status) => store.markScopeTarget(target.id, target.pane, status))
+        if (!batches.has(target.pane)) batches.set(target.pane, [])
+        batches.get(target.pane).push(target)
       }
-      if (retry && !closed) {
+      for (const [targetPane, batch] of batches) {
+        if (closed) break
+        const pointer = batch.map((target) => {
+          const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
+          const heading = headingOf(scope, target.anchor.section)
+          return `[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`
+        }).join(' | ')
+        await send(`target:${targetPane}`, targetPane, pointer, (status) => {
+          for (const target of batch) store.markScopeTarget(target.id, target.pane, status)
+        })
+      }
+      if ((retry || held) && !closed) {
         await new Promise((resolve) => {
           job.wake = resolve
-          job.timer = setTimeout(resolve, delay(process.env.UNBLOCK_SCOPE_RETRY_MS, 5000))
+          job.timer = setTimeout(resolve, held ? delay(process.env.UNBLOCK_SCOPE_PAUSE_MS, 1500) : delay(process.env.UNBLOCK_SCOPE_RETRY_MS, 5000))
           job.timer.unref()
         })
         job.wake = null
@@ -310,7 +332,15 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     let thread, noteData = null, result
     if (docWrite) {
-      scope.doc = { sections: body.sections, assets: docAssets(join(dir, 'assets'), body.sections) }
+      const sections = Array.isArray(body.sections) ? body.sections.map((section) => {
+        if (!section || typeof section !== 'object' || Array.isArray(section)) return section
+        const { updated_at, ...next } = section
+        const previous = scope.doc.sections.find((stored) => stored.id === next.id)
+        if (!previous || previous.heading !== next.heading || previous.body_md !== next.body_md) next.updated_at = at
+        else if (previous.updated_at !== undefined) next.updated_at = previous.updated_at
+        return next
+      }) : body.sections
+      scope.doc = { sections, assets: docAssets(join(dir, 'assets'), sections) }
       scope.revision++
       result = { revision: scope.revision }
     } else if (newThread) {
@@ -340,7 +370,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       thread = scope.threads.find((t) => t.id === threadId)
       if (!thread) bad('no such thread', 404)
       if (verb === 'edit') {
-        if (body.section === undefined && body.quote === undefined && body.options === undefined) bad('edit needs section and quote or options')
+        if (body.section === undefined && body.quote === undefined && body.options === undefined && body.text === undefined) bad('edit needs section and quote, options or text')
+        if (body.text !== undefined) {
+          if (thread.messages[0].from === 'alex') bad("only the lane's own question can be reworded")
+          thread.messages[0].text = text(body.text)
+          thread.messages[0].edited_at = at
+        }
         if (body.section !== undefined || body.quote !== undefined) {
           const section = scope.doc.sections.find((s) => s.id === body.section)
           const anchor = section && typeof body.quote === 'string' ? anchorInSection(section, body.quote) : null
