@@ -56,7 +56,8 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
     if (!hasClientId(client_id)) sending.set(key, { clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
     if (id) drafts.delete(id)
     renderCards()
-  } else if (result.thread) upsert(result.thread)
+  } else if (typeof result.thread?.anchor?.section === 'string' && result.thread.created_at) upsert(result.thread)
+  else accept(await api(endpoint))
   return result
 }
 async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { return write('', body) }
@@ -76,8 +77,16 @@ type CommentState = 'In the doc' | 'Waiting for the lane to pause' | 'With the l
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
   const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex').sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
-  if (!note) return ''
   const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
+  if (!note) {
+    const state = (thread as Thread & { delivery?: string })?.delivery
+    if (state === 'queued') return 'Waiting for the lane to pause'
+    if (state === 'in_doc') return 'In the doc'
+    if (state !== 'with_lane') return ''
+    const lastAlex = thread?.messages.filter(m => m.from === 'alex').at(-1)
+    const taken = lastAlex && (thread?.messages.some(m => m.from !== 'alex' && m.at > lastAlex.at) || (section as DocSection & { updated_at?: string })?.updated_at! > lastAlex.at) || thread?.status === 'resolved' && thread.resolution?.confirmed_at
+    return taken ? 'In the doc' : 'With the lane'
+  }
   if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'In the doc'
   return ({ held: 'Waiting for the lane to pause', delivered: 'With the lane', queued: 'With the lane', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
 }
@@ -459,7 +468,7 @@ $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElemen
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
 addEventListener('resize', layout); document.fonts.ready.then(layout)
 let scrollTimer = 0
-addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
+addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 const feedRows: (ScopeFeedLine & { at: Date })[] = []
@@ -508,6 +517,11 @@ async function start() {
   events.addEventListener('state', e => accept(JSON.parse((e as MessageEvent).data)))
   events.addEventListener('scope', e => { const data = JSON.parse((e as MessageEvent).data); accept(data.scope ? data : { scope: data }) })
   events.addEventListener('note', e => { const note = JSON.parse((e as MessageEvent).data); notes.set(note.id, note); render() })
-  events.onopen = () => $('#live').textContent = 'Live'; events.onerror = () => $('#live').textContent = 'Reconnecting'
+  let reconnectTimer = 0
+  events.onopen = () => { clearTimeout(reconnectTimer); reconnectTimer = 0; $('#live').textContent = 'Live' }
+  events.onerror = () => {
+    if (events.readyState === EventSource.CLOSED) { clearTimeout(reconnectTimer); reconnectTimer = 0; $('#live').textContent = 'Reconnecting' }
+    else if (!reconnectTimer) reconnectTimer = window.setTimeout(() => { reconnectTimer = 0; if (events.readyState !== EventSource.OPEN) $('#live').textContent = 'Reconnecting' }, 5000)
+  }
 }
 void start().catch(error => { doc.textContent = `Could not load: ${error.message}`; $('#live').textContent = 'Reconnecting' })
