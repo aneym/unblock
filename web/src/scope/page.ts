@@ -1,7 +1,6 @@
 import './scope.css'
 import { orderThreads, type ScopeV2, type Thread, type DocSection } from '../../../src/scope-doc.js'
-import { locateAnchor, type Anchor as TextAnchor } from '../../../src/scope-anchor.js'
-type Anchor = TextAnchor & { t?: number; t_end?: number }
+import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
@@ -116,7 +115,8 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${deliveryChip(t.id)}${(t.anchor as Anchor).t != null ? `<span class="moment">at ${moment((t.anchor as Anchor).t!)}</span>` : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
+  const state = [deliveryChip(t.id), t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
@@ -428,7 +428,7 @@ document.addEventListener('click', e => {
   if (demo) {
     const stage = demo.closest<HTMLElement>('.demo-stage')!, frame = document.createElement('iframe')
     frame.src = stage.dataset.src!; frame.setAttribute('sandbox', stage.dataset.sandbox!); if (stage.dataset.allow) frame.setAttribute('allow', stage.dataset.allow)
-    frame.referrerPolicy = 'no-referrer'; frame.title = stage.dataset.title || 'Demo'; frame.loading = 'lazy'; frame.style.height = `${stage.dataset.height}px`
+    frame.referrerPolicy = 'no-referrer'; frame.title = stage.dataset.title || 'Demo'; frame.loading = 'lazy'
     stage.replaceChildren(frame); layout(); return
   }
   const figureButton = target.closest<HTMLButtonElement>('button.fig-comment')

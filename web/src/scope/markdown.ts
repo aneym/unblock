@@ -24,8 +24,7 @@ function inline(text: string): string {
   const expand = (html: string): string => html.replace(/\u0000(\d+)\u0000/g, (_, index: string) => expand(tokens[Number(index)]))
   return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>'))
 }
-type MediaAsset = DocAsset | { type: 'video' | 'html'; width?: number | null; height?: number | null }
-export function markdown(source: string, assets: Record<string, MediaAsset> = {}, assetBase = ''): string {
+export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = ''): string {
   const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
   let i = 0
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
@@ -64,7 +63,7 @@ export function markdown(source: string, assets: Record<string, MediaAsset> = {}
       else if (f.lang === 'demo' || f.lang === 'video') {
         const values: Record<string, string> = {}
         for (const line of f.source.split('\n')) { const match = line.match(/^\s*([^:]+):\s*(.*?)\s*$/); if (match) values[match[1].trim()] = match[2] }
-        const mediaUrl = (value: string | undefined, type: MediaAsset['type']) => {
+        const mediaUrl = (value: string | undefined, type: DocAsset['type']) => {
           if (!value) return ''
           try { if (new URL(value).protocol === 'https:') return esc(value) } catch {}
           const id = value.startsWith('asset:') ? value.slice(6) : ''

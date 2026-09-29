@@ -19,6 +19,8 @@ export interface Anchor {
   prefix: string
   /** Up to 40 chars of text just after the quote (collapsed, trimmed), may be ''. */
   suffix: string
+  t?: number
+  t_end?: number
 }
 
 /** Matches a valid AnchorSection: /^([a-z][a-z0-9-]{0,39}|q:Q\d{1,3})$/ */

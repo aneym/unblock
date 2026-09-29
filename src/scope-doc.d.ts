@@ -86,6 +86,7 @@ export interface Thread {
 }
 
 export type DocAsset = { type: 'image'; width: number | null; height: number | null }
+  | { type: 'video' | 'html'; width?: number | null; height?: number | null }
   | { type: 'mock'; width: number | null; height: number | null; light: string; dark: string | null; html: string; frame: 'desktop' | 'phone' }
 
 export interface ScopeV2 {
