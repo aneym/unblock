@@ -361,7 +361,7 @@ async function link(args) {
   const data = await request('/api/links', { ticket, ttl_seconds: 900 })
   output(data, `${data.url}\nexpires in ${Math.max(1, Math.round((data.expires_at - Date.now()) / 60000))}m`)
 }
-const assetMime = (file) => ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.html': 'text/html', '.css': 'text/css', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf' })[extname(file).toLowerCase()] || 'application/octet-stream'
+const assetMime = (file) => ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.html': 'text/html', '.htm': 'text/html', '.mp4': 'video/mp4', '.webm': 'video/webm', '.css': 'text/css', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf' })[extname(file).toLowerCase()] || 'application/octet-stream'
 const localUrl = (url) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url)
 function localFile(base, url) { return resolve(base, decodeURIComponent(url.split(/[?#]/)[0])) }
 function dataUri(base, url) {
@@ -409,7 +409,24 @@ async function uploadDocImages(slug, doc, source) {
   for (const section of Array.isArray(doc) ? doc : doc.sections ?? []) {
     if (typeof section.body_md !== 'string') continue
     const lines = section.body_md.split('\n')
+    let fence = null
     for (let i = 0; i < lines.length; i++) {
+      if (fence !== null) {
+        if (/^```\s*$/.test(lines[i])) { fence = null; continue }
+        if (['demo', 'video'].includes(fence)) {
+          const pair = lines[i].match(/^\s*(src|poster):\s*(.*?)\s*$/)
+          if (pair && (pair[1] === 'src' || fence === 'video') && !/^(?:https?:\/\/|asset:)/i.test(pair[2])) {
+            const file = localFile(dirname(resolve(source)), pair[2])
+            const type = assetMime(file)
+            if (!['text/html', 'video/mp4', 'video/webm', 'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml'].includes(type)) throw new Error(`unsupported asset file ${file}`)
+            const bytes = type === 'text/html' ? Buffer.from(inlineMock(file)) : readFileSync(file)
+            const asset = await uploadScopeAsset(slug, bytes, type)
+            lines[i] = `${pair[1]}: asset:${asset.id}`
+          }
+        }
+        continue
+      }
+      if (/^```/.test(lines[i])) { fence = lines[i].match(/^```(demo|video)\s*$/)?.[1] ?? ''; continue }
       const image = lines[i].match(IMAGE_LINE)
       if (!image || image[2].startsWith('asset:')) continue
       if (image[3] !== undefined && image[3] !== 'phone') throw new Error('image title must be "phone"')

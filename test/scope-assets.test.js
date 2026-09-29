@@ -71,15 +71,16 @@ test('lanes put screens and mocks in the doc; the daemon serves them sandboxed; 
     assert.ok([400, 404].includes((await raw('/api/scope/demo/assets/0000000000000000.png', { headers: human })).status))
     assert.equal((await raw(`/api/scope/other/assets/${shot.json.id}`, { headers: human })).status, 404)
 
-    // 4. An HTML mock is served as a sandboxed document: no scripts, no same-origin.
+    // 4. An HTML mock is served as a sandboxed document: never same-origin, no network.
+    // r11 (2026-09-29): HTML assets double as "Try it" demos, so their own inline script may run in that opaque sandbox.
     const html = await upload(Buffer.from('<!doctype html><title>Inbox</title><h1>Inbox</h1><script>parent.x=1</script>'), 'text/html')
     assert.equal(html.status, 201)
     assert.match(html.json.id, /\.html$/)
     const page = await raw(`/api/scope/demo/assets/${html.json.id}`, { headers: human })
     assert.match(page.headers['content-type'], /^text\/html/)
     assert.match(page.headers['content-security-policy'], /sandbox/)
-    assert.doesNotMatch(page.headers['content-security-policy'], /allow-scripts|allow-same-origin/)
-    assert.match(page.headers['content-security-policy'], /script-src 'none'|default-src 'none'/)
+    assert.doesNotMatch(page.headers['content-security-policy'], /allow-same-origin|connect-src (?!'none')/)
+    assert.match(page.headers['content-security-policy'], /default-src 'none'/)
 
     // 5. A mock record ties the HTML to its light and dark renders and its frame.
     const light = (await upload(png(390, 1600, 2), 'image/png')).json

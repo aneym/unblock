@@ -8,7 +8,12 @@ export function normalizeAnchor(input) {
   if (!input || typeof input !== 'object' || typeof input.section !== 'string' || !ANCHOR_SECTION.test(input.section) || typeof input.quote !== 'string') return null
   const quote = anchorText(input.quote).slice(0, 300).trim()
   if (!quote) return null
-  return { section: input.section, quote, prefix: anchorText(input.prefix).slice(-40).trim(), suffix: anchorText(input.suffix).slice(0, 40).trim() }
+  const anchor = { section: input.section, quote, prefix: anchorText(input.prefix).slice(-40).trim(), suffix: anchorText(input.suffix).slice(0, 40).trim() }
+  if (Number.isFinite(input.t) && input.t >= 0 && input.t <= 86400) {
+    anchor.t = Math.round(input.t * 10) / 10
+    if (Number.isFinite(input.t_end) && input.t_end > input.t && input.t_end <= 86400) anchor.t_end = Math.round(input.t_end * 10) / 10
+  }
+  return anchor
 }
 
 export function makeAnchor(section, text, start, end) {

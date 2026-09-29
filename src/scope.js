@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
 import { lintDoc, lintText } from './scope-lint.js'
-import { readAsset, readAssetBody, storeAsset, serveAsset, docAssets } from './scope-assets.js'
+import { readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID } from './scope-doc.js'
 
@@ -246,12 +246,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const dir = join(root, slug, 'assets')
       if (req.method === 'GET' && parts.length === 3) {
         const asset = readAsset(dir, threadId)
-        return asset ? serveAsset(res, asset) : sendJson(res, 404, { error: 'no such asset' })
+        return asset ? serveAsset(req, res, asset) : sendJson(res, 404, { error: 'no such asset' })
       }
       if (req.method === 'POST' && parts.length === 2) {
         if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'only lanes upload assets' })
         const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
-        const bytes = await readAssetBody(req)
+        const bytes = await readAssetBody(req, assetLimit(contentType))
         const previous = writes.get(slug) ?? Promise.resolve()
         const pending = previous.catch(() => {}).then(() => storeAsset(dir, bytes, contentType))
         writes.set(slug, pending)
@@ -392,7 +392,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           const section = scope.doc.sections.find((s) => s.id === body.section)
           const anchor = section && typeof body.quote === 'string' ? anchorInSection(section, body.quote) : null
           if (!anchor) bad(`quote not found in §${body.section}`)
-          thread.anchor = anchor
+          thread.anchor = normalizeAnchor({ ...anchor, t: thread.anchor.t, t_end: thread.anchor.t_end })
         }
         if (body.options !== undefined) setOptions(thread)
       } else if (verb === 'reply') {

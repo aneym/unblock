@@ -287,6 +287,9 @@ unblock scope resolve demo T4
 unblock scope threads demo --open
 ```
 
+Use a fence with opening line `` ```demo ``, then `src: demo.html` (or an https URL) and closing line `` ``` ``; optional keys are `height`, `frame` and `allow`, and local `src` files are uploaded.
+Use `` ```video `` with `src: recording.mp4` and optional `poster: cover.png`, then `` ``` ``; local `src`/`poster` files are uploaded, and a following `Figure:` caption anchors threads.
+
 A markdown doc starts with `# Title`; `## Heading {#stable-id}` starts a section.
 JSON input is a sections array or `{sections}`. Doc rewrites keep all threads;
 threads whose quotes disappeared are reported as detached. Each rewrite saves

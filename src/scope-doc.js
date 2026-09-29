@@ -141,9 +141,9 @@ export function validateScope(scope) {
   if (scope.doc?.assets !== undefined) {
     check(object(scope.doc.assets), 'invalid assets')
     if (object(scope.doc.assets)) for (const [id, asset] of Object.entries(scope.doc.assets)) {
-      const assetId = (value) => typeof value === 'string' && /^[0-9a-f]{16}\.(png|jpg|webp|gif|svg|html|mock)$/.test(value)
+      const assetId = (value) => typeof value === 'string' && /^[0-9a-f]{16}\.(png|jpg|webp|gif|svg|html|mock|mp4|webm)$/.test(value)
       const dimension = (value) => value === null || (Number.isFinite(value) && value > 0)
-      check(assetId(id) && object(asset) && ['image', 'mock'].includes(asset.type) && dimension(asset.width) && dimension(asset.height)
+      check(assetId(id) && object(asset) && ['image', 'mock', 'html', 'video'].includes(asset.type) && dimension(asset.width) && dimension(asset.height)
         && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }

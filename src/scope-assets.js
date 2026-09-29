@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const ASSET_ID = /^[0-9a-f]{16}\.(png|jpg|webp|gif|svg|html|mock)$/
+export const ASSET_ID = /^[0-9a-f]{16}\.(png|jpg|webp|gif|svg|html|mock|mp4|webm)$/
 export const IMAGE_LINE = /^\s*!\[([^\]\n]*)\]\(([^\s)]+)(?:\s+"([^"]*)")?\)\s*$/
 const LIMIT = 8 * 1024 * 1024
 const SCOPE_LIMIT = 200 * 1024 * 1024
-const TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'text/html': 'html', 'application/json': 'mock' }
+export const assetLimit = (contentType) => ['video/mp4', 'video/webm'].includes(contentType) ? 64 * 1024 * 1024 : LIMIT
+const TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'text/html': 'html', 'application/json': 'mock', 'video/mp4': 'mp4', 'video/webm': 'webm' }
+const HTML_CSP = "sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline'; img-src data:; media-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com"
 const CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com"
 function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 function utf8(bytes) {
@@ -65,16 +67,24 @@ export function readAsset(dir, id) {
   } catch { return null }
 }
 
-export async function readAssetBody(req) {
-  let size = 0, over = false
-  const chunks = []
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > LIMIT) over = true
-    if (!over) chunks.push(chunk)
-  }
-  if (over) bad('asset exceeds 8 MiB', 413)
-  return Buffer.concat(chunks)
+export function readAssetBody(req, limit = LIMIT) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    const cleanup = () => { req.off('data', data); req.off('end', end); req.off('error', error) }
+    const error = (err) => { cleanup(); reject(err) }
+    const end = () => { cleanup(); resolve(Buffer.concat(chunks)) }
+    const data = (chunk) => {
+      size += chunk.length
+      if (size > limit) {
+        const err = new Error(`asset exceeds ${limit / (1024 * 1024)} MiB`)
+        err.status = 413
+        error(err)
+        req.resume()
+      } else chunks.push(chunk)
+    }
+    req.on('data', data); req.on('end', end); req.on('error', error)
+  })
 }
 
 export function storeAsset(dir, bytes, contentType) {
@@ -90,7 +100,11 @@ export function storeAsset(dir, bytes, contentType) {
     bytes = Buffer.from(JSON.stringify({ kind: 'mock', html: record.html, light: record.light, dark: record.dark, frame: record.frame }))
     type = 'mock'; width = light.metadata.width; height = light.metadata.height
   } else if (ext === 'html') { utf8(bytes); type = 'html' }
-  else {
+  else if (ext === 'mp4' || ext === 'webm') {
+    const matches = ext === 'mp4' ? bytes.length >= 8 && bytes.toString('ascii', 4, 8) === 'ftyp' : bytes.subarray(0, 4).equals(Buffer.from('1a45dfa3', 'hex'))
+    if (!matches) bad('asset bytes do not match content type')
+    type = 'video'
+  } else {
     ;[width, height] = dimensions(bytes, ext)
     if (ext !== 'svg' && (!width || !height)) bad('invalid image dimensions')
   }
@@ -110,22 +124,70 @@ export function storeAsset(dir, bytes, contentType) {
   return { status: duplicate ? 200 : 201, asset: { id, ref: `asset:${id}`, type, width, height } }
 }
 
-export function serveAsset(res, asset) {
-  const type = asset.metadata.content_type
-  res.writeHead(200, {
+export function serveAsset(req, res, asset) {
+  const type = asset.metadata.content_type, total = asset.bytes.length
+  const headers = {
     'Content-Type': `${type}${['text/html', 'image/svg+xml'].includes(type) ? '; charset=utf-8' : ''}`,
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'private, max-age=31536000, immutable',
-    'Content-Security-Policy': CSP,
-  })
-  res.end(asset.bytes)
+    'Content-Security-Policy': type === 'text/html' ? HTML_CSP : CSP,
+    'Accept-Ranges': 'bytes',
+    'Content-Length': total,
+  }
+  const range = typeof req.headers.range === 'string' ? req.headers.range.match(/^bytes=(\d*)-(\d*)$/) : null
+  let status = 200, bytes = asset.bytes
+  if (range && (range[1] || range[2])) {
+    const start = range[1] ? Number(range[1]) : Math.max(0, total - Number(range[2]))
+    const end = range[1] ? range[2] ? Math.min(Number(range[2]), total - 1) : total - 1 : total - 1
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && (end >= start || start >= total)) {
+      if (start >= total) {
+        res.writeHead(416, { ...headers, 'Content-Range': `bytes */${total}`, 'Content-Length': 0 })
+        return res.end()
+      }
+      status = 206
+      bytes = asset.bytes.subarray(start, end + 1)
+      headers['Content-Range'] = `bytes ${start}-${end}/${total}`
+      headers['Content-Length'] = bytes.length
+    }
+  }
+  res.writeHead(status, headers)
+  res.end(bytes)
 }
 
 export function docAssets(dir, sections) {
   const assets = {}
+  const reference = (fence, key, value, expected) => {
+    if (typeof value === 'string') {
+      try { if (new URL(value).protocol === 'https:') return } catch {}
+      if (value.startsWith('asset:')) {
+        const id = value.slice(6), asset = readAsset(dir, id)
+        if (!asset) bad(`${fence} ${key}: unknown asset ${id}`)
+        const { type, width, height } = asset.metadata
+        if (type !== expected) bad(`${fence} ${key} must reference an ${expected} asset`)
+        assets[id] = { type, width, height }
+        return
+      }
+    }
+    bad(`${fence} ${key} must be an https URL or asset:<id>${expected === 'html' ? '.html' : expected === 'video' ? '.mp4 or .webm' : ' image'}`)
+  }
   for (const section of Array.isArray(sections) ? sections : []) {
     if (typeof section?.body_md !== 'string') continue
+    let fence = null, values = {}
+    const finish = () => {
+      if (!['demo', 'video'].includes(fence)) return
+      reference(fence, 'src', values.src, fence === 'demo' ? 'html' : 'video')
+      if (fence === 'video' && values.poster !== undefined) reference(fence, 'poster', values.poster, 'image')
+    }
     for (const line of section.body_md.split('\n')) {
+      if (fence !== null) {
+        if (/^```\s*$/.test(line)) { finish(); fence = null; values = {} }
+        else if (['demo', 'video'].includes(fence)) {
+          const pair = line.match(/^\s*(src|poster|height|frame|allow):\s*(.*?)\s*$/)
+          if (pair) values[pair[1]] = pair[2]
+        }
+        continue
+      }
+      if (/^```/.test(line)) { fence = line.match(/^```(demo|video)\s*$/)?.[1] ?? ''; continue }
       if (!/!\[(?:[^[\]\n]|\[(?:[^[\]\n]|\[[^[\]\n]*\])*\])*\]\(/.test(line)) continue
       const image = line.match(IMAGE_LINE)
       if (!image || !image[2].startsWith('asset:') || !ASSET_ID.test(image[2].slice(6))) bad(`invalid image ${image?.[1] ?? line}: unblock scope doc --from uploads local files`)
