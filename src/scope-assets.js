@@ -126,7 +126,7 @@ export function docAssets(dir, sections) {
   for (const section of Array.isArray(sections) ? sections : []) {
     if (typeof section?.body_md !== 'string') continue
     for (const line of section.body_md.split('\n')) {
-      if (!/!\[[^\]\n]*\]\(/.test(line)) continue
+      if (!/!\[(?:[^[\]\n]|\[(?:[^[\]\n]|\[[^[\]\n]*\])*\])*\]\(/.test(line)) continue
       const image = line.match(IMAGE_LINE)
       if (!image || !image[2].startsWith('asset:') || !ASSET_ID.test(image[2].slice(6))) bad(`invalid image ${image?.[1] ?? line}: unblock scope doc --from uploads local files`)
       if (image[3] !== undefined && image[3] !== 'phone') bad(`invalid image title for ${image[1]}: only "phone" is allowed`)

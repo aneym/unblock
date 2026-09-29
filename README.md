@@ -309,8 +309,8 @@ queue's voice keys, spend ledger and $20 monthly cap.
 
 Put each image on its own line: `![Inbox](mocks/inbox.png)` or
 `![Phone inbox](mocks/inbox.html "phone")`. `unblock scope doc <slug> --from doc.md`
-uploads local images and inlines and renders HTML mocks in light and dark themes;
-`"phone"` renders at 390 pixels (desktop at 1280). Adjacent image lines share a
+uploads local images and inlines and renders HTML mocks in light and dark themes.
+Mocks get a viewport tag if they lack one, and `"phone"` renders at 390 CSS px (780 px image; desktop at 1280 CSS px). Adjacent image lines share a
 following `Figure: <caption>` line. Questions anchor to that caption, not the image's
 alt text. Exports keep the stored `asset:` references, so re-importing needs no render.
 

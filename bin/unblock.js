@@ -362,6 +362,13 @@ function inlineMock(file) {
   })
   const attribute = (tag, name) => tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'))?.slice(1).find((value) => value !== undefined)
   let html = readFileSync(file, 'utf8')
+  if (!(html.match(/<meta\b[^>]*>/gi) ?? []).some((tag) => attribute(tag, 'name')?.toLowerCase() === 'viewport')) {
+    const viewport = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    if (/<head\b[^>]*>/i.test(html)) html = html.replace(/<head\b[^>]*>/i, (tag) => tag + viewport)
+    else if (/<html\b[^>]*>/i.test(html)) html = html.replace(/<html\b[^>]*>/i, (tag) => tag + viewport)
+    else if (/^\s*<!doctype\b[^>]*>/i.test(html)) html = html.replace(/^\s*<!doctype\b[^>]*>/i, (tag) => tag + viewport)
+    else html = viewport + html
+  }
   html = html.replace(/<link\b[^>]*>/gi, (tag) => {
     const href = attribute(tag, 'href')
     if (!href || !localUrl(href) || !(attribute(tag, 'rel') ?? '').split(/\s+/).includes('stylesheet')) return tag
@@ -405,19 +412,26 @@ async function uploadDocImages(slug, doc, source) {
           writeFileSync(page, html)
           const frame = image[3] === 'phone' ? 'phone' : 'desktop'
           const args = [pathToFileURL(page).href, '--widths', frame === 'phone' ? '390' : '1280', '--themes', 'light,dark', '--out', temp, ...(frame === 'phone' ? ['--touch'] : [])]
-          let rendered
+          let stdout = '', stderr = '', ran = false, light, dark, lightBytes, darkBytes
           try {
-            const { stdout } = await promisify(execFile)(process.env.UNBLOCK_PAGE_SHOT || join(homedir(), '.local', 'bin', 'page-shot'), args, { timeout: 120_000, maxBuffer: 1024 * 1024 })
-            rendered = JSON.parse(stdout)
-            if (!rendered.ok) throw new Error('page-shot failed')
+            const result = await promisify(execFile)(process.env.UNBLOCK_PAGE_SHOT || join(homedir(), '.local', 'bin', 'page-shot'), args, { timeout: 120_000, maxBuffer: 1024 * 1024 })
+            ran = true
+            stdout = result.stdout
+            stderr = result.stderr
+            const rendered = JSON.parse(stdout)
+            if (!rendered?.ok) throw new Error('page-shot failed')
+            light = rendered.shots?.find((shot) => shot.theme === 'light')
+            dark = rendered.shots?.find((shot) => shot.theme === 'dark')
+            if (!light?.file || !dark?.file) throw new Error('page-shot did not return light and dark files')
+            lightBytes = readFileSync(light.file)
+            darkBytes = readFileSync(dark.file)
           } catch (error) {
-            const tail = String(error.stderr || error.message || '').split('\n').slice(-5).join('\n')
-            throw new Error(`can't render ${file}: page-shot not found (render it to PNG yourself and reference the PNG)${tail ? `\n${tail}` : ''}`)
+            const missing = !ran && ['ENOENT', 'EACCES', 'EPERM'].includes(error.code)
+            const tail = [error.stderr ?? stderr, error.stdout ?? stdout].filter(Boolean).join('\n').trim().split('\n').slice(-10).join('\n')
+            throw new Error(`can't render ${file}: page-shot ${missing ? 'not found' : 'failed'} (render it to PNG yourself and reference the PNG)${!missing && tail ? `\n${tail}` : ''}`)
           }
-          const light = rendered.shots?.find((shot) => shot.theme === 'light'), dark = rendered.shots?.find((shot) => shot.theme === 'dark')
-          if (!light?.file || !dark?.file) throw new Error(`can't render ${file}: page-shot did not return light and dark files`)
-          const lightAsset = await uploadScopeAsset(slug, readFileSync(light.file), assetMime(light.file))
-          const darkAsset = await uploadScopeAsset(slug, readFileSync(dark.file), assetMime(dark.file))
+          const lightAsset = await uploadScopeAsset(slug, lightBytes, assetMime(light.file))
+          const darkAsset = await uploadScopeAsset(slug, darkBytes, assetMime(dark.file))
           asset = await uploadScopeAsset(slug, Buffer.from(JSON.stringify({ kind: 'mock', html: uploaded.id, light: lightAsset.id, dark: darkAsset.id, frame })), 'application/json')
         } finally { rmSync(temp, { recursive: true, force: true }) }
       } else asset = await uploadScopeAsset(slug, readFileSync(file), assetMime(file))
