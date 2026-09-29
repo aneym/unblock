@@ -1,536 +1,213 @@
 import './scope.css'
-import { createComments } from './comments'
-import { inViewAnchor } from './dom-anchor'
-import { sectionLabel, quoteSnippet } from '../../../src/scope-anchor.js'
+import { orderThreads, type ScopeV2, type Thread } from '../../../src/scope-doc.js'
+import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
+import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
+import { esc, markdown, renderMermaid } from './markdown'
 import { prepareAudio } from '../lib/voice-audio'
+import type { ScopeVoiceUi } from '../../../src/scope-voice.js'
 
-(() => {
-  'use strict'
-  const boot = (window as any).__SCOPE_BOOT__ || {}
-  const slug = boot.slug || (location.pathname.match(/^\/s\/([a-z0-9][a-z0-9-]{0,63})\/?$/) || [])[1] || null
-  const $ = (sel: string, root: any = document): any => root.querySelector(sel)
-  const el = (tag: string, attrs: any = {}, ...kids: any[]): any => {
-    const node = document.createElement(tag)
-    for (const [key, value] of Object.entries(attrs)) {
-      if (value == null || value === false) continue
-      if (key === 'class') node.className = String(value)
-      else if (key === 'html') node.innerHTML = String(value)
-      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value as EventListener)
-      else node.setAttribute(key, value === true ? '' : String(value))
-    }
-    for (const kid of kids.flat()) if (kid != null && kid !== false) node.append(kid instanceof Node ? kid : String(kid))
-    return node
-  }
-  const esc = (s: any) => String(s ?? '').replace(/[&<>"']/g, (c: any) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c])
-
-  // ---- storage (per-viewer conveniences only; the record lives in unblock) ----
-  const store = {
-    get(key: string) { try { return localStorage.getItem(key) } catch { return null } },
-    set(key: string, value: string) { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key) } catch {} },
-  }
-  const draftKey = (qid: any) => `scope:${slug}:${qid || 'thought'}`
-
-  // ---- time, always ET for Alex ----
-  const fmtTime = (iso: any) => {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return String(iso || '')
-    const now = new Date()
-    const opts: Intl.DateTimeFormatOptions = { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }
-    const sameDay = d.toLocaleDateString('en-US', { timeZone: 'America/New_York' }) === now.toLocaleDateString('en-US', { timeZone: 'America/New_York' })
-    if (!sameDay) Object.assign(opts, { month: 'short', day: 'numeric' })
-    return `${d.toLocaleString('en-US', opts)} ET`
-  }
-
-  // ---- small, safe markdown ----
-  function inline(text: any) {
-    let out = esc(text)
-    const codes: string[] = []
-    out = out.replace(/`([^`]+)`/g, (_: any, c: any) => { codes.push(c); return `\u0000${codes.length - 1}\u0000` })
-    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_: any, t: any, u: any) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`)
-    out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_: any, pre: any, u: any) => `${pre}<a href="${u}" target="_blank" rel="noopener">${u}</a>`)
-    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
-    out = out.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
-    return out.replace(/\u0000(\d+)\u0000/g, (_: any, i: any) => `<code>${codes[Number(i)]}</code>`)
-  }
-  function markdown(src: any) {
-    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n')
-    const html = []
-    let i = 0
-    const isTableSep = (line: any) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line)
-    const cells = (line: any) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c: any) => c.trim())
-    while (i < lines.length) {
-      const line = lines[i]
-      if (/^```/.test(line)) {
-        const body = []
-        i++
-        while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++])
-        i++
-        html.push(`<pre><code>${esc(body.join('\n'))}</code></pre>`)
-        continue
-      }
-      const h = line.match(/^(#{1,4})\s+(.*)$/)
-      if (h) { html.push(`<h${h[1].length < 3 ? 3 : 4}>${inline(h[2])}</h${h[1].length < 3 ? 3 : 4}>`); i++; continue }
-      if (/\|/.test(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
-        const head = cells(line)
-        i += 2
-        const rows = []
-        while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) rows.push(cells(lines[i++]))
-        html.push(`<table><thead><tr>${head.map((c: any) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r: any) => `<tr>${r.map((c: any) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`)
-        continue
-      }
-      const list = line.match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/)
-      if (list) {
-        const ordered = /\d/.test(list[2])
-        const items = []
-        while (i < lines.length) {
-          const m = lines[i].match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/)
-          if (m) { items.push(m[3]); i++; continue }
-          if (/^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1] += ' ' + lines[i].trim(); i++; continue }
-          break
-        }
-        const tag = ordered ? 'ol' : 'ul'
-        html.push(`<${tag}>${items.map((it: any) => `<li>${inline(it)}</li>`).join('')}</${tag}>`)
-        continue
-      }
-      if (!line.trim()) { i++; continue }
-      const para = [line]
-      i++
-      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*([-*]|\d+[.)])\s)/.test(lines[i]) &&
-        !(/\|/.test(lines[i]) && i + 1 < lines.length && isTableSep(lines[i + 1]))) para.push(lines[i++])
-      html.push(`<p>${inline(para.join(' '))}</p>`)
-    }
-    return html.join('')
-  }
-
-  // ---- network ----
-  async function api(path: any, body?: any) {
-    const res = await fetch(path, {
-      method: body ? 'POST' : 'GET',
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'same-origin',
-      cache: 'no-store',
-    })
-    let data = null
-    try { data = await res.json() } catch {}
-    if (!res.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${res.status}`), { status: res.status })
-    return data
-  }
-
-  const live = $('#live')
-  function setLive(state: any) {
-    live.className = `live ${state}`
-    $('.label', live).textContent = state === 'on' ? 'Live' : state === 'off' ? 'Reconnecting' : 'Connecting'
-  }
-
-  // ---- index mode: /s/ ----
-  async function renderIndex() {
-    document.title = 'Scoping'
-    const main = $('#main')
-    try {
-      const { scopes } = await api('/api/scope')
-      main.replaceChildren(
-        el('h1', {}, 'Scoping'),
-        el('p', { class: 'meta' }, 'Every scoping lane with a live page.'),
-        el('section', {}, scopes.length
-          ? scopes.map((s: any) => el('a', { class: 'index-row', href: `/s/${s.slug}` },
-              el('span', { class: 't' }, s.title || s.slug),
-              el('span', { class: 'n' }, s.open ? `${s.open} open` : 'nothing open')))
-          : el('p', { class: 'empty' }, 'No scoping lane has published a scope yet.')),
-      )
-      setLive('on')
-    } catch (cause) {
-      const error = cause as any
-      main.replaceChildren(el('p', { class: 'empty' }, `Could not load: ${error.message}`))
-      setLive('off')
+const $ = <T extends HTMLElement = HTMLElement>(selector: string, root: ParentNode = document) => root.querySelector<T>(selector)!
+const slug = (window as any).__SCOPE_BOOT__?.slug || location.pathname.match(/^\/s\/([^/]+)/)?.[1]
+const doc = $('#doc'), cards = $('#cards'), detached = $('#detached'), sheet = $('#sheet')
+const phone = () => matchMedia('(max-width:899px)').matches
+const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} } }
+const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`
+let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
+let showResolved = storage.get('scope:showResolved') === 'true'
+let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
+const pending = new Set<string>()
+function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? 'composer' : card.dataset.t; if (key && pending.has(key)) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
+const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
+const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
+const ordered = () => scope ? orderThreads(scope) : []
+const open = () => ordered().filter(t => t.status === 'open')
+async function api<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
+  const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`); return result
+}
+const endpoint = `/api/scope/${encodeURIComponent(slug)}`
+function upsert(thread: Thread) {
+  if (!scope) return
+  const i = scope.threads.findIndex(t => t.id === thread.id)
+  if (i < 0) scope.threads.push(thread); else scope.threads[i] = thread
+  render()
+}
+async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads`, body); upsert(result.thread); return result }
+async function postReply(id: string, body: { text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/reply`, body); upsert(result.thread); return result }
+async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/resolve`, body); upsert(result.thread); return result }
+async function postReject(id: string, body: { text: string; via?: 'voice' }) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/reject`, body); upsert(result.thread); return result }
+async function postPark(id: string, body: { via?: 'voice' } = {}) { const result = await api<{ thread: Thread }>(`${endpoint}/threads/${id}/park`, body); upsert(result.thread); return result }
+function delivery(id: string) {
+  const note = [...notes.values()].filter(n => n.thread === id).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
+  return note ? ({ delivered: 'Sent to the lane', sending: 'Sent to the lane', queued: 'Sent to the lane', retrying: 'Retrying', no_pane: 'No pane' } as Record<string, string>)[note.delivery] || 'Retrying' : ''
+}
+function cardHtml(t: Thread) {
+  const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
+  const lastAlex = t.messages.map(m => m.from).lastIndexOf('alex')
+  const mode = modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null)
+  const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
+  const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
+  let body = ''
+  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(drafts.get(t.id))}</textarea><p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions"><button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
+  else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
+  else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
+  const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>
+  ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
+  ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
+  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${i + 1 === lastAlex && delivery(t.id) ? `<div class="delivery">${delivery(t.id)}</div>` : ''}</div>`).join('')}</div>` : ''}
+  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+}
+function card(t: Thread) {
+  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; node.innerHTML = cardHtml(t); return node
+}
+function highlight() {
+  missing.clear()
+  for (const t of ordered()) {
+    const root = document.getElementById(t.anchor.section)
+    if (!root?.matches('section[data-section]')) { missing.add(t.id); continue }
+    const { text, map } = sectionText(root), found = locateAnchor(text, t.anchor)
+    if (!found) { missing.add(t.id); continue }
+    const pieces = new Map<Text, { start: number; end: number }>()
+    for (const pos of map.slice(found.start, found.end)) if (pos) { const piece = pieces.get(pos.node); if (piece) piece.end = pos.offset + 1; else pieces.set(pos.node, { start: pos.offset, end: pos.offset + 1 }) }
+    for (const [node, piece] of pieces) {
+      const range = document.createRange(); range.setStart(node, piece.start); range.setEnd(node, piece.end)
+      const mark = document.createElement('mark'); mark.className = `hl ${t.kind} ${t.status}${t.status === 'parked' ? ' resolved' : ''}${t.id === focused ? ' on' : ''}`; mark.dataset.t = t.id; range.surroundContents(mark)
     }
   }
-
-  // ---- scope mode: /s/<slug> ----
-  let scope: any = null
-  let scopeError: any = null
-  const notes = new Map() // id -> note (server) ; 'tmp-*' -> optimistic
-  const qNodes = new Map<any, any>() // qid -> {root, parts}
-  let built = false
-  let asksOpen = false
-
-  const deliveryLabel = (n: any) => ({
-    sending: 'Sending…', queued: 'Sent, waiting for the lane', retrying: 'Lane busy, retrying',
-    delivered: 'Delivered', failed: 'Not delivered', no_pane: 'Lane has no pane', error: 'Failed to send',
-  } as Record<string, string>)[n.delivery] || ''
-
-  function noteNode(n: any) {
-    const from = n.from === 'agent' ? 'Lane' : 'You'
-    const label = n.from === 'alex' ? deliveryLabel(n) : ''
-    return el('li', { class: `note ${n.from}` },
-      el('div', { class: 'note-meta' },
-        el('span', { class: 'note-who' }, from),
-        n.qid && !n.inQuestion ? el('span', {}, n.qid) : null,
-        el('span', {}, fmtTime(n.at)),
-        n.via === 'voice' ? el('span', {}, 'Voice') : null,
-        label ? el('span', { class: `state-${n.delivery}` }, label) : null),
-      n.inCommentCard ? null : commentMeta(n),
-      el('p', { class: 'note-text' }, n.text))
+}
+function render() {
+  if (!scope) return
+  const active = document.activeElement as HTMLTextAreaElement | null, activeKey = active?.dataset.draft, caret = active?.selectionStart
+  const scroll = scrollY
+  if (!initialized) { focused = phone() ? null : open()[0]?.id || null; initialized = true }
+  doc.innerHTML = scope.doc.sections.map(s => `<section id="${esc(s.id)}" data-section>${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}</p>` : ''}</section>`).join('')
+  document.title = scope.title; highlight(); renderCards(); void renderMermaid(doc, layout)
+  scrollTo({ top: scroll, behavior: 'instant' })
+  if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caret) }
+}
+function renderCards() {
+  const visible = ordered().filter(t => t.status === 'open' || showResolved)
+  cards.replaceChildren(...visible.filter(t => !missing.has(t.id)).map(card))
+  detached.replaceChildren()
+  const gone = visible.filter(t => missing.has(t.id))
+  if (gone.length) { detached.append('Detached · the text it was on changed', ...gone.map(card)) }
+  if (composing) renderComposer()
+  document.body.classList.toggle('show-resolved', showResolved)
+  const toggle = $<HTMLInputElement>('#showResolved'); toggle.checked = showResolved; toggle.toggleAttribute('checked', showResolved)
+  if (!composing && phone() && document.body.classList.contains('sheet-open')) renderSheet()
+  updateCount(); layout(); disablePending()
+}
+function layout() {
+  if (phone()) return
+  const base = cards.getBoundingClientRect().top
+  const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
+  const want = nodes.map(n => Math.max(8, (n.classList.contains('composer') ? selectionTop : marks(n.dataset.t!)[0]?.getBoundingClientRect().top + scrollY || base + scrollY) - scrollY - base - 12))
+  const heights = nodes.map(n => n.offsetHeight), top = [...want]
+  let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
+  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
+  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
+  if (top[0] < 8) { const shift = 8 - top[0]; top.forEach((_, i) => top[i] += shift) }
+  nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
+  const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0
+  cards.style.height = `${height}px`; showSelection()
+}
+function updateCount() {
+  const list = open(), i = list.findIndex(t => t.id === focused)
+  $('#openCount').innerHTML = `${list.length} open${i >= 0 ? `<small>${i + 1} of ${list.length}</small>` : ''}`
+  $('#openLabel').textContent = `${list.length} open`
+}
+function focus(id: string | null, scroll = false, openSheet = true) {
+  focused = id
+  document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
+  if (id && scroll) { const mark = marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
+  if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
+  updateCount(); layout()
+}
+function step(direction: number) { const list = open(); if (!list.length) return; const index = list.findIndex(t => t.id === focused); focus(list[Math.max(0, Math.min(list.length - 1, index < 0 ? 0 : index + direction))].id, true) }
+function renderSheet() {
+  const t = scope?.threads.find(t => t.id === focused); if (!t) { closeSheet(); return }
+  const i = open().findIndex(x => x.id === t.id)
+  sheet.innerHTML = `<div class="grab"></div><div class="quote">On <q>${esc(t.anchor.quote)}</q></div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+}
+function closeSheet() { document.body.classList.remove('sheet-open') }
+function showSelection() {
+  document.querySelector('[data-action="comment"]')?.remove()
+  if (!selection || composing) return
+  const button = document.createElement('button'); button.className = 'add'; button.dataset.action = 'comment'; button.textContent = 'Comment'
+  if (phone()) { button.style.top = `${Math.max(56, selectionTop - scrollY - 40)}px`; button.style.left = '16px'; document.body.append(button) }
+  else { button.style.top = `${selectionTop - scrollY - cards.getBoundingClientRect().top - 4}px`; cards.append(button) }
+}
+function readSelection() {
+  const sel = getSelection(); if (!sel?.rangeCount || sel.isCollapsed) { if (!document.activeElement?.closest('.card,.add')) { selection = null; showSelection() } return }
+  const range = sel.getRangeAt(0), anchor = anchorFromRange(range)
+  if (anchor) { selection = anchor; selectionTop = range.getBoundingClientRect().top + scrollY; showSelection() }
+}
+function renderComposer() {
+  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply"><textarea rows="2" data-draft="composer" placeholder="Comment on this text">${esc(drafts.get('composer'))}</textarea><p class="error">${esc(errors.get('composer'))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  if (phone()) { sheet.replaceChildren(node); document.body.classList.add('sheet-open') }
+  else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
+}
+async function action(name: string, target: HTMLElement) {
+  if (name === 'comment') { composing = selection; renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return }
+  const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? 'composer' : id!
+  if (pending.has(key)) return
+  const text = (drafts.get(key) || '').trim()
+  if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { composing = null; drafts.delete('composer'); closeSheet(); renderCards() }; return }
+  if (t && ['menu', 'no', 'else', 'menu-reply'].includes(name)) {
+    if (name === 'menu') { if (menus.has(t.id)) menus.delete(t.id); else menus.add(t.id) }
+    else { menus.delete(t.id); modes.set(t.id, name === 'menu-reply' ? 'reply' : name as 'no' | 'else') }
+    renderCards(); if (name !== 'menu') $<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`, phone() ? sheet : cards).focus({ preventScroll: true }); return
   }
-
-  function sortedNotes() {
-    return [...notes.values()].sort((a: any, b: any) => (a.at || '').localeCompare(b.at || '') || String(a.id).localeCompare(String(b.id)))
-  }
-
-  function allThread() {
-    const extra = Array.isArray(scope && scope.thread) ? scope.thread : []
-    const fromFile = extra.filter((t: any) => t && t.text).map((t: any, i: any) => ({ id: `f${i}`, from: t.from === 'alex' ? 'alex' : 'agent', text: String(t.text), at: t.at || '', delivery: 'delivered' }))
-    const db = sortedNotes()
-    const near = (a: any, b: any) => Math.abs(Date.parse(a) - Date.parse(b)) < 120000
-    // Each stored note hides at most one file entry, so repeated identical lines all survive.
-    const used = new Set()
-    const dup = (t: any) => {
-      const match = db.find((n: any) => !used.has(n.id) && n.from === t.from && n.text === t.text && near(n.at, t.at))
-      if (match) used.add(match.id)
-      return Boolean(match)
-    }
-    return [...db, ...fromFile.filter((t: any) => !dup(t))]
-      .sort((a: any, b: any) => (a.at || '').localeCompare(b.at || ''))
-  }
-
-  function autosize(ta: any) {
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight + 2, 240)}px`
-  }
-
-  const inFlight = new Set()
-  // `restore` is what goes back in a box if the send fails: the words as typed, never a prefix we added.
-  async function send(text: any, qid: any, ta: any,  draftQid = qid,  restore = text) {
-    const clean = String(text || '').trim()
-    if (!clean) return
-    const key = `${qid || ''}|${clean}`
-    if (inFlight.has(key)) return
-    // A repeat of the note just sent on the same question (a double tap) is not sent again.
-    const last = sortedNotes().filter((n: any) => n.from === 'alex' && (n.qid || null) === (qid || null) && n.delivery !== 'error').at(-1)
-    if (last && last.text === clean && Date.now() - Date.parse(last.at) < 60000) {
-      if (ta) { ta.value = ''; store.set(draftKey(draftQid), ''); autosize(ta) }
-      banner('Already sent.')
-      return
-    }
-    inFlight.add(key)
-    const tmp = { id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, from: 'alex', qid: qid || null, text: clean, at: new Date().toISOString(), delivery: 'sending' }
-    notes.set(tmp.id, tmp)
-    if (ta) { ta.value = ''; store.set(draftKey(draftQid), ''); autosize(ta) }
-    renderDynamic()
-    try {
-      const { note } = await api(`/api/scope/${slug}/note`, qid ? { text: clean, qid } : { text: clean })
-      notes.delete(tmp.id)
-      if (!notes.has(note.id) || notes.get(note.id).delivery === 'queued') notes.set(note.id, note)
-    } catch (cause) {
-      const error = cause as any
-      tmp.delivery = 'error'
-      if (ta) {
-        // The question may have been removed while this was in flight; then the text goes to the thought box.
-        const target = ta.isConnected ? ta : $('#thought')
-        const words = String(restore || '').trim()
-        const back = target === ta ? words : `(on ${draftQid}) ${words}`
-        const typed = target.value.trim()
-        target.value = typed ? `${back}\n\n${typed}` : back
-        store.set(draftKey(target === ta ? draftQid : null), target.value)
-        autosize(target)
-        banner(`That note did not send (${error.message}). It is back in the box.`)
-      } else {
-        banner(`That did not send (${error.message}). Try again.`)
-      }
-      setTimeout(() => { notes.delete(tmp.id); renderDynamic() }, 6000)
-    } finally {
-      inFlight.delete(key)
-    }
-    renderDynamic()
-  }
-
-  function replyBox(qid: any, getRec: any) {
-    const ta = el('textarea', { rows: 1, placeholder: qid ? 'Your answer, or "r" for the recommendation' : '' })
-    ta.value = store.get(draftKey(qid)) || ''
-    const go = () => {
-      let text = ta.value.trim()
-      if (!text) return
-      const rec = getRec()
-      if (/^r$/i.test(text) && rec) text = `Take the recommendation: ${rec}`
-      // A question the lane has since removed can't take an answer; send it as a thought.
-      if (qid && !(scope.questions || []).some((x: any) => x && x.id === qid)) send(`(on ${qid}, since removed) ${text}`, null, ta, qid, ta.value)
-      else send(text, qid, ta, qid, ta.value)
-    }
-    ta.addEventListener('input', () => { store.set(draftKey(qid), ta.value); autosize(ta) })
-    ta.addEventListener('keydown', (e: any) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (e.metaKey || e.ctrlKey || !matchMedia('(pointer: coarse)').matches)) {
-        e.preventDefault(); go()
-      }
-    })
-    const take = el('button', { class: 'btn', type: 'button', onclick: () => {
-      const rec = getRec()
-      if (rec) send(`Take the recommendation: ${rec}`, qid, null)
-    } }, 'Take recommendation')
-    const sendBtn = el('button', { class: 'btn primary', type: 'button', onclick: go }, 'Send')
-    requestAnimationFrame(() => autosize(ta))
-    return { node: el('div', { class: 'reply', 'data-cm-skip': true }, ta, take, sendBtn), ta, take }
-  }
-
-  function questionNode(q: any) {
-    const parts: any = {}
-    parts.text = el('p', { class: 'q-text' })
-    parts.rec = el('div', { class: 'rec' })
-    parts.why = el('p', { class: 'why' })
-    parts.settled = el('div', { class: 'settled' })
-    parts.notes = el('ul', { class: 'notes', 'data-cm-skip': true })
-    const box = replyBox(q.id, () => {
-      const cur = (scope.questions || []).find((x: any) => x.id === q.id)
-      return cur && cur.recommendation
-    })
-    parts.box = box
-    parts.id = el('span', { class: 'q-id' }, q.id)
-    const root = el('article', { class: 'q', id: `q-${q.id}` },
-      el('div', { class: 'q-head' }, parts.id,
-        el('div', { class: 'q-body' }, parts.text, parts.rec, parts.why, parts.settled, parts.notes, box.node)))
-    return { root, parts }
-  }
-
-  function updateQuestion(entry: any, q: any) {
-    const { parts, root } = entry
-    const status = q.status === 'answered' || q.status === 'dropped' ? q.status : 'open'
-    root.classList.toggle('is-dropped', status === 'dropped')
-    parts.text.dataset.last = q.text || ''
-    parts.text.replaceChildren(q.text || '', status !== 'open' ? el('span', { class: `tag ${status}`, 'data-cm-skip': true }, status === 'answered' ? 'Answered' : 'Dropped') : '')
-    parts.rec.hidden = !q.recommendation || status === 'answered'
-    parts.rec.innerHTML = q.recommendation ? `<b>Recommended:</b> ${inline(q.recommendation)}` : ''
-    parts.why.hidden = !q.why || status === 'answered'
-    parts.why.innerHTML = q.why ? inline(q.why) : ''
-    const answer = q.answer || ''
-    parts.settled.hidden = !(status === 'answered' && answer)
-    parts.settled.innerHTML = answer ? `<b>Decided:</b> ${inline(answer)}` : ''
-    parts.box.take.hidden = !q.recommendation || status !== 'open'
-    parts.box.ta.placeholder = status === 'open' ? (q.recommendation ? 'Your answer, or "r" for the recommendation' : 'Your answer') : 'Change your answer or add to it'
-    const mine = sortedNotes().filter((n: any) => n.qid === q.id)
-    parts.notes.hidden = mine.length === 0
-    parts.notes.replaceChildren(...mine.map((n: any) => noteNode({ ...n, inQuestion: true })))
-  }
-
-  let bannerTimer: any = null
-  function banner(text: any) {
-    const b = $('#banner')
-    if (!b) return
-    b.textContent = text
-    b.hidden = !text
-    clearTimeout(bannerTimer)
-    if (text) bannerTimer = setTimeout(() => { if (!scopeError) b.hidden = true }, 8000)
-  }
-
-  function buildShell() {
-    const main = $('#main')
-    main.replaceChildren(
-      el('h1', { id: 'title' }),
-      el('p', { class: 'meta', id: 'meta' }),
-      el('p', { class: 'banner', id: 'banner', hidden: true }),
-      el('section', { id: 'askSec' }, el('h2', {}, 'Your ask'), el('div', { id: 'ask' })),
-      el('section', { id: 'planSec' }, el('h2', {}, 'Plan'), el('div', { class: 'md', id: 'plan' })),
-      el('section', { id: 'qSec' }, el('h2', {}, 'Questions'), el('div', { id: 'questions' })),
-      el('section', { id: 'decSec' }, el('h2', {}, 'Decided'), el('div', { id: 'decisions' })),
-      el('section', { id: 'threadSec' }, el('h2', {}, 'Thread'), el('ul', { class: 'notes', id: 'thread' })),
-    )
-    const dock = $('#dock')
-    dock.hidden = false
-    const ta = $('#thought')
-    ta.value = store.get(draftKey(null)) || ''
-    const go = () => send(ta.value, null, ta)
-    ta.addEventListener('input', () => { store.set(draftKey(null), ta.value); autosize(ta) })
-    ta.addEventListener('keydown', (e: any) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (e.metaKey || e.ctrlKey || !matchMedia('(pointer: coarse)').matches)) {
-        e.preventDefault(); go()
-      }
-    })
-    $('#thoughtSend').addEventListener('click', go)
-    autosize(ta)
-    built = true
-  }
-
-  function renderScope() {
-    comments?.beforeRender()
-    if (!scope) return
-    if (!built) buildShell()
-    const title = scope.title || slug
-    document.title = `${title} · Scoping`
-    $('#barName').replaceChildren(el('a', { href: '/s/' }, 'Scoping'), ' / ', title)
-    $('#title').textContent = title
-    const open = (scope.questions || []).filter((q: any) => !q.status || q.status === 'open').length
-    $('#meta').replaceChildren(scope.updated_at ? `Updated ${fmtTime(scope.updated_at)} · ` : '',
-      el('a', { href: '#qSec' }, `${open} open question${open === 1 ? '' : 's'}`),
-      /^https?:\/\//i.test(scope.doc_url || '') ? el('span', {}, ' · ', el('a', { href: scope.doc_url, target: '_blank', rel: 'noopener' }, 'Full doc')) : '')
-
-    const asks = Array.isArray(scope.ask) ? scope.ask : []
-    $('#askSec').hidden = asks.length === 0
-    const shown = asksOpen ? asks : asks.slice(0, 2)
-    $('#ask').replaceChildren(...shown.map((a: any) => el('div', { class: 'quote' },
-      el('p', {}, `“${a.quote || ''}”`),
-      el('div', { class: 'src', 'data-cm-skip': true }, [a.date, a.source].filter(Boolean).join(' · ')))),
-      asks.length > 2 ? el('button', { class: 'more', type: 'button', onclick: () => { asksOpen = !asksOpen; renderScope() } },
-        asksOpen ? 'Show fewer' : `Show ${asks.length - 2} more`) : '')
-
-    $('#planSec').hidden = !scope.plan_md
-    $('#plan').innerHTML = markdown(scope.plan_md)
-
-    // Questions are keyed by id so a live rewrite never touches a reply box.
-    const qs = (Array.isArray(scope.questions) ? scope.questions : []).filter((q: any) => q && q.id)
-    const wrap = $('#questions')
-    const wanted = new Set(qs.map((q: any) => q.id))
-    pruneOrphans(wanted)
-    for (const [qid, entry] of qNodes) {
-      if (wanted.has(qid)) continue
-      // Keep an unsent draft reachable; its question is gone, so it will go as a thought.
-      entry.root.classList.add('is-dropped')
-      entry.parts.text.replaceChildren(entry.parts.text.dataset.last || '', el('span', { class: 'tag dropped', 'data-cm-skip': true }, 'Removed by the lane'))
-      entry.parts.rec.hidden = true
-      entry.parts.why.hidden = true
-      entry.parts.box.take.hidden = true
-      entry.parts.box.ta.placeholder = 'Sends as a thought'
-    }
-    let prev = null
-    for (const q of qs) {
-      let entry = qNodes.get(q.id)
-      if (!entry) { entry = questionNode(q); qNodes.set(q.id, entry) }
-      if (prev ? prev.nextSibling !== entry.root : wrap.firstChild !== entry.root) {
-        prev ? prev.after(entry.root) : wrap.prepend(entry.root)
-      }
-      updateQuestion(entry, q)
-      prev = entry.root
-    }
-    $('#qSec').hidden = qNodes.size === 0
-
-    const decs = Array.isArray(scope.decisions) ? scope.decisions : []
-    $('#decSec').hidden = decs.length === 0
-    $('#decisions').replaceChildren(...decs.map((d: any) => el('div', { class: 'decision' },
-      el('p', {}, el('span', { class: 'mono', style: 'color:var(--dim);margin-right:8px' }, d.id || ''), d.decision || ''),
-      d.alex_words || d.at ? el('p', { class: 'words' }, [d.alex_words ? `“${d.alex_words}”` : '', d.at ? fmtTime(d.at) : ''].filter(Boolean).join(' · ')) : null)))
-
-    const b = $('#banner')
-    if (scopeError) { b.textContent = scopeError; b.hidden = false }
-    renderThread()
-    comments?.refresh()
-  }
-
-  function renderThread() {
-    const list = allThread()
-    $('#threadSec').hidden = list.length === 0
-    $('#thread').replaceChildren(...list.map((n: any) => noteNode(n)))
-  }
-
-  // A question the lane removed disappears once its box is empty.
-  function pruneOrphans(wanted = new Set((scope.questions || []).filter((q: any) => q && q.id).map((q: any) => q.id))) {
-    for (const [qid, entry] of qNodes) {
-      if (!wanted.has(qid) && !entry.parts.box.ta.value.trim()) { entry.root.remove(); qNodes.delete(qid) }
-    }
-    const sec = $('#qSec')
-    if (sec) sec.hidden = qNodes.size === 0
-  }
-
-  function renderDynamic() {
-    comments?.beforeRender()
-    if (!scope) return
-    pruneOrphans()
-    for (const q of scope.questions || []) {
-      const entry = qNodes.get(q.id)
-      if (entry) updateQuestion(entry, q)
-    }
-    renderThread()
-    comments?.refresh()
-  }
-
-  function applyState(data: any) {
-    if (data.scope) scope = data.scope
-    scopeError = data.error || null
-    if (Array.isArray(data.notes)) for (const n of data.notes) notes.set(n.id, n)
-    renderScope()
-  }
-
-  function applyNote(n: any) {
-    notes.set(n.id, n)
-    for (const [id, tmp] of notes) {
-      if (String(id).startsWith('tmp-') && tmp.text === n.text && tmp.qid === (n.qid || null) && n.from === 'alex' && JSON.stringify(tmp.anchor || null) === JSON.stringify(n.anchor || null)) notes.delete(id)
-    }
-    renderDynamic()
-  }
-
-  let poll: any = null
-  function startPolling() {
-    if (poll) return
-    poll = setInterval(async () => {
-      try { applyState(await api(`/api/scope/${slug}`)) } catch {}
-    }, 5000)
-  }
-  function stopPolling() { clearInterval(poll); poll = null }
-
-  function connect() {
-    const es = new EventSource(`/api/scope/${slug}/events`)
-    es.addEventListener('state', (e: any) => { applyState(JSON.parse(e.data)); setLive('on'); stopPolling() })
-    es.addEventListener('scope', (e: any) => { applyState(JSON.parse(e.data)) })
-    es.addEventListener('note', (e: any) => { applyNote(JSON.parse(e.data)) })
-    es.onopen = () => { setLive('on'); stopPolling() }
-    es.onerror = () => { setLive('off'); startPolling() }
-  }
-
-  async function renderScopePage() {
-    try {
-      applyState(await api(`/api/scope/${slug}`))
-      setLive('connecting')
-    } catch (cause) {
-      const error = cause as any
-      $('#main').replaceChildren(
-        el('h1', {}, slug),
-        el('p', { class: 'empty' }, error.status === 404 ? 'This lane has not published its scope yet. The page will fill in when it does.' : `Could not load: ${error.message}`))
-      setLive('off')
-      setTimeout(renderScopePage, 5000)
-      return
-    }
-    connect()
-  }
-
-  const comments = slug ? createComments({ slug, notes: sortedNotes, postNote, banner, noteNode, autosize }) : null
-  function commentMeta(n: any) {
-    const parent = n.reply_to ? [...notes.values()].find((note) => String(note.id) === String(n.reply_to)) : null
-    const anchor = n.anchor || parent?.anchor
-    if (!anchor) return null
-    return el('button', { class: 'cm-thread-link', 'data-cm-skip': true, onclick: () => comments?.open(anchor, true) },
-      n.reply_to ? `Reply to your comment on ${sectionLabel(anchor.section)}` : `On ${sectionLabel(anchor.section)}: “${quoteSnippet(anchor.quote)}”`)
-  }
-  async function postNote(body: any): Promise<any> {
-    const clean = String(body.text || '').trim()
-    if (!clean) throw new Error('Write a note first.')
-    const key = JSON.stringify({ ...body, text: clean })
-    if (inFlight.has(key)) throw new Error('This note is already sending.')
-    const last = sortedNotes().filter((n) => n.from === 'alex' && (n.qid || null) === (body.qid || null) && JSON.stringify(n.anchor || null) === JSON.stringify(body.anchor || null) && n.delivery !== 'error').at(-1)
-    if (last && last.text === clean && Date.now() - Date.parse(last.at) < 60000) { banner('Already sent.'); return { note: last } }
-    inFlight.add(key)
-    const tmp: any = { ...body, text: clean, id: `tmp-${Date.now()}-${Math.random()}`, from: 'alex', qid: body.qid || null, at: new Date().toISOString(), delivery: 'sending' }
-    notes.set(tmp.id, tmp); renderDynamic()
-    try {
-      const result = await api(`/api/scope/${slug}/note`, { ...body, text: clean })
-      notes.delete(tmp.id)
-      if (!notes.has(result.note.id) || notes.get(result.note.id).delivery === 'queued') notes.set(result.note.id, result.note)
-      renderDynamic(); return result
-    } catch (error) {
-      tmp.delivery = 'error'; renderDynamic()
-      setTimeout(() => { notes.delete(tmp.id); renderDynamic() }, 6000)
-      throw error
-    } finally { inFlight.delete(key) }
-  }
-  const mic = $('#thoughtMic')
-  mic.addEventListener('click', () => {
-    let audio: AudioContext
-    try { audio = prepareAudio() } catch (error) { banner(error instanceof Error ? error.message : 'Audio is unavailable.'); return }
-    mic.disabled = true
-    void import('./voice-mount').then(({ mountVoice }) => mountVoice(audio, {
-      getScope: async () => ({ slug: slug!, scope }), postNote,
-      getContext: () => ({ selection: comments?.context() || null, inView: inViewAnchor() }),
-    }, (ui) => {
-      if (ui.do === 'show') document.querySelector(ui.part.startsWith('Q') ? `#q-${ui.part}` : ui.part === 'questions' ? '#qSec' : `#${ui.part}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, (active) => { mic.disabled = active })).catch((error) => { void audio.close(); mic.disabled = false; banner(error.message) })
-  })
-  new ResizeObserver(() => document.documentElement.style.setProperty('--dock-h', `${$('#dock').getBoundingClientRect().height}px`)).observe($('#dock'))
-  if (slug) renderScopePage()
-  else renderIndex()
-})()
+  const mode = t && modes.get(t.id)
+  if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
+  pending.add(key); disablePending()
+  try {
+    if (name === 'post' && composing && text) { const anchor = composing; const result = await api<{ thread: Thread }>(`${endpoint}/threads`, { anchor, text }); composing = null; selection = null; drafts.delete(key); upsert(result.thread); focus(result.thread.id); return }
+    if (!t) return
+    if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text })
+    else if (name === 'send' && mode === 'no') await postReject(t.id, { text })
+    else if (name === 'send' && mode === 'else') await postResolve(t.id, { decision: text, alex_words: text, how: 'own' })
+    else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: 'Take the recommendation', how: 'take' })
+    else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve' })
+    else if (name === 'park') await postPark(t.id)
+    if ((drafts.get(key) || '').trim() === text) drafts.delete(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
+    if (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else') { closeSheet(); focused = open()[0]?.id || null }
+    renderCards()
+  } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
+  finally { pending.delete(key); renderCards() }
+}
+document.addEventListener('click', e => {
+  const target = e.target as HTMLElement, button = target.closest<HTMLElement>('[data-action]')
+  if (button) { void action(button.dataset.action!, button); return }
+  const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); return }
+  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) focus(node.dataset.t!, true)
+})
+document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; drafts.set(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
+let selectionTimer = 0
+for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(selectionTimer); selectionTimer = window.setTimeout(readSelection, 80) })
+$('#prev').onclick = $('#chipPrev').onclick = () => step(-1)
+$('#next').onclick = $('#chipNext').onclick = () => step(1)
+$('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
+$('#scrim').onclick = closeSheet
+$('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
+document.addEventListener('keydown', e => { if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Escape') closeSheet() })
+addEventListener('resize', layout); document.fonts.ready.then(layout)
+let scrollTimer = 0
+addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { showSelection(); const current = focused && marks(focused)[0]?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
+function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
+function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
+$('#talk').onclick = async () => { try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark }, voiceUi, active => $('#talk').classList.toggle('active', active)) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
+function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; scope = payload.scope; for (const note of payload.notes || []) notes.set(note.id, note); render() }
+async function start() {
+  if (!slug) { const { scopes } = await api<{ scopes: any[] }>('/api/scope'); doc.innerHTML = `<h1>Scoping</h1>${scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join('')}`; return }
+  accept(await api(endpoint)); $('#live').textContent = 'Live'
+  const events = new EventSource(`${endpoint}/events`)
+  events.addEventListener('state', e => accept(JSON.parse((e as MessageEvent).data)))
+  events.addEventListener('scope', e => { const data = JSON.parse((e as MessageEvent).data); accept(data.scope ? data : { scope: data }) })
+  events.addEventListener('note', e => { const note = JSON.parse((e as MessageEvent).data); notes.set(note.id, note); render() })
+  events.onopen = () => $('#live').textContent = 'Live'; events.onerror = () => $('#live').textContent = 'Reconnecting'
+}
+void start().catch(error => { doc.textContent = `Could not load: ${error.message}`; $('#live').textContent = 'Reconnecting' })

@@ -1,7 +1,7 @@
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, xaiTools, type VoiceSessionToken, type VoiceToolDeclaration } from '../../../src/voice.js'
 import type { VoiceAdapter, VoiceAdapterCallbacks } from './voice-live'
 
-export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[] } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
+export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[]; kickoff?: string } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`wss://api.x.ai/v1/realtime?model=${encodeURIComponent(token.model)}`,
       [`xai-client-secret.${token.token}`])
@@ -23,7 +23,7 @@ export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCall
         tools: xaiTools(profile.tools),
       } })
       send({ type: 'conversation.item.create', item: {
-        type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Start the call.' }],
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: profile.kickoff ?? 'Start the call.' }],
       } })
       send({ type: 'response.create' })
       callbacks.onOpen()

@@ -229,8 +229,14 @@ export class Store {
         delivered_at TEXT
       );
       CREATE INDEX IF NOT EXISTS scope_notes_slug_idx ON scope_notes(slug, id);
+      CREATE TABLE IF NOT EXISTS scope_note_targets (
+        note_id INTEGER NOT NULL REFERENCES scope_notes(id),
+        pane TEXT NOT NULL,
+        delivery TEXT NOT NULL DEFAULT 'queued',
+        PRIMARY KEY (note_id, pane)
+      );
     `)
-    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT']]) this.#addColumn('scope_notes', name, type)
+    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT']]) this.#addColumn('scope_notes', name, type)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
@@ -271,14 +277,17 @@ export class Store {
       qid: row.qid, text: row.text, at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
       anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: row.via === 'voice' ? 'voice' : null,
+      thread: row.thread ?? null, event: row.event ?? null, words: row.words ?? null,
     }
   }
 
-  addScopeNote({ slug, author, kind, qid, text, who, anchor = null, reply_to = null, via = null }) {
+  addScopeNote({ slug, author, kind, qid, text, who, anchor = null, reply_to = null, via = null, thread = null, event = null, words = null, targets = [] }) {
     const at = new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO scope_notes
-      (slug, author, kind, qid, text, who, created_at, delivery, anchor, reply_to, via)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via)
+      (slug, author, kind, qid, text, who, created_at, delivery, anchor, reply_to, via, thread, event, words)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via, thread, event, words)
+    const insertTarget = this.#db.prepare('INSERT INTO scope_note_targets (note_id, pane) VALUES (?, ?)')
+    for (const pane of new Set(targets)) insertTarget.run(result.lastInsertRowid, pane)
     return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))
   }
 
@@ -291,6 +300,16 @@ export class Store {
     return this.#db.prepare(`SELECT * FROM scope_notes WHERE slug = ? AND author = 'alex'
       AND delivered_at IS NULL AND delivery IN ('queued','retrying','no_pane') ORDER BY id ASC`)
       .all(slug).map((row) => this.#scopeNote(row))
+  }
+
+  pendingScopeTargets(slug) {
+    return this.#db.prepare(`SELECT n.*, t.pane FROM scope_note_targets t JOIN scope_notes n ON n.id = t.note_id
+      WHERE n.slug = ? AND t.delivery IN ('queued', 'retrying') ORDER BY n.id, t.pane`).all(slug)
+      .map((row) => ({ ...this.#scopeNote(row), pane: row.pane }))
+  }
+
+  markScopeTarget(id, pane, delivery) {
+    this.#db.prepare('UPDATE scope_note_targets SET delivery = ? WHERE note_id = ? AND pane = ?').run(delivery, id, pane)
   }
 
   markScopeNotes(ids, delivery, deliveredAt = null) {

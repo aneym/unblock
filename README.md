@@ -270,25 +270,33 @@ tailnet, `POST /api/links {ticket}` still mints a burn-on-answer token.
 
 ## Scoping pages
 
-Each scoping lane writes `<slug>/scope.json` under `UNBLOCK_SCOPING_DIR`
-(default: `~/.agent-rails/scoping`). The page at `<public_origin>/s/<slug>`
-shows its plan and questions live. A trusted tailnet viewer can answer a
-question or add a thought; the daemon records each note in SQLite and prompts
-the lane's `scope.pane`. The lane updates `scope.json` to reflect the answer.
+A scoping page is one document with threads anchored to quotes. Open threads
+are questions or comments; resolved threads hold decisions. The page lives at
+`<public_origin>/s/<slug>`, with state under `UNBLOCK_SCOPING_DIR`
+(default: `~/.agent-rails/scoping`). Only the daemon writes `scope.json`.
 
-`unblock scope` lists pages and open questions. `unblock scope url <slug>`
-prints the page URL, `unblock scope notes <slug> [--since N] [--from alex|agent]`
-reads the thread, and `unblock scope reply <slug> <text...>` posts an agent reply.
-All support `--json`.
+Lanes use the CLI instead of editing that file. A No keeps a question open; a
+new option uses `scope reply <slug> T# --rec "option" [--why "reason"] "reply"`.
+```bash
+unblock scope ask demo --section plan --quote "phones first" --rec "Phones first" "Which screen ships first?"
+unblock scope reply demo T4 "Moved voice to round two."
+unblock scope doc demo --from plan.md
+unblock scope resolve demo T4
+unblock scope threads demo --open
+```
 
-Select text to leave an anchored comment: its quote follows the note to the
-lane and stays attached across plan rewrites. Reply under an Alex note with
-`unblock scope reply <slug> --to N <text...>`. Notes show their quote, reply
-target and whether they came by voice.
-
-Voice can read the scope, answer questions, send thoughts and comment on the
-selected or visible part. It uses the queue’s voice keys, spend ledger and
-$20 monthly cap; scoping calls have their own prompt and tools.
+A markdown doc starts with `# Title`; `## Heading {#stable-id}` starts a section.
+JSON input is a sections array or `{sections}`. Doc rewrites keep all threads;
+threads whose quotes disappeared are reported as detached. Each rewrite saves
+a revision. `scope doc <slug>` exports markdown; `--json` gives revision and sections.
+Existing v1 files are read as v2 and backed up on their first write.
+A trusted tailnet viewer can select text to comment, reply or resolve a thread.
+Their actions reach the lane's pane; Not now parks a thread. Tags such as
+`@pHS` or `@another-scope` also route the comment to that lane. After a decision, the lane rewrites the doc
+and confirms it with `scope resolve`. A reply without T# is a general comment.
+`scope list`, `scope url <slug>` and `scope notes <slug> [--since N]` remain;
+all scoping commands support `--json`. Voice uses the same thread paths and the
+queue's voice keys, spend ledger and $20 monthly cap.
 
 ## Layout
 

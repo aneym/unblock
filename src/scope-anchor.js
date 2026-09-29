@@ -1,4 +1,4 @@
-export const ANCHOR_SECTION = /^(ask|plan|decisions|thread|q:Q\d{1,3})$/
+export const ANCHOR_SECTION = /^([a-z][a-z0-9-]{0,39}|q:Q\d{1,3})$/
 
 const collapse = (text) => String(text).replace(/\s+/g, ' ').trim()
 const anchorText = (text) => collapse(typeof text === 'string' ? text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '') : '')
@@ -49,7 +49,7 @@ export function locateAnchor(text, anchor) {
 }
 
 export function sectionLabel(section) {
-  return { plan: 'the plan', ask: 'your ask', decisions: 'the decisions', thread: 'the thread' }[section] ?? String(section).replace(/^q:/, '')
+  return { plan: 'the plan', ask: 'your ask', decisions: 'the decisions', thread: 'the thread' }[section] ?? (/^q:Q\d{1,3}$/.test(section) ? section.slice(2) : section)
 }
 
 export function quoteSnippet(quote, max = 80) {

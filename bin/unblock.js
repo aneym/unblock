@@ -8,7 +8,8 @@ import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
-import { quoteSnippet, sectionLabel } from '../src/scope-anchor.js'
+import { quoteSnippet } from '../src/scope-anchor.js'
+import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID } from '../src/scope-doc.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const [command = 'list', ...input] = process.argv.slice(2)
@@ -65,13 +66,13 @@ function wrap(text, width = 80, prefix = '') {
   return lines.join('\n')
 }
 
-async function request(path, body, { start = true } = {}) {
+async function request(path, body, { start = true, method } = {}) {
   let base
   try { base = await daemon({ start }) } catch (error) { fail(error.message, 1) }
   let response
   try {
     response = await fetch(base + path, {
-      method: body === undefined ? 'GET' : 'POST',
+      method: method ?? (body === undefined ? 'GET' : 'POST'),
       headers: {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...(authToken() ? { authorization: `Bearer ${authToken()}` } : {}),
@@ -346,47 +347,87 @@ async function link(args) {
   output(data, `${data.url}\nexpires in ${Math.max(1, Math.round((data.expires_at - Date.now()) / 60000))}m`)
 }
 async function scope(args) {
-  // Reply content is prose: option-like words after the slug are not CLI flags.
-  if (args[0] === 'reply') {
-    const [sub, slug, ...words] = args
-    if (!slug || !words.length) fail('usage: unblock scope reply <slug> <text...> [--json]')
+  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] <text...> | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | threads <slug> [--open] [--json]'
+  const [sub = 'list', slug, ...words] = args
+  if (['ask', 'reply', 'resolve'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
-    let to
-    if (words[0] === '--to') {
-      if (!/^\d+$/.test(words[1] ?? '') || !Number.isSafeInteger(Number(words[1]))) fail('--to must be an integer note id')
-      to = Number(words[1])
-      words.splice(0, 2)
+    const opts = {}
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why']
+    let threadId
+    if (sub !== 'ask' && THREAD_ID.test(words[0] ?? '')) threadId = words.shift()
+    while (allowed.includes(words[0])) {
+      const option = words.shift(), value = words.shift()
+      if (value === undefined) fail(`${option} needs a value`)
+      opts[option] = value
     }
-    if (!words.length) fail('usage: unblock scope reply <slug> [--to N] <text...> [--json]')
-    const data = await request(`/api/scope/${encodeURIComponent(slug)}/reply`, { text: words.join(' '), ...(to !== undefined ? { to } : {}) })
-    return output(data, `replied #${data.note.id}`)
+    if (!slug) fail(usage)
+    const base = `/api/scope/${encodeURIComponent(slug)}`
+    if (sub === 'ask') {
+      if (!opts['--section'] || !opts['--quote'] || !words.length) fail(usage)
+      const data = await request(`${base}/threads`, { section: opts['--section'], quote: opts['--quote'], text: words.join(' '), ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
+      return output(data, `asked ${data.thread.id} on §${opts['--section']}`)
+    }
+    if (sub === 'resolve') {
+      if (!threadId || words.length) fail(usage)
+      const data = await request(`${base}/threads/${threadId}/resolve`, opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {})
+      return output(data, `resolved ${data.thread.id}`)
+    }
+    if (!words.length || words[0] === '--to') fail(usage)
+    let data
+    if (threadId) data = await request(`${base}/threads/${threadId}/reply`, { text: words.join(' '), ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
+    else {
+      const { scope } = await request(base)
+      data = await request(`${base}/threads`, { section: 'title', quote: scope.title, kind: 'comment', text: words.join(' ') })
+    }
+    return output(data, `replied ${data.thread.id}`)
   }
-  const { rest, opts } = flags(args, { '--since': true, '--from': true })
-  const [sub = 'list', slug, ...extra] = rest
-  if (sub === 'list' && !slug && !extra.length && !Object.keys(opts).length) {
+  const { rest, opts } = flags(args, { '--since': true, '--from': true, '--open': false })
+  const [verb = 'list', name, ...extra] = rest
+  if (verb === 'list' && !name && !extra.length && !Object.keys(opts).length) {
     const { scopes } = await request('/api/scope')
     const health = await request('/api/health')
     const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
     const listed = scopes.map((item) => ({ ...item, url: `${base}/s/${item.slug}` }))
     return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
   }
-  if (!slug || (sub !== 'reply' && extra.length)) fail('usage: unblock scope [list] | url <slug> | notes <slug> [--since N] [--from alex|agent] | reply <slug> <text...> [--json]')
-  if (sub === 'url' && !Object.keys(opts).length) {
+  if (!name || extra.length) fail(usage)
+  if (verb === 'url' && !Object.keys(opts).length) {
     const health = await request('/api/health')
     const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
-    const url = `${base}/s/${encodeURIComponent(slug)}`
+    const url = `${base}/s/${encodeURIComponent(name)}`
     return output({ url }, url)
   }
-  if (sub === 'notes') {
+  if (verb === 'doc') {
+    if (opts['--since'] || opts['--open']) fail(usage)
+    if (!opts['--from']) {
+      const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
+      return output({ revision: scope.revision, sections: scope.doc.sections }, docToMarkdown(scope.doc))
+    }
+    let doc
+    try {
+      const raw = readFileSync(opts['--from'], 'utf8')
+      doc = opts['--from'].endsWith('.json') ? JSON.parse(raw) : docFromMarkdown(raw)
+    } catch (error) { fail(error.message) }
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/doc`, { sections: Array.isArray(doc) ? doc : doc.sections }, { method: 'PUT' })
+    return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
+  }
+  if (verb === 'threads') {
+    if (opts['--from'] || opts['--since']) fail(usage)
+    const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
+    const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')
+    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
+  }
+  if (verb === 'notes') {
+    if (opts['--open']) fail(usage)
     if (opts['--since'] !== undefined && !/^\d+$/.test(opts['--since'])) fail('--since must be a nonnegative integer')
     if (opts['--from'] && !['alex', 'agent'].includes(opts['--from'])) fail('--from must be alex or agent')
     const query = new URLSearchParams()
     if (opts['--since'] !== undefined) query.set('since', opts['--since'])
     if (opts['--from']) query.set('from', opts['--from'])
-    const data = await request(`/api/scope/${encodeURIComponent(slug)}/notes?${query}`)
-    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''}${note.qid ? ` [${note.qid}]` : ''}${note.anchor ? ` on ${sectionLabel(note.anchor.section)} "${quoteSnippet(note.anchor.quote)}"` : ''}${typeof note.reply_to === 'number' ? ` ↳ #${note.reply_to}` : ''} ${note.text}`).join('\n'))
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/notes?${query}`)
+    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''} ${note.thread ?? ''} ${note.event ?? ''} ${note.text}`).join('\n'))
   }
-  fail('usage: unblock scope [list] | url <slug> | notes <slug> [--since N] [--from alex|agent] | reply <slug> <text...> [--json]')
+  fail(usage)
 }
 async function peek(args) {
   const { rest } = flags(args, {})
@@ -514,7 +555,11 @@ unblock link <ticket> [--share]                  the stable queue link; --share 
 unblock peek <ticket>                            what they have typed so far
 unblock reveal <ticket> <field>                  print a stored secret (this machine only)
 unblock mirror [path]                            write BLOCKERS.md from the queue
-unblock scope [list|url|notes|reply]             scoping pages, notes and agent replies
+unblock scope [list|url|notes|threads]           scoping docs and anchored threads
+unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] <question...>
+unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] <text...>
+unblock scope resolve <slug> T# [--decision "text"]
+unblock scope doc <slug> [--from <file.md|file.json>]
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
 unblock mcp                                      run the MCP server

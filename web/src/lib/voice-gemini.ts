@@ -2,7 +2,7 @@ import { GoogleGenAI, Modality, type FunctionDeclaration, type Session } from '@
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, type VoiceSessionToken, type VoiceToolDeclaration } from '../../../src/voice.js'
 import type { VoiceAdapter, VoiceAdapterCallbacks } from './voice-live'
 
-export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[] } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
+export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAdapterCallbacks, profile: { prompt: string; tools: VoiceToolDeclaration[]; kickoff?: string } = { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }): Promise<VoiceAdapter> {
   const ai = new GoogleGenAI({ apiKey: token.token, httpOptions: { apiVersion: 'v1alpha' } })
   const live: Session = await ai.live.connect({
     model: token.model,
@@ -32,7 +32,7 @@ export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAd
       onclose: (event) => callbacks.onClose(event.wasClean, event.reason),
     },
   })
-  live.sendClientContent({ turns: 'Start the call.', turnComplete: true })
+  live.sendClientContent({ turns: profile.kickoff ?? 'Start the call.', turnComplete: true })
   return {
     sampleRate: 16000,
     sendAudio: (audio) => live.sendRealtimeInput({ audio: { data: audio, mimeType: 'audio/pcm;rate=16000' } }),

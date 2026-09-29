@@ -5,7 +5,7 @@ import { prepareAudio } from '../lib/voice-audio'
 import { startVoiceCall, type TranscriptLine, type VoiceState } from '../lib/voice-live'
 import { api } from '../lib/api'
 import type { VoiceProvider, VoiceProviders, VoiceSpend } from '../../../src/voice.js'
-import { createScopeVoiceSession, SCOPE_VOICE_PROMPT, SCOPE_VOICE_TOOLS, type ScopeVoiceDeps, type ScopeVoiceUi } from '../../../src/scope-voice.js'
+import { createScopeVoiceSession, SCOPE_VOICE_KICKOFF, SCOPE_VOICE_PROMPT, SCOPE_VOICE_TOOLS, type ScopeVoiceDeps, type ScopeVoiceUi } from '../../../src/scope-voice.js'
 import '../voice-capsule.css'
 
 let root: ReturnType<typeof createRoot> | null = null
@@ -31,7 +31,7 @@ function ScopeVoice({ audio, deps, onUi, onActive }: { audio: AudioContext; deps
       onTranscript: (line) => setTranscript((previous) => previous.at(-1)?.who === line.who ? [...previous.slice(0, -1), line] : [...previous, line]),
       onUi: (ui) => onUi(ui as unknown as ScopeVoiceUi), onChanged: () => {},
       onSession: (session) => { setProvider(session.provider); setSpend(session.spend); setTiming({ startedAt: Date.now(), maxMinutes: session.maxMinutes }) },
-    }, { provider: picked, profile: { prompt: SCOPE_VOICE_PROMPT, tools: SCOPE_VOICE_TOOLS, rules: createScopeVoiceSession(deps), session: { profile: 'scope' } } })
+    }, { provider: picked, profile: { kickoff: SCOPE_VOICE_KICKOFF, prompt: SCOPE_VOICE_PROMPT, tools: SCOPE_VOICE_TOOLS, rules: createScopeVoiceSession(deps), session: { profile: 'scope' } } })
   }
   const retry = (picked = provider) => {
     try { start(prepareAudio(), picked) } catch (error) { setState({ name: 'error', message: error instanceof Error ? error.message : 'Audio is unavailable.' }); onActive(false) }

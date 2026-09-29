@@ -1,13 +1,13 @@
 import { makeAnchor, locateAnchor, type Anchor, type AnchorSection } from '../../../src/scope-anchor.js'
 
-export const blocks = 'p,li,h3,h4,pre,tr,td,th,div.quote,.q-text,.rec,.why,.settled,.decision,.note'
+export const blocks = 'h1,h2,h3,h4,p,li,pre,tr,td,th,figcaption,q,.src'
 const skip = 'button,textarea,[data-cm-skip]'
 export function sectionOf(node: Node | null): { section: AnchorSection; root: HTMLElement } | null {
   const el = node instanceof Element ? node : node?.parentElement
   if (!el || el.closest(skip)) return null
-  const root = el.closest<HTMLElement>('.q-body,#ask,#plan,#decisions,#thread')
+  const root = el.closest<HTMLElement>('section[data-section]')
   if (!root) return null
-  const section = root.classList.contains('q-body') ? `q:${root.closest('.q')?.id.slice(2)}` : root.id
+  const section = root.id
   return { section: section as AnchorSection, root }
 }
 export function sectionText(root: HTMLElement): { text: string; map: ({ node: Text; offset: number } | null)[] } {

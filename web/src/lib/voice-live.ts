@@ -30,6 +30,7 @@ export interface VoiceAdapterCallbacks {
 }
 
 export interface VoiceProfile {
+  kickoff?: string
   prompt: string
   tools: VoiceToolDeclaration[]
   rules: { handle(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; speech: string; ui?: any; changed?: boolean }> }

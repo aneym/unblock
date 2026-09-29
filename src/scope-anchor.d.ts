@@ -4,8 +4,12 @@
  * (src/scope-voice.js). Pure, no DOM.
  */
 
-/** Where on the page a comment sits. `q:Q3` is question Q3. */
-export type AnchorSection = 'ask' | 'plan' | 'decisions' | 'thread' | `q:Q${number}`
+/**
+ * Where on the page a comment sits. v2 docs: a doc section id (SECTION_ID in
+ * scope-doc.d.ts, e.g. 'title', 'plan', 'done-means'). `q:Q3` is kept for
+ * round-2 notes stored before v2.
+ */
+export type AnchorSection = string
 
 export interface Anchor {
   section: AnchorSection
@@ -17,7 +21,7 @@ export interface Anchor {
   suffix: string
 }
 
-/** Matches a valid AnchorSection. */
+/** Matches a valid AnchorSection: /^([a-z][a-z0-9-]{0,39}|q:Q\d{1,3})$/ */
 export const ANCHOR_SECTION: RegExp
 
 /**
@@ -40,7 +44,7 @@ export function makeAnchor(section: AnchorSection, text: string, start: number, 
  */
 export function locateAnchor(text: string, anchor: Anchor): { start: number; end: number; exact: boolean } | null
 
-/** How a person names the section: 'the plan', 'your ask', 'Q3', 'the decisions', 'the thread'. */
+/** Round-2 labels: 'the plan', 'your ask', 'Q3', 'the decisions', 'the thread'; any other id → the id itself. v2 pane lines use `§<heading>` (headingOf) instead. */
 export function sectionLabel(section: AnchorSection): string
 
 /** The quote cut to `max` chars (default 80) at a word boundary with '…', double quotes turned into single. */

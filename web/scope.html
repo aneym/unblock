@@ -5,24 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Scoping</title>
 <link rel="icon" href="./favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
 </head>
-<body class="scope-page">
-<header class="bar"><div class="bar-inner">
-  <div class="bar-name" id="barName">Scoping</div>
-  <div class="live" id="live" title="Live updates"><span class="dot"></span><span class="label">Connecting</span></div>
-</div></header>
-<main id="main"><p class="empty">Loading…</p></main>
-<div class="dock" id="dock" hidden><div class="dock-inner">
-  <div class="reply">
-    <textarea id="thought" rows="1" placeholder="Drop a thought for the lane"></textarea>
-    <button class="btn" id="thoughtMic" type="button" aria-label="Talk about this doc"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/></svg></button>
-    <button class="btn primary" id="thoughtSend" type="button">Send</button>
-  </div>
-</div></div>
+<body>
+<header class="bar"><a class="app" href="/s/">Scoping</a><span class="spacer"></span><span class="live" id="live">Connecting</span><button class="talk" id="talk" aria-label="Talk it through"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Talk</span></button></header>
+<div class="layout"><main class="doc" id="doc"><p>Loading…</p></main><aside class="side"><div class="side-head"><span class="count" id="openCount"></span><button class="icon-btn" id="prev" aria-label="Previous (k)">↑</button><button class="icon-btn" id="next" aria-label="Next (j)">↓</button><span class="spacer"></span><label class="toggle"><input type="checkbox" id="showResolved"> Show resolved</label></div><div class="cards" id="cards"></div><div id="detached"></div></aside></div>
+<div class="open-chip" id="openBar"><button class="label" id="openLabel"></button><button id="chipPrev" aria-label="Previous">↑</button><button id="chipNext" aria-label="Next">↓</button></div>
+<div class="scrim" id="scrim"></div><div class="sheet" id="sheet" role="dialog" aria-label="Question or comment"></div>
 <div id="voiceRoot" data-cm-skip></div>
 <script type="module" src="/src/scope/page.ts"></script>
 </body>
