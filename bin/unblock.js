@@ -545,9 +545,11 @@ async function scope(args) {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const { scope } = await response.json()
         const stored = scope.doc.sections
+        // Publishing turns local image refs into asset: refs, and image lines are never linted.
+        const text = (md) => String(md).split('\n').filter((line) => !IMAGE_LINE.test(line)).join('\n')
         sections = sections.filter((section) => {
           const old = stored.find((item) => item.id === section.id)
-          return !old || old.heading !== section.heading || old.body_md !== section.body_md
+          return !old || old.heading !== section.heading || text(old.body_md) !== text(section.body_md)
         })
       } catch { console.error('Could not read the current scope; linting every section.') }
       const result = lintDoc(sections, { keep: opts['--keep'] })
