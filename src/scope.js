@@ -262,7 +262,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       return sendJson(res, 404, { error: 'not found' })
     }
-    const docWrite = req.method === 'PUT' && parts.length === 2 && action === 'doc'
+    const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
+    const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
     if (!docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
@@ -279,12 +280,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const body = await readJson(req)
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
+    if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
+      || typeof body.body_md !== 'string' || (body.heading !== undefined && typeof body.heading !== 'string'))) return sendJson(res, 400, { error: 'invalid section patch' })
     if (body.via !== undefined && body.via !== (relay ? 'admin' : 'voice')) return sendJson(res, 400, { error: 'invalid via' })
     if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, docWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -306,12 +309,18 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, docWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, docWrite, sectionWrite, newThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
     const storedSections = scope.doc.sections
+    if (sectionWrite) {
+      if (!storedSections.some((section) => section.id === threadId)) bad('no such section', 404)
+      body = { sections: storedSections.map((section) => section.id === threadId
+        ? { ...section, body_md: body.body_md, ...(body.heading !== undefined ? { heading: body.heading } : {}) }
+        : section), ...(body.keep !== undefined ? { keep: body.keep } : {}) }
+    }
     if (body.client_id !== undefined) {
       const duplicate = scope.threads.find((thread) => thread.messages.some((message) => message.client_id === body.client_id)
         || thread.resolution?.client_id === body.client_id || thread.parked_client_id === body.client_id)

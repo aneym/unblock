@@ -281,6 +281,7 @@ new option uses `scope reply <slug> T# --rec "option" [--why "reason"] "reply"`.
 unblock scope ask demo --section plan --quote "phones first" --rec "Phones first" --option "Phones first" --option "Desktop first" "Which screen ships first?"
 unblock scope reply demo T4 "Moved voice to round two."
 unblock scope doc demo --from plan.md
+unblock scope patch demo plan --from section.md
 unblock scope edit demo T4 --section plan --quote "We build for phones first" --option "Phones first" --option "Desktop first"
 unblock scope resolve demo T4
 unblock scope threads demo --open

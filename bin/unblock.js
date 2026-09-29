@@ -455,7 +455,7 @@ async function uploadDocImages(slug, doc, source) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
@@ -513,6 +513,19 @@ async function scope(args) {
     const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
     const listed = scopes.map((item) => ({ ...item, url: `${base}/s/${item.slug}` }))
     return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
+  }
+  if (verb === 'patch') {
+    if (!name || extra.length !== 1 || !opts['--from'] || opts['--since'] || opts['--open']) fail(usage)
+    let section
+    try {
+      const raw = readFileSync(opts['--from'], 'utf8').trim()
+      const heading = raw.match(/^#{1,3}[ \t]+(.+?)(?:[ \t]+\{#[^}]+\})?[ \t]*(?:\r?\n|$)/)
+      section = { body_md: (heading ? raw.slice(heading[0].length) : raw).trim(), ...(heading ? { heading: heading[1] } : {}) }
+      await uploadDocImages(name, [section], opts['--from'])
+    } catch (error) { fail(error.message, 1) }
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/sections/${encodeURIComponent(extra[0])}`, { ...section, ...(opts['--keep'] ? { keep: opts['--keep'] } : {}) }, { method: 'PUT' })
+    lintOutput(data)
+    return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
   }
   if (!name || extra.length) fail(usage)
   if (verb === 'url' && !Object.keys(opts).length) {
@@ -711,6 +724,7 @@ unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" .
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
+unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
   ask, reply, edit and resolve also accept --keep "term" (repeatable).
   --from uploads local image lines and renders HTML mocks ("phone" = 390px).
