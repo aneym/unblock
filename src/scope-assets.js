@@ -178,9 +178,10 @@ export function docAssets(dir, sections) {
       reference(fence, 'src', values.src, fence === 'demo' ? 'html' : 'video')
       if (fence === 'video' && values.poster !== undefined) reference(fence, 'poster', values.poster, 'image')
     }
-    for (const line of section.body_md.split('\n')) {
+    // The end of the section closes an open fence, as it does on the page.
+    for (const line of [...section.body_md.split('\n'), '```']) {
       if (fence !== null) {
-        if (/^```\s*$/.test(line)) { finish(); fence = null; values = {} }
+        if (/^```/.test(line)) { finish(); fence = null; values = {} }
         else if (['demo', 'video'].includes(fence)) {
           const pair = line.match(/^\s*(src|poster|height|frame|allow):\s*(.*?)\s*$/)
           if (pair) values[pair[1]] = pair[2]
