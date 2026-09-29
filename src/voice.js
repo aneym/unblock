@@ -10,19 +10,34 @@ const object = (properties, required = []) => ({ type: 'OBJECT', properties, req
 const number = { type: 'INTEGER', description: 'One-based number from the voice list.' }
 const project = { type: 'STRING', description: 'Optional project name to filter the queue.' }
 const answer = object({ field: { type: 'STRING', description: 'Question number, field name, or spoken label.' }, value: { type: 'STRING', description: 'The human’s spoken answer; never a secret.' }, context: { type: 'STRING', description: 'The human’s qualification or condition on this answer.' } }, ['field', 'value'])
-const answerArgs = object({ n: number, answers: { type: 'ARRAY', items: answer, description: 'Answers explicitly spoken by the human.' }, accept_all_recommended: { type: 'BOOLEAN', description: 'Only when the human explicitly accepts recommendations; never covers must_decide fields.' } }, ['n'])
+const answerArgs = object({ n: number, answers: { type: 'ARRAY', items: answer, description: 'Answers explicitly spoken by the human.' }, accept_all_recommended: { type: 'BOOLEAN', description: 'Only when the human explicitly accepts recommendations; never covers must_decide fields.' } })
+
+export function xaiTools(tools = VOICE_TOOLS) {
+  const lowerTypes = (node) => {
+    if (Array.isArray(node)) return node.map(lowerTypes)
+    if (!node || typeof node !== 'object') return node
+    return Object.fromEntries(Object.entries(node).map(([key, value]) => [key, key === 'type' && typeof value === 'string' ? value.toLowerCase() : lowerTypes(value)]))
+  }
+  return tools.map(({ name, description, parameters }) => ({ type: 'function', name, description, parameters: lowerTypes(parameters) }))
+}
 
 export const VOICE_TOOLS = [
   { name: 'queue_summary', description: 'Start here. A short spoken overview with counts and three priorities; read speech aloud.', parameters: object({ project }) },
   { name: 'queue_list', description: 'List voice-eligible asks with their one-based numbers. Screen-only asks cannot be answered by voice.', parameters: object({ project }) },
-  { name: 'ask_read', description: 'Read ONE voice-eligible ask by its current list number. Say the returned speech verbatim, then wait for the human.', parameters: object({ n: number }, ['n']) },
+  { name: 'ask_read', description: 'Read ONE voice-eligible ask by its current list number. Say the returned speech verbatim, then wait for the human.', parameters: object({ n: number }) },
   { name: 'ask_preview', description: 'Normalize what the human said and read it back BEFORE sending. Read speech aloud and wait for explicit spoken yes.', parameters: answerArgs },
   { name: 'ask_answer', description: 'Send only after explicit spoken yes to the immediately matching ask_preview. Repeat exactly the same arguments as the preview.', parameters: answerArgs },
-  { name: 'ask_skip', description: 'Move this ask to the end of the voice list for this session; do not answer it.', parameters: object({ n: number }, ['n']) },
-  { name: 'ask_send_back', description: 'Send an ask back only with the human’s own requested correction. Do not decide for them.', parameters: object({ n: number, note: { type: 'STRING', description: 'The human’s own words explaining what the agent should rework.' } }, ['n', 'note']) },
+  { name: 'ask_skip', description: 'Move this ask to the end of the voice list for this session; do not answer it.', parameters: object({ n: number }) },
+  { name: 'ask_send_back', description: 'Send an ask back only with the human’s own requested correction. Do not decide for them.', parameters: object({ n: number, note: { type: 'STRING', description: 'The human’s own words explaining what the agent should rework.' } }, ['note']) },
+  { name: 'show_queue', description: 'Show the queue, optionally filtering to a project or clearing the filter with all.', parameters: object({ project, all: { type: 'BOOLEAN' } }) },
+  { name: 'show_answered', description: 'Show answered asks.', parameters: object({}) },
+  { name: 'show_screen_ask', description: 'Show a screen-only ask by its number in the screen list.', parameters: object({ n: number }, ['n']) },
+  { name: 'open_link', description: 'Open a link from an ask, by number or spoken label.', parameters: object({ n: number, which: { type: 'STRING', description: 'Link number or spoken label.' } }) },
+  { name: 'show_details', description: 'Open or close the ask details.', parameters: object({ n: number, open: { type: 'BOOLEAN' } }) },
+  { name: 'end_call', description: 'Finish the voice call.', parameters: object({}) },
 ]
 
-export const VOICE_SYSTEM_PROMPT = `You are triaging the human’s unblock queue by voice. You NEVER make decisions for them. Every answer comes from their mouth; if unsure, ask again. Open with queue_summary and read its speech. Ask whether to work through the queue, jump to a project, or hear queue_list. When they say go, start at one. Work on one ask at a time: ask_read, read its speech VERBATIM, then stop and wait. Never read another until this is answered, skipped, or sent back. A number, label or yes is their answer; "accept all" means accept_all_recommended only when they explicitly say it. A must_decide field always needs their explicit answer. If they qualify an answer, put the qualification in that field's context. Always call ask_preview and read its speech aloud. Wait for an explicit spoken yes BEFORE ask_answer with the exact same arguments; if they change anything, preview again. After sending, briefly confirm and move on. Skip only when they ask to skip; send back only with their own note. Never read ticket IDs or URLs aloud. Screen-only asks need a passkey, credential or paste: mention them once as needing the queue page, then move on. Never ask for or repeat a secret. Do not submit partial answers if the human goes quiet. Do not argue with a rejected recommendation. Keep your own words short. Close with how many are left.`
+export const VOICE_SYSTEM_PROMPT = `You are triaging the human’s unblock queue by voice. You NEVER make decisions for them. Every answer comes from their mouth; if unsure, ask again. Open with queue_summary and read its speech. Ask whether to work through the queue, jump to a project, or hear queue_list. When they say go, start at one. Work on one ask at a time: ask_read, read its speech VERBATIM, then stop and wait. Never read another until this is answered, skipped, or sent back. A number, label or yes is their answer; "accept all" means accept_all_recommended only when they explicitly say it. A must_decide field always needs their explicit answer. If they qualify an answer, put the qualification in that field's context. Always call ask_preview and read its speech aloud. Wait for an explicit spoken yes BEFORE ask_answer with the exact same arguments; if they change anything, preview again. After sending, briefly confirm and move on. Skip only when they ask to skip; send back only with their own note. Never read ticket IDs or URLs aloud. Screen-only asks need a passkey, credential or paste: mention them once as needing the queue page, then move on. You are also the human’s hands on the page: when they ask to see, open, filter, go back, show answered, open a link, show details or hang up, call the matching tool immediately and confirm in a few words. Never name tools aloud. Never announce that you are about to call a tool; just do it. If a tool fails, say its speech once and wait; never retry the same tool with the same arguments. After end_call, say nothing more. Never ask for or repeat a secret. Do not submit partial answers if the human goes quiet. Do not argue with a rejected recommendation. Keep your own words short. Close with how many are left.`
 
 export function voiceDeck(asks) {
   const voice = []
@@ -83,7 +98,23 @@ export function askSpeech(ask, now = Date.now()) {
   lines.push(fields.length === 1 ? 'There is one question.' : `There are ${fields.length} questions.`)
   fields.forEach((field, i) => lines.push(fieldSpeech(field, i + 1)))
   if (fields.length > 1 && fields.every((field) => !field.must_decide && field.recommend)) lines.push('You can say "accept all recommended" to take every recommendation at once.')
+  const links = askLinks(ask)
+  if (links.length) lines.push(links.length === 1 ? 'It has a link; say open the link to see it.' : `It has ${links.length} links; say open a link to see them.`)
   return lines.filter(Boolean).join(' ')
+}
+
+function askLinks(ask) {
+  const seen = new Set()
+  const links = [...(ask.links || []), ...(ask.fields || []).filter((field) => field.url).map((field) => ({ url: field.url, label: field.label }))]
+  return links.filter(({ url }) => {
+    if (!url || seen.has(url)) return false
+    seen.add(url)
+    return true
+  })
+}
+
+function linkHost(url) {
+  try { return new URL(url).hostname || 'the link' } catch { return 'the link' }
 }
 
 export function confirmSpeech(ask, values, skipped = [], context = {}) {
@@ -144,21 +175,29 @@ export function createVoiceSession(deps) {
   const skipped = []
   const completed = new Set()
   const now = deps.now || Date.now
+  let focus = null
+  let shown = null
   const deck = async () => {
-    const fresh = voiceDeck((await deps.getAsks()).filter((ask) => ask.status === 'open' && !completed.has(ask.ticket)))
+    const fresh = voiceDeck((await deps.getAsks()).filter((ask) => ask.status === 'open' && !completed.has(ask.ticket) && (!focus || groupOf(ask) === focus)))
     const later = fresh.voice.filter((ask) => skipped.includes(ask.ticket))
       .sort((a, b) => skipped.indexOf(a.ticket) - skipped.indexOf(b.ticket))
     return { voice: [...fresh.voice.filter((ask) => !skipped.includes(ask.ticket)), ...later], screen: fresh.screen }
   }
-  const get = (current, n) => Number.isInteger(n) && n >= 1 ? current.voice[n - 1] : undefined
+  const get = (current, n) => Number.isInteger(n) && n >= 1 ? current.voice[n - 1] :
+    n === undefined ? (shown ? current.voice.find((ask) => ask.ticket === shown) || current.screen.find(({ ask }) => ask.ticket === shown)?.ask : undefined) || current.voice[0] : undefined
   const nextSpeech = async (n) => {
     try {
       const current = await deck()
       const next = current.voice.length ? current.voice[Math.min(n, current.voice.length) - 1] : undefined
-      return next ? ` Next is number ${current.voice.indexOf(next) + 1}, ${clean(next.title)}.` : ' That was the last one.'
+      return next ? { speech: ` Next is number ${current.voice.indexOf(next) + 1}, ${clean(next.title)}.`, ticket: next.ticket } : { speech: ' That was the last one.' }
     } catch {
-      return ''
+      return { speech: '' }
     }
+  }
+  const after = async (n) => {
+    const next = await nextSpeech(n)
+    shown = next.ticket || null
+    return { speech: next.speech, ui: next.ticket ? { do: 'show_ask', ticket: next.ticket } : { do: 'show_list' } }
   }
   const bodyFor = (ask, args) => {
     const fields = unansweredFields(ask)
@@ -191,6 +230,29 @@ export function createVoiceSession(deps) {
     async handle(name, args = {}) {
       let ticket
       try {
+        if (name === 'end_call') return { ok: true, speech: 'Talk soon.', ui: { do: 'end_call' } }
+        if (name === 'show_answered') {
+          const answered = (await deps.getAsks()).filter((ask) => ask.status === 'answered')
+            .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
+          return { ok: true, speech: `Showing ${answered.length} answered.${answered.length ? ` Newest is ${clean(answered[0].title)}.` : ''}`, ui: { do: 'show_answered' } }
+        }
+        if (name === 'show_queue') {
+          if (args.all === true) focus = null
+          else if (args.project) {
+            const open = (await deps.getAsks()).filter((ask) => ask.status === 'open' && !completed.has(ask.ticket))
+            const projects = [...new Set(open.map(groupOf))]
+            const sought = String(args.project).trim().toLowerCase()
+            const exact = projects.find((item) => item.toLowerCase() === sought)
+            const partial = projects.filter((item) => item.toLowerCase().includes(sought))
+            const resolved = exact || (partial.length === 1 ? partial[0] : null)
+            if (!resolved) return fail(`No project called ${args.project}. Projects are ${projects.map(clean).join(', ') || 'none'}.`)
+            focus = resolved
+          }
+          shown = null
+          const current = await deck()
+          const count = current.voice.length + current.screen.length
+          return { ok: true, speech: `Showing ${count}${focus ? ` on ${clean(focus)}` : ' in the queue'}.`, ui: args.all === true ? { do: 'show_list', all: true } : focus ? { do: 'show_list', project: focus } : { do: 'show_list' } }
+        }
         const current = await deck()
         if (name === 'queue_summary') {
           const all = [...current.voice, ...current.screen.map(({ ask }) => ask)]
@@ -202,27 +264,61 @@ export function createVoiceSession(deps) {
           const eligible = current.voice.filter((ask) => scoped.includes(ask))
           const onScreen = current.screen.filter(({ ask }) => scoped.includes(ask)).length
           const top = eligible.slice(0, 3).map((ask, i) => `${i + 1}, ${clean(ask.title)}`).join('. ')
-          return { ok: true, speech: `${scoped.length} open: ${spread}. ${top ? `The ones that matter: ${top}. ` : ''}${onScreen ? `${onScreen} need the screen. ` : ''}Say read one to hear the first, or name a project to filter.` }
+          return { ok: true, speech: `${scoped.length} open: ${spread}. ${top ? `The ones that matter: ${top}. ` : ''}${onScreen ? `${onScreen} ${onScreen === 1 ? 'needs' : 'need'} the screen. ` : ''}Say read one to hear the first, or name a project to filter.` }
         }
         if (name === 'queue_list') {
           const voice = args.project ? current.voice.filter((ask) => groupOf(ask).toLowerCase() === String(args.project).toLowerCase()) : current.voice
-          return { ok: true, speech: voice.length ? voice.map((ask) => `${current.voice.indexOf(ask) + 1}. ${clean(groupOf(ask))}. ${clean(ask.title)}. ${age(ask.created_at, now())}.`).join(' ') : 'No voice asks in that project.' }
+          const screen = (args.project ? current.screen.filter(({ ask }) => groupOf(ask).toLowerCase() === String(args.project).toLowerCase()) : current.screen)
+          const spoken = voice.length ? voice.map((ask) => `${current.voice.indexOf(ask) + 1}. ${clean(groupOf(ask))}. ${clean(ask.title)}. ${age(ask.created_at, now())}.`).join(' ') : 'No voice asks in that project.'
+          return { ok: true, speech: spoken + (screen.length ? ` On screen only: ${screen.map(({ ask }, i) => `${i + 1}, ${clean(ask.title)}`).join('; ')}. Say show screen one to open it.` : '') }
+        }
+        if (name === 'show_screen_ask') {
+          const item = Number.isInteger(args.n) && args.n >= 1 ? current.screen[args.n - 1] : null
+          if (!item) return fail('That number is not in the screen list. Hear the list again.')
+          ticket = shown = item.ask.ticket
+          const need = { approval: 'your passkey', secret: 'a credential', paste: 'a paste' }[item.reason]
+          return { ok: true, ticket, speech: `That one needs ${need}; it's on screen now.`, ui: { do: 'show_ask', ticket } }
         }
         const ask = get(current, args.n)
         if (!ask) return fail('That number is not in the voice queue. Hear the list again.')
         ticket = ask.ticket
-        if (name === 'ask_read') return { ok: true, ticket, speech: askSpeech(ask, now()) }
+        if (current.screen.some(({ ask: item }) => item.ticket === ticket) && !['open_link', 'show_details'].includes(name)) return fail('That one needs the screen.', ticket)
+        if (name === 'ask_read') {
+          shown = ticket
+          return { ok: true, ticket, speech: askSpeech(ask, now()), ui: { do: 'show_ask', ticket } }
+        }
+        if (name === 'open_link') {
+          const links = askLinks(ask)
+          if (!links.length) return fail('That one has no links.', ticket)
+          const which = args.which === undefined ? '' : String(args.which).trim().toLowerCase()
+          const words = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5 }
+          const numbered = which.match(/^(?:(?:the|link|number)\s+)*(\d+|one|first|two|second|three|third|four|fourth|five|fifth)(?:\s+link)?$/)
+          const generic = /^(?:the\s+)?(?:link|it|that|this|doc|page)$/.test(which)
+          let link = links.length === 1 || !which || generic ? links[0] : numbered ? links[(Number(numbered[1]) || words[numbered[1]]) - 1] : undefined
+          if (!link && which && !numbered && !generic) {
+            const label = links.filter((item) => String(item.label || '').toLowerCase().includes(which))
+            const host = links.filter((item) => linkHost(item.url).toLowerCase().includes(which))
+            link = label.length === 1 ? label[0] : host.length === 1 ? host[0] : undefined
+          }
+          if (!link) return fail(`Which one: ${links.map((item) => clean(item.label || linkHost(item.url))).join(' or ')}?`, ticket)
+          const label = link.label || linkHost(link.url)
+          const spoken = clean(label)
+          return { ok: true, ticket, speech: spoken === 'the queue page' ? 'Opening the link.' : `Opening ${spoken}.`, ui: { do: 'open_link', url: link.url, label } }
+        }
+        if (name === 'show_details') return { ok: true, ticket, speech: args.open === false ? 'Details closed.' : 'Details open.', ui: { do: 'details', ticket, open: args.open !== false } }
         if (name === 'ask_skip') {
           if (!skipped.includes(ticket)) skipped.push(ticket)
           pending.delete(ticket)
-          return { ok: true, ticket, speech: `Skipped for now.${await nextSpeech(args.n)}` }
+          const next = await after(args.n || current.voice.indexOf(ask) + 1)
+          return { ok: true, ticket, speech: `Skipped for now.${next.speech}`, ui: next.ui }
         }
         if (name === 'ask_send_back') {
           if (typeof args.note !== 'string' || !args.note.trim()) return fail('Tell me what to send back first.', ticket)
           await deps.postAnswer({ ticket, revision: ask.revision, reply: args.note, bounce: true })
           pending.delete(ticket)
           completed.add(ticket)
-          return { ok: true, ticket, changed: true, speech: `Sent back to the agent.${await nextSpeech(args.n)}` }
+          const next = await after(args.n || current.voice.indexOf(ask) + 1)
+          return { ok: true, ticket, changed: true, speech: `Sent back to the agent.${next.speech}`, ui: next.ui }
         }
         if (name === 'ask_preview' || name === 'ask_answer') {
           const result = bodyFor(ask, args)
@@ -232,13 +328,15 @@ export function createVoiceSession(deps) {
           }
           if (name === 'ask_preview') {
             pending.set(ticket, structuredClone(result.body))
-            return { ok: true, ticket, speech: confirmSpeech(ask, result.body.values, [], result.body.field_context) }
+            shown = ticket
+            return { ok: true, ticket, speech: confirmSpeech(ask, result.body.values, [], result.body.field_context), ui: { do: 'fill', ticket, values: result.body.values, field_context: result.body.field_context } }
           }
           if (canonical(result.body) !== canonical(pending.get(ticket))) return fail('Read it back with a preview first.', ticket)
           await deps.postAnswer(result.body)
           pending.delete(ticket)
           completed.add(ticket)
-          return { ok: true, ticket, changed: true, speech: `Sent to the agent.${await nextSpeech(args.n)}` }
+          const next = await after(args.n || current.voice.indexOf(ask) + 1)
+          return { ok: true, ticket, changed: true, speech: `Sent to the agent.${next.speech}`, ui: next.ui }
         }
         return fail('That voice tool is not available.', ticket)
       } catch (error) {

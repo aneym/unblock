@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createVoiceSession, voiceDeck } from '../src/voice.js'
+import { createVoiceSession, voiceDeck, xaiTools, VOICE_TOOLS, VOICE_SYSTEM_PROMPT } from '../src/voice.js'
 
 const field = (name, extra = {}) => ({ name, label: name, type: 'text', required: true, ...extra })
 const ask = (ticket, fields, extra = {}) => ({
@@ -32,7 +32,7 @@ test('preview guards the exact panel payload and a changed or absent preview nev
   const { posted, voice } = session([item])
   const args = { n: 1, answers: [{ field: '1', value: 'two', context: 'only on Friday' }] }
   assert.equal((await voice.handle('ask_answer', args)).ok, false)
-  assert.equal((await voice.handle('ask_preview', args)).ok, true)
+  assert.deepEqual((await voice.handle('ask_preview', args)).ui, { do: 'fill', ticket, values: { choice: 'b', optional: null }, field_context: { choice: 'only on Friday' } })
   assert.equal((await voice.handle('ask_answer', { n: 1, answers: [{ field: '1', value: 'one' }] })).ok, false)
   assert.equal(posted.length, 0)
   const sent = await voice.handle('ask_answer', args)
@@ -54,12 +54,86 @@ test('successful transitions announce the next fresh position', async () => {
   const { voice } = session(items)
   const skipped = await voice.handle('ask_skip', { n: 1 })
   assert.match(skipped.speech, /Next is number 1, Second ask/)
+  assert.deepEqual(skipped.ui, { do: 'show_ask', ticket: 'ub_second' })
   const args = { n: 1, answers: [{ field: 'answer', value: 'yes' }] }
   assert.equal((await voice.handle('ask_preview', args)).ok, true)
   const answered = await voice.handle('ask_answer', args)
   assert.match(answered.speech, /Next is number 1, First ask/)
+  assert.deepEqual(answered.ui, { do: 'show_ask', ticket: 'ub_first' })
   const sentBack = await voice.handle('ask_send_back', { n: 1, note: 'Wrong question' })
   assert.match(sentBack.speech, /That was the last one/)
+  assert.deepEqual(sentBack.ui, { do: 'show_list' })
+})
+
+test('navigation focuses the deck, opens screen asks and links, and uses current ask', async () => {
+  const first = ask('ub_recruiter', [field('answer', { url: 'https://forms.example.test/answer' })], {
+    project: 'Recruiter', title: 'Recruiting choice', links: [
+      { url: 'https://forms.example.test/answer', label: 'the form' },
+      { url: 'https://docs.example.test/context', label: 'Background notes' },
+    ],
+  })
+  const screen = ask('ub_screen', [field('credential', { type: 'secret' })], { project: 'Recruiter', title: 'Add credential' })
+  const other = ask('ub_other', [field('answer')], { project: 'Studio', title: 'Studio choice' })
+  const { voice } = session([first, screen, other, ask('ub_done', [field('answer')], { status: 'answered', title: 'Finished ask' })])
+  assert.deepEqual((await voice.handle('show_queue', { project: 'recruit' })).ui, { do: 'show_list', project: 'Recruiter' })
+  assert.match((await voice.handle('queue_summary', {})).speech, /2 open:.*1 needs the screen/)
+  assert.deepEqual((await voice.handle('ask_read', {})).ui, { do: 'show_ask', ticket: first.ticket })
+  assert.match((await voice.handle('queue_list', {})).speech, /On screen only: 1, Add credential/)
+  const read = await voice.handle('ask_read', { n: 1 })
+  assert.deepEqual(read.ui, { do: 'show_ask', ticket: first.ticket })
+  assert.match(read.speech, /It has 2 links; say open a link to see them/)
+  assert.deepEqual((await voice.handle('open_link', {})).ui, { do: 'open_link', url: first.links[0].url, label: 'the form' })
+  for (const which of ['1', 'one', 'first', 'link', 'the link', 'it', 'that', 'this', 'doc', 'page']) {
+    const result = await voice.handle('open_link', { which })
+    assert.equal(result.ok, true, which)
+    assert.deepEqual(result.ui, { do: 'open_link', url: first.links[0].url, label: 'the form' }, which)
+  }
+  for (const which of ['2', 'two', 'second', 'Background', 'docs.example']) {
+    const result = await voice.handle('open_link', { which })
+    assert.deepEqual(result.ui, { do: 'open_link', url: first.links[1].url, label: 'Background notes' }, which)
+  }
+  const ambiguous = await voice.handle('open_link', { which: 'unknown' })
+  assert.equal(ambiguous.ok, false)
+  assert.equal(ambiguous.speech, 'Which one: the form or Background notes?')
+  assert.deepEqual((await voice.handle('show_details', { open: false })).ui, { do: 'details', ticket: first.ticket, open: false })
+  assert.deepEqual((await voice.handle('show_screen_ask', { n: 1 })).ui, { do: 'show_ask', ticket: screen.ticket })
+  assert.match((await voice.handle('show_screen_ask', { n: 1 })).speech, /a credential/)
+  for (const name of ['ask_read', 'ask_preview', 'ask_answer', 'ask_skip', 'ask_send_back']) {
+    const result = await voice.handle(name, {})
+    assert.equal(result.ok, false, name)
+    assert.equal(result.speech, 'That one needs the screen.', name)
+    assert.equal(result.ui, undefined, name)
+  }
+  assert.deepEqual((await voice.handle('show_answered', {})).ui, { do: 'show_answered' })
+  assert.match((await voice.handle('show_answered', {})).speech, /Finished ask/)
+  assert.deepEqual((await voice.handle('show_queue', { all: true })).ui, { do: 'show_list', all: true })
+  assert.match((await voice.handle('queue_list', {})).speech, /Studio choice/)
+  assert.match((await voice.handle('show_queue', { project: 'unknown' })).speech, /Projects are/)
+  assert.deepEqual((await voice.handle('end_call', {})).ui, { do: 'end_call' })
+})
+
+test('one-link asks accept any spoken reference and use singular speech', async () => {
+  const item = ask('ub_onlylink', [field('answer')], { links: [{ url: 'https://example.test/read', label: 'Read this' }] })
+  const { voice } = session([item])
+  assert.match((await voice.handle('ask_read', { n: 1 })).speech, /It has a link; say open the link to see it/)
+  for (const which of ['1', 'the link', 'link', 'first', 'unrecognized description']) {
+    const result = await voice.handle('open_link', { which })
+    assert.equal(result.ok, true, which)
+    assert.deepEqual(result.ui, { do: 'open_link', url: item.links[0].url, label: item.links[0].label }, which)
+  }
+})
+
+test('voice prompt prevents tool announcements and repeated failed calls', () => {
+  assert.match(VOICE_SYSTEM_PROMPT, /Never announce that you are about to call a tool; just do it/)
+  assert.match(VOICE_SYSTEM_PROMPT, /If a tool fails, say its speech once and wait; never retry the same tool with the same arguments/)
+})
+
+test('xAI declarations lowercase nested JSON schema types', () => {
+  const converted = xaiTools(VOICE_TOOLS)
+  assert.equal(converted[0].type, 'function')
+  assert.equal(converted[0].parameters.type, 'object')
+  assert.equal(converted.find((tool) => tool.name === 'ask_preview').parameters.properties.answers.items.properties.value.type, 'string')
+  assert.equal(VOICE_TOOLS[0].parameters.type, 'OBJECT')
 })
 
 test('accept all cannot decide a must_decide field and no answer is posted', async () => {

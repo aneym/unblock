@@ -13,7 +13,8 @@ import {
 } from './passkey.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { mintVoiceToken } from './voice-token.js'
+import { defaultReadKey, mintVoiceToken, mintXaiToken } from './voice-token.js'
+import { createSpendLedger, rateFor } from './voice-spend.js'
 import { CLOSED_TO_ANSWERS, finished, PASSKEY_VERDICTS, Store } from './store.js'
 
 const VERSION = '0.1.0'
@@ -340,6 +341,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore } = {
   // readiness poll gave up on a daemon that was in fact already serving.
   secretStore.backend().catch(() => {})
   const clients = new Set()
+  const voiceKeyCache = new Map()
   // Listeners on ONE ask, keyed by ticket. The queue stream above says how many
   // asks are open; this one says what is happening inside a single ask while
   // the human fills it in, which is what an agent watching its own ask needs.
@@ -1007,17 +1009,57 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         profile,
       })
     }
-    if (pathname === '/api/voice/session' && req.method === 'POST') {
+    if (pathname.startsWith('/api/voice/')) {
       requireHumanPath(req)
-      try {
-        return sendJson(res, 200, await mintVoiceToken({
-          keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key',
-          model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live',
-          voice: process.env.UNBLOCK_VOICE_NAME || 'Kore',
-        }))
-      } catch (error) {
-        if (error.code === 'VOICE_NOT_CONFIGURED') return sendJson(res, 503, { error: 'Voice is not configured', code: error.code })
-        return sendJson(res, 502, { error: 'Voice token service unavailable' })
+      const settings = {
+        gemini: { id: 'gemini', label: 'Gemini', model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live-extended-thinking', keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key', envName: 'GEMINI_API_KEY', voice: process.env.UNBLOCK_VOICE_NAME || 'Kore' },
+        xai: { id: 'xai', label: 'Grok', model: process.env.UNBLOCK_XAI_MODEL || 'grok-voice-think-fast-2.0', keyRef: process.env.UNBLOCK_XAI_KEY_REF || 'xai-api-key', envName: 'XAI_API_KEY', voice: process.env.UNBLOCK_XAI_VOICE || 'eve' },
+      }
+      const positive = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback
+      const minutes = Number(process.env.UNBLOCK_VOICE_MAX_MINUTES)
+      const ledger = createSpendLedger({ file: join(stateDir(), 'voice-spend.json'), capUsd: positive(process.env.UNBLOCK_VOICE_CAP_USD, 20), maxMinutes: Number.isSafeInteger(minutes) && minutes > 0 ? minutes : 15 })
+      const configured = async (id) => {
+        const setting = settings[id]
+        const cached = voiceKeyCache.get(id)
+        if (cached && cached.ref === setting.keyRef && cached.env === process.env[setting.envName] && Date.now() - cached.at < 60_000) return cached.configured
+        const result = Boolean(await defaultReadKey(setting.keyRef, setting.envName))
+        voiceKeyCache.set(id, { ref: setting.keyRef, env: process.env[setting.envName], at: Date.now(), configured: result })
+        return result
+      }
+      if (pathname === '/api/voice/providers' && req.method === 'GET') {
+        const available = await Promise.all(['gemini', 'xai'].map(configured))
+        const preferred = process.env.UNBLOCK_VOICE_PROVIDER === 'xai' ? 'xai' : 'gemini'
+        const fallback = preferred === 'gemini' ? 'xai' : 'gemini'
+        const selected = available[preferred === 'gemini' ? 0 : 1] ? preferred : available[fallback === 'gemini' ? 0 : 1] ? fallback : preferred
+        return sendJson(res, 200, { default: selected, providers: ['gemini', 'xai'].map((id, index) => ({ id, label: settings[id].label, model: settings[id].model, configured: available[index], usd_per_minute: rateFor(settings[id].model) })), spend: ledger.status() })
+      }
+      if (pathname === '/api/voice/end' && req.method === 'POST') {
+        const body = await readJson(req)
+        const seconds = Number(body.seconds)
+        const ok = ledger.settle(body.session_id, Number.isFinite(seconds) ? Math.max(0, seconds) : 0)
+        return sendJson(res, 200, { ok, spend: ledger.status() })
+      }
+      if (pathname === '/api/voice/session' && req.method === 'POST') {
+        const body = await readJson(req)
+        const preferred = body.provider === 'xai' || body.provider === 'gemini' ? body.provider : process.env.UNBLOCK_VOICE_PROVIDER === 'xai' ? 'xai' : 'gemini'
+        const fallback = preferred === 'gemini' ? 'xai' : 'gemini'
+        const provider = await configured(preferred) ? preferred : await configured(fallback) ? fallback : null
+        if (!provider) return sendJson(res, 503, { error: 'Voice is not configured', code: 'VOICE_NOT_CONFIGURED' })
+        let reservation
+        try {
+          reservation = ledger.reserve({ provider, model: settings[provider].model })
+        } catch (error) {
+          if (error.code === 'VOICE_SPEND_CAP') return sendJson(res, 402, { error: 'Voice hit this month’s cap', code: 'VOICE_SPEND_CAP', spend: ledger.status() })
+          throw error
+        }
+        try {
+          const { keyRef, model, voice } = settings[provider]
+          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice }) : await mintXaiToken({ keyRef, model, voice })
+          return sendJson(res, 200, { ...token, ...reservation, spend: ledger.status() })
+        } catch {
+          ledger.settle(reservation.session_id, 0)
+          return sendJson(res, 502, { error: 'Voice token service unavailable' })
+        }
       }
     }
     if (pathname === '/api/answer' && req.method === 'POST') {

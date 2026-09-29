@@ -5,8 +5,8 @@ import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from './voice.js'
 const call = promisify(execFile)
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens'
 
-export async function defaultReadKey(ref) {
-  if (process.env.GEMINI_API_KEY?.trim()) return process.env.GEMINI_API_KEY.trim()
+export async function defaultReadKey(ref, envName = 'GEMINI_API_KEY') {
+  if (process.env[envName]?.trim()) return process.env[envName].trim()
   try {
     const { stdout } = await call(`${process.env.HOME}/.local/bin/agent-secret`, ['get', ref], { timeout: 5000 })
     return stdout.trim()
@@ -16,7 +16,7 @@ export async function defaultReadKey(ref) {
 }
 
 export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalThis.fetch, now = Date.now, keyRef = 'gemini-api-key', model = 'gemini-3.8-live', voice = 'Kore' } = {}) {
-  const key = await readKey(keyRef)
+  const key = await readKey(keyRef, 'GEMINI_API_KEY')
   if (!key) {
     const error = new Error('Voice is not configured')
     error.code = 'VOICE_NOT_CONFIGURED'
@@ -57,5 +57,27 @@ export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalT
   if (!response.ok) throw new Error('Voice token service unavailable')
   const data = await response.json()
   if (typeof data.name !== 'string' || !data.name.startsWith('auth_tokens/')) throw new Error('Voice token service returned an invalid token')
-  return { token: data.name, model, expires_at: newSessionExpireTime }
+  return { provider: 'gemini', token: data.name, model, voice, expires_at: newSessionExpireTime }
+}
+
+export async function mintXaiToken({ keyRef = 'xai-api-key', readKey = defaultReadKey, fetch = globalThis.fetch, now = Date.now, model = 'grok-voice-think-fast-2.0', voice = 'eve' } = {}) {
+  const key = await readKey(keyRef, 'XAI_API_KEY')
+  if (!key) {
+    const error = new Error('Voice is not configured')
+    error.code = 'VOICE_NOT_CONFIGURED'
+    throw error
+  }
+  try {
+    const response = await fetch('https://api.x.ai/v1/realtime/client_secrets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expires_after: { seconds: 120 } }),
+    })
+    if (!response.ok) throw new Error('Voice token service unavailable')
+    const data = await response.json()
+    if (typeof data.value !== 'string' || !data.value) throw new Error('Voice token service unavailable')
+    return { provider: 'xai', token: data.value, model, voice, expires_at: new Date(Number(data.expires_at) * 1000).toISOString() }
+  } catch {
+    throw new Error('Voice token service unavailable')
+  }
 }

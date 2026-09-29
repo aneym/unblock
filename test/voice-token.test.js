@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { startDaemon, loadOrCreateSecret } from '../src/daemon.js'
-import { mintVoiceToken } from '../src/voice-token.js'
+import { mintVoiceToken, mintXaiToken } from '../src/voice-token.js'
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from '../src/voice.js'
 
 test('mint locks the Live setup and carries the key only in a header', async () => {
@@ -18,6 +18,8 @@ test('mint locks the Live setup and carries the key only in a header', async () 
   })
   assert.equal(receivedRef, 'configured-voice-key')
   assert.equal(token.token, 'auth_tokens/one')
+  assert.equal(token.provider, 'gemini')
+  assert.equal(token.voice, 'Kore')
   assert.equal(token.expires_at, new Date(1_120_000).toISOString())
   assert.equal(request.url, 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens')
   assert.equal(request.headers['x-goog-api-key'], key)
@@ -42,19 +44,39 @@ test('missing voice key is a distinct error without network access', async () =>
   await assert.rejects(mintVoiceToken({ readKey: async () => '', fetch: async () => { throw new Error('must not call fetch') } }), { code: 'VOICE_NOT_CONFIGURED' })
 })
 
+test('xAI client secret uses bearer authorization and never leaks the key in errors', async () => {
+  const key = 'test-only-key'
+  let request
+  const token = await mintXaiToken({ readKey: async (ref, env) => { assert.equal(ref, 'xai-api-key'); assert.equal(env, 'XAI_API_KEY'); return key }, fetch: async (url, options) => {
+    request = { url, ...options }
+    return { ok: true, json: async () => ({ value: 'secret-value', expires_at: 180 }) }
+  } })
+  assert.deepEqual(token, { provider: 'xai', token: 'secret-value', model: 'grok-voice-think-fast-2.0', voice: 'eve', expires_at: new Date(180_000).toISOString() })
+  assert.equal(request.url, 'https://api.x.ai/v1/realtime/client_secrets')
+  assert.equal(request.method, 'POST')
+  assert.equal(request.headers.Authorization, `Bearer ${key}`)
+  assert.deepEqual(JSON.parse(request.body), { expires_after: { seconds: 120 } })
+  assert.equal(request.body.includes(key), false)
+  for (const response of [{ ok: false }, { ok: true, json: async () => ({}) }]) {
+    await assert.rejects(mintXaiToken({ readKey: async () => key, fetch: async () => response }), (error) => !error.message.includes(key) && /unavailable/.test(error.message))
+  }
+})
+
 test('authenticated daemon voice session returns 503 when no key is configured', async () => {
   const state = mkdtempSync(join(tmpdir(), 'unblock-voice-route-'))
-  const names = ['UNBLOCK_STATE_DIR', 'UNBLOCK_CONFIG_DIR', 'UNBLOCK_VOICE_KEY_REF', 'UNBLOCK_PUBLIC_ORIGIN', 'UNBLOCK_TRUSTED_PROXY', 'UNBLOCK_ALLOWED_USERS', 'GEMINI_API_KEY']
+  const names = ['UNBLOCK_STATE_DIR', 'UNBLOCK_CONFIG_DIR', 'UNBLOCK_VOICE_KEY_REF', 'UNBLOCK_XAI_KEY_REF', 'UNBLOCK_PUBLIC_ORIGIN', 'UNBLOCK_TRUSTED_PROXY', 'UNBLOCK_ALLOWED_USERS', 'GEMINI_API_KEY', 'XAI_API_KEY']
   const before = Object.fromEntries(names.map((name) => [name, process.env[name]]))
   Object.assign(process.env, {
     UNBLOCK_STATE_DIR: state,
     UNBLOCK_CONFIG_DIR: state,
     UNBLOCK_VOICE_KEY_REF: 'unblock-voice-test-nonexistent-ref',
+    UNBLOCK_XAI_KEY_REF: 'unblock-xai-test-nonexistent-ref',
     UNBLOCK_PUBLIC_ORIGIN: 'https://studio.tailnet.test:8797',
     UNBLOCK_TRUSTED_PROXY: 'tailscale',
     UNBLOCK_ALLOWED_USERS: 'alex@example.test',
   })
   delete process.env.GEMINI_API_KEY
+  delete process.env.XAI_API_KEY
   let daemon
   try {
     daemon = await startDaemon({ port: 0 })

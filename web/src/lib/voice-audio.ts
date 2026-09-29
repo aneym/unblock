@@ -1,4 +1,3 @@
-const INPUT_RATE = 16_000
 const OUTPUT_RATE = 24_000
 
 /** Create and resume during the tap, before awaiting a token or a microphone permission. */
@@ -19,9 +18,9 @@ function encodePcm(bytes: ArrayBuffer): string {
 
 const workletSource = `
 class MicCapture extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super()
-    this.ratio = sampleRate / ${INPUT_RATE}
+    this.ratio = sampleRate / options.processorOptions.targetRate
     this.next = this.ratio
     this.sum = 0
     this.count = 0
@@ -52,7 +51,7 @@ class MicCapture extends AudioWorkletProcessor {
 registerProcessor('unblock-mic', MicCapture)
 `
 
-export async function startMic(context: AudioContext, onChunk: (data: string) => void, cancelled: () => boolean): Promise<{ stop(): void }> {
+export async function startMic(context: AudioContext, targetRate: 16000 | 24000, onChunk: (data: string) => void, cancelled: () => boolean): Promise<{ stop(): void }> {
   // Get permission first; if it fails, no worklet or graph is left behind.
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -73,7 +72,7 @@ export async function startMic(context: AudioContext, onChunk: (data: string) =>
       return { stop() {} }
     }
     source = context.createMediaStreamSource(stream)
-    worklet = new AudioWorkletNode(context, 'unblock-mic')
+    worklet = new AudioWorkletNode(context, 'unblock-mic', { processorOptions: { targetRate } })
     // Keep the processor running on Safari without feeding the mic into the speakers.
     sink = context.createGain()
     sink.gain.value = 0

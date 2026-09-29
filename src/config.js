@@ -125,6 +125,12 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
     ['UNBLOCK_VOICE_KEY_REF', typeof file.voice_key_ref === 'string' && file.voice_key_ref.trim() ? file.voice_key_ref.trim() : null],
     ['UNBLOCK_VOICE_MODEL', typeof file.voice_model === 'string' && file.voice_model.trim() ? file.voice_model.trim() : null],
     ['UNBLOCK_VOICE_NAME', typeof file.voice_name === 'string' && file.voice_name.trim() ? file.voice_name.trim() : null],
+    ['UNBLOCK_VOICE_PROVIDER', ['gemini', 'xai'].includes(file.voice_provider) ? file.voice_provider : null],
+    ['UNBLOCK_XAI_KEY_REF', typeof file.xai_key_ref === 'string' && file.xai_key_ref.trim() ? file.xai_key_ref.trim() : null],
+    ['UNBLOCK_XAI_MODEL', typeof file.xai_model === 'string' && file.xai_model.trim() ? file.xai_model.trim() : null],
+    ['UNBLOCK_XAI_VOICE', typeof file.xai_voice === 'string' && file.xai_voice.trim() ? file.xai_voice.trim() : null],
+    ['UNBLOCK_VOICE_CAP_USD', typeof file.voice_spend_cap_usd === 'number' && Number.isFinite(file.voice_spend_cap_usd) && file.voice_spend_cap_usd > 0 ? String(file.voice_spend_cap_usd) : null],
+    ['UNBLOCK_VOICE_MAX_MINUTES', normalizePositiveInteger(file.voice_max_minutes)],
   ]
   for (const [name, value] of settings) {
     if (env[name] !== undefined && env[name] !== '') continue

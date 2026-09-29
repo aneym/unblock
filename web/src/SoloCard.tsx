@@ -156,13 +156,18 @@ function ReviewSection({ images, pages }: { images: Link[]; pages: Link[] }) {
  * the question, folded on a phone and open on a wide screen, so the first
  * screen is always title, why and the question (Alex, phone order, 2026-09-25).
  */
-function Details({ ask, answered, herdrHref, topLinks }: {
+function Details({ ask, answered, herdrHref, topLinks, voiceDetails, onVoiceDetailsApplied }: {
   ask: Ask
   answered: boolean
   herdrHref: string | undefined
   topLinks: { label: string; url: string }[]
+  voiceDetails?: { open: boolean; nonce: number }
+  onVoiceDetailsApplied: (nonce: number) => boolean
 }) {
   const [open, setOpen] = useState(() => window.matchMedia('(min-width: 960px)').matches)
+  useEffect(() => {
+    if (voiceDetails && onVoiceDetailsApplied(voiceDetails.nonce)) setOpen(voiceDetails.open)
+  }, [voiceDetails?.nonce, onVoiceDetailsApplied])
   const statusLabel = answered ? 'Answered' : ask.kind === 'park' ? 'Agent paused' : 'Waiting on you'
   const statusIcon = answered ? 'answered' : ask.kind === 'park' ? 'park' : 'waiting'
   const statusNote = ask.kind === 'park' ? 'the agent is paused until you answer' : 'the agent keeps working meanwhile'
@@ -236,8 +241,13 @@ function Details({ ask, answered, herdrHref, topLinks }: {
   )
 }
 
-export function SoloCard({ ask, onFinished, onReload, passkeys }: {
+export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, voiceFill, onVoiceDetailsApplied, onVoiceFillApplied, voiceCallActive }: {
   ask: Ask; onFinished: () => void; onReload: () => Promise<void>; passkeys: PasskeyState
+  voiceDetails?: { open: boolean; nonce: number }
+  voiceFill?: { values: Record<string, unknown>; field_context: Record<string, string>; nonce: number }
+  onVoiceDetailsApplied: (nonce: number) => boolean
+  onVoiceFillApplied: (nonce: number) => boolean
+  voiceCallActive: boolean
 }) {
   const kind = askKind(ask)
   const approvalKind = kind === 'consent' || kind === 'spend' || kind === 'message' || kind === 'permission'
@@ -285,6 +295,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
   const prePicked = useRef(seeded.prePicked)
   const [values, setValues] = useState<Values>(seeded.values)
   const [notes, setNotes] = useState(seeded.notes)
+  const [voiceFilled, setVoiceFilled] = useState(false)
   const [bounced, setBounced] = useState<Record<string, string>>(
     () => approvalKind ? {} : readLocal(ask.ticket)?.bounced || {},
   )
@@ -475,6 +486,24 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask.ticket])
+  useEffect(() => {
+    if (!voiceFill || !onVoiceFillApplied(voiceFill.nonce)) return
+    const next = { ...latest.current.values }
+    for (const [name, value] of Object.entries(voiceFill.values)) {
+      if (value === null || !ask.fields.some((field) => field.name === name && field.type !== 'secret')) continue
+      if (typeof value === 'string' || typeof value === 'boolean'
+        || (Array.isArray(value) && value.every((item) => typeof item === 'string'))) {
+        next[name] = value as FieldValue
+        prePicked.current.delete(name)
+      }
+    }
+    const nextNotes = { ...latest.current.notes, ...voiceFill.field_context }
+    setValues(next)
+    setNotes(nextNotes)
+    setVoiceFilled(true)
+    persist({ values: next, notes: nextNotes })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceFill?.nonce])
   const onChange = (name: string, value: FieldValue, secret = false) => {
     prePicked.current.delete(name)
     const next = { ...latest.current.values, [name]: value }
@@ -919,7 +948,9 @@ export function SoloCard({ ask, onFinished, onReload, passkeys }: {
           </button>
         </div>
       )}
-      <Details ask={ask} answered={answered} herdrHref={herdrHref} topLinks={hasMainSteps ? [] : topLinks} />
+      <Details ask={ask} answered={answered} herdrHref={herdrHref} topLinks={hasMainSteps ? [] : topLinks}
+        voiceDetails={voiceDetails} onVoiceDetailsApplied={onVoiceDetailsApplied} />
+      {voiceFilled && voiceCallActive && !answered && !detected && <p className="voice-fill-hint">Heard by voice. Say yes to send, or tap Send.</p>}
       {!answered && !detected && (
         <div ref={actionBarRef} className={`action-bar${focalActionsInView ? ' is-hidden' : ''}`} aria-hidden={focalActionsInView}>
           {approvalKind ? (

@@ -1,19 +1,40 @@
-import { GoogleGenAI, Modality, type FunctionDeclaration, type Session } from '@google/genai'
-import { createVoiceSession, VOICE_SYSTEM_PROMPT, VOICE_TOOLS, type VoiceSessionToken } from '../../../src/voice.js'
+import { createVoiceSession, type VoiceProvider, type VoiceSessionToken, type VoiceSpend, type VoiceUi } from '../../../src/voice.js'
 import type { Ask } from '../deck'
 import { api, ApiError } from './api'
 import { createPlayer, startMic } from './voice-audio'
+import { connectGemini } from './voice-gemini'
+import { connectXai } from './voice-xai'
 
 export type VoiceState =
   | { name: 'connecting' | 'listening' | 'speaking' | 'ended' | 'unconfigured' }
+  | { name: 'capped'; cap?: number }
   | { name: 'error'; message: string }
 export type TranscriptLine = { who: 'you' | 'agent'; text: string }
+
+export interface VoiceAdapter {
+  sampleRate: 16000 | 24000
+  sendAudio(audio: string): void
+  sendToolResults(results: { id: string; name: string; ok: boolean; speech: string }[]): void
+  close(): void
+}
+export interface VoiceAdapterCallbacks {
+  onOpen(): void
+  onAudio(data: string): void
+  onInterrupted(): void
+  onTranscript(who: TranscriptLine['who'], text: string, mode: 'append' | 'replace'): void
+  onTurnDone(): void
+  onToolCalls(calls: { id: string; name: string; args: Record<string, unknown> }[]): Promise<void>
+  onCancelled(ids: string[]): void
+  onError(message: string): void
+  onClose(clean: boolean, reason: string): void
+}
 
 interface VoiceCallbacks {
   onState(state: VoiceState): void
   onTranscript(line: TranscriptLine): void
-  onTicket(ticket: string): void
+  onUi(ui: VoiceUi): void
   onChanged(): void
+  onSession(session: { provider: VoiceProvider; spend: VoiceSpend; maxMinutes: number }): void
 }
 
 function messageOf(error: unknown): string {
@@ -21,11 +42,25 @@ function messageOf(error: unknown): string {
 }
 
 /** The AudioContext must be created and resumed by the tap handler before import(). */
-export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onTicket, onChanged }: VoiceCallbacks): { stop(): void } {
+export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onUi, onChanged, onSession }: VoiceCallbacks,
+  options: { provider?: VoiceProvider } = {}): { stop(): void } {
   let stopped = false
-  let live: Session | undefined
+  let live: VoiceAdapter | undefined
   let mic: { stop(): void } | undefined
   let pendingTools = Promise.resolve()
+  let session: VoiceSessionToken | undefined
+  let startedAt = 0
+  let endTimer: number | undefined
+  let goodbyeTimer: number | undefined
+  let endingTurn: number | undefined
+  let endingRequested = false
+  let completedTurns = 0
+  let audioEpoch = 0
+  let toolResponsesPending = 0
+  let awaitingToolTurn = false
+  let toolsTurnDone = false
+  let toolTurn = 0
+  let awaitingGoodbyeAudio = false
   const cancelledCalls = new Set<string>()
   const player = createPlayer(audio)
   const rules = createVoiceSession<Ask>({
@@ -33,99 +68,150 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onT
     postAnswer: (body) => api('/api/answer', body),
   })
   const transcripts: Record<TranscriptLine['who'], string> = { you: '', agent: '' }
-  const appendTranscript = (who: TranscriptLine['who'], text: string) => {
-    if (!text) return
-    transcripts[who] += text
-    onTranscript({ who, text: transcripts[who] })
-  }
   const release = () => {
     if (stopped) return
     stopped = true
+    window.clearTimeout(endTimer)
+    window.clearTimeout(goodbyeTimer)
     mic?.stop()
     player.flush()
     live?.close()
     void audio.close()
+    if (session) void fetch('/api/voice/end', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ session_id: session.session_id, seconds: Math.max(0, Math.ceil((Date.now() - startedAt) / 1000)) }),
+    }).catch(() => undefined)
   }
   const fail = (message: string) => {
     if (stopped) return
     release()
     onState({ name: 'error', message })
   }
+  const end = () => { if (!stopped) { release(); onState({ name: 'ended' }) } }
+  const afterPlayback = (turn: number, toolResponse = false) => {
+    const epoch = audioEpoch
+    player.whenDrained(() => {
+      if (stopped || epoch !== audioEpoch) return
+      if (endingTurn !== undefined && turn >= endingTurn) {
+        if (!awaitingGoodbyeAudio) end()
+      } else if (!endingRequested && (toolResponse || turn !== toolTurn)) onState({ name: 'listening' })
+    })
+  }
+  const callbacks: VoiceAdapterCallbacks = {
+    onOpen: () => { if (!stopped) onState({ name: 'listening' }) },
+    onAudio: (data) => {
+      if (stopped) return
+      if (awaitingGoodbyeAudio) awaitingGoodbyeAudio = false
+      audioEpoch++
+      player.enqueue(data)
+      onState({ name: 'speaking' })
+    },
+    onInterrupted: () => {
+      if (stopped) return
+      audioEpoch++
+      player.flush()
+      onState({ name: 'listening' })
+    },
+    onTranscript: (who, text, mode) => {
+      if (stopped || !text) return
+      transcripts[who] = mode === 'replace' ? text : transcripts[who] + text
+      onTranscript({ who, text: transcripts[who] })
+    },
+    onTurnDone: () => {
+      if (stopped) return
+      transcripts.you = ''
+      transcripts.agent = ''
+      const turn = ++completedTurns
+      if (awaitingToolTurn) { toolsTurnDone = true; toolTurn = turn }
+      if (endingRequested && endingTurn === undefined) {
+        endingTurn = awaitingToolTurn ? turn + 1 : turn
+        if (awaitingToolTurn) awaitingGoodbyeAudio = true
+      }
+      if (endingTurn !== undefined && turn >= endingTurn) awaitingGoodbyeAudio = false
+      if (!toolResponsesPending) afterPlayback(turn, awaitingToolTurn && !endingRequested)
+      awaitingToolTurn = false
+    },
+    onToolCalls: (calls) => {
+      awaitingToolTurn = true
+      toolsTurnDone = false
+      toolTurn = 0
+      toolResponsesPending++
+      pendingTools = pendingTools.then(async () => {
+        for (const call of calls) {
+          if (stopped) return
+          if (call.id && cancelledCalls.has(call.id)) continue
+          const result = await rules.handle(call.name, call.args)
+          if (stopped) return
+          if (result.ui) {
+            if (result.ui.do === 'end_call' && !endingRequested) {
+              endingRequested = true
+              if (toolsTurnDone) {
+                endingTurn = completedTurns + 1
+                awaitingGoodbyeAudio = true
+              }
+              goodbyeTimer = window.setTimeout(end, 6000)
+            }
+            onUi(result.ui)
+          }
+          if (result.changed) onChanged()
+          if (call.id && cancelledCalls.has(call.id)) continue
+          live?.sendToolResults([{ id: call.id, name: call.name, ok: result.ok, speech: result.speech }])
+        }
+        toolResponsesPending--
+        if (!toolResponsesPending && toolTurn && (endingTurn === undefined || toolTurn >= endingTurn)) afterPlayback(toolTurn, true)
+      }).catch((error) => fail(messageOf(error)))
+      return pendingTools
+    },
+    onCancelled: (ids) => { for (const id of ids) cancelledCalls.add(id) },
+    onError: fail,
+    onClose: (clean, reason) => {
+      if (stopped) return
+      if (clean) end()
+      else fail(reason || 'Voice connection closed. Please try again.')
+    },
+  }
   onState({ name: 'connecting' })
   void (async () => {
     try {
-      const token = await api<VoiceSessionToken>('/api/voice/session', {})
-      if (stopped) return
-      const ai = new GoogleGenAI({ apiKey: token.token, httpOptions: { apiVersion: 'v1alpha' } })
-      live = await ai.live.connect({
-        model: token.model,
-        config: {
-          responseModalities: [Modality.AUDIO], systemInstruction: VOICE_SYSTEM_PROMPT,
-          // The shared declarations use the SDK's OpenAPI Schema wire format.
-          tools: [{ functionDeclarations: VOICE_TOOLS.map(({ name, description, parameters }) =>
-            ({ name, description, parameters: parameters as FunctionDeclaration['parameters'] }) satisfies FunctionDeclaration) }],
-          inputAudioTranscription: {}, outputAudioTranscription: {},
-        },
-        callbacks: {
-          onopen: () => { if (!stopped) onState({ name: 'listening' }) },
-          onmessage: (event) => {
-            if (stopped) return
-            const content = event.serverContent
-            if (content?.interrupted) { player.flush(); onState({ name: 'listening' }) }
-            for (const part of content?.modelTurn?.parts ?? []) {
-              if (part.inlineData?.data && part.inlineData.mimeType?.startsWith('audio/')) {
-                player.enqueue(part.inlineData.data)
-                onState({ name: 'speaking' })
-              }
-            }
-            if (content?.inputTranscription?.text) appendTranscript('you', content.inputTranscription.text)
-            if (content?.outputTranscription?.text) appendTranscript('agent', content.outputTranscription.text)
-            if (content?.turnComplete) {
-              transcripts.you = ''
-              transcripts.agent = ''
-              player.whenDrained(() => { if (!stopped) onState({ name: 'listening' }) })
-            }
-            for (const id of event.toolCallCancellation?.ids ?? []) cancelledCalls.add(id)
-            if (event.toolCall?.functionCalls?.length) {
-              // Preserve tool order so preview/answer session guards are not raced.
-              const calls = event.toolCall.functionCalls
-              pendingTools = pendingTools.then(async () => {
-                for (const call of calls) {
-                  if (stopped) return
-                  if (call.id && cancelledCalls.has(call.id)) continue
-                  const result = await rules.handle(call.name ?? '', call.args ?? {})
-                  if (stopped) return
-                  if (result.ticket) onTicket(result.ticket)
-                  if (result.changed) onChanged()
-                  if (call.id && cancelledCalls.has(call.id)) continue
-                  live?.sendToolResponse({ functionResponses: [{ id: call.id, name: call.name,
-                    response: { ok: result.ok, speech: result.speech } }] })
-                }
-              }).catch((error) => fail(messageOf(error)))
-            }
-          },
-          onerror: (event) => fail(event.message || 'Voice connection failed. Please try again.'),
-          onclose: (event) => {
-            if (stopped) return
-            release()
-            onState(event.wasClean
-              ? { name: 'ended' }
-              : { name: 'error', message: event.reason || 'Voice connection closed. Please try again.' })
-          },
-        },
+      // Fetch directly to retain the spend cap in a 402 response.
+      const response = await fetch('/api/voice/session', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: options.provider }), cache: 'no-store',
       })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { code?: string; error?: string; cap_usd?: number; spend?: VoiceSpend }
+        if (response.status === 402 && body.code === 'VOICE_SPEND_CAP') {
+          release()
+          onState({ name: 'capped', cap: body.cap_usd ?? body.spend?.cap_usd })
+          return
+        }
+        throw new ApiError(body.error || `HTTP ${response.status}`, body.code)
+      }
+      const token = await response.json() as VoiceSessionToken
+      session = token
+      startedAt = Date.now()
+      if (stopped) {
+        void fetch('/api/voice/end', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+          body: JSON.stringify({ session_id: token.session_id, seconds: 0 }),
+        }).catch(() => undefined)
+        return
+      }
+      onSession({ provider: token.provider, spend: token.spend, maxMinutes: token.max_minutes })
+      endTimer = window.setTimeout(end, token.max_minutes * 60_000)
+      live = token.provider === 'xai' ? await connectXai(token, callbacks) : await connectGemini(token, callbacks)
       if (stopped) { live.close(); return }
-      live.sendClientContent({ turns: 'Start the call.', turnComplete: true })
       await audio.resume()
       if (stopped) return
-      mic = await startMic(audio, (data) => { if (!stopped) live?.sendRealtimeInput({ audio: { data, mimeType: 'audio/pcm;rate=16000' } }) }, () => stopped)
+      mic = await startMic(audio, live.sampleRate, (data) => { if (!stopped) live?.sendAudio(data) }, () => stopped)
       if (stopped) { mic.stop(); return }
     } catch (error) {
+      if (stopped) return
       if (error instanceof ApiError && error.code === 'VOICE_NOT_CONFIGURED') {
         release()
         onState({ name: 'unconfigured' })
       } else fail(messageOf(error))
     }
   })()
-  return { stop() { release(); onState({ name: 'ended' }) } }
+  return { stop: end }
 }
