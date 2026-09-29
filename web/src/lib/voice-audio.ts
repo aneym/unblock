@@ -2,9 +2,25 @@ const OUTPUT_RATE = 24_000
 
 /** Create and resume during the tap, before awaiting a token or a microphone permission. */
 export function prepareAudio(): AudioContext {
-  const context = new AudioContext()
-  void context.resume()
-  return context
+  if (typeof AudioContext === 'undefined') throw new Error('No microphone is available in this browser.')
+  try {
+    const context = new AudioContext()
+    void context.resume()
+    return context
+  } catch (error) {
+    throw new Error(voiceAudioError(error))
+  }
+}
+
+export function voiceAudioError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === 'NotAllowedError') return 'Microphone access is blocked. Allow it for this site, then Retry.'
+    if (error.name === 'NotFoundError' || error.name === 'NotSupportedError' || error.message === 'Not supported') {
+      return 'No microphone is available in this browser.'
+    }
+    return error.message
+  }
+  return 'Voice call failed. Please try again.'
 }
 
 function encodePcm(bytes: ArrayBuffer): string {
@@ -53,6 +69,9 @@ registerProcessor('unblock-mic', MicCapture)
 
 export async function startMic(context: AudioContext, targetRate: 16000 | 24000, onChunk: (data: string) => void, cancelled: () => boolean): Promise<{ stop(): void }> {
   // Get permission first; if it fails, no worklet or graph is left behind.
+  if (!navigator.mediaDevices?.getUserMedia || !context.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+    throw new Error('No microphone is available in this browser.')
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   })

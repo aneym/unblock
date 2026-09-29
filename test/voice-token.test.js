@@ -32,12 +32,22 @@ test('mint locks the Live setup and carries the key only in a header', async () 
   assert.equal(body.bidiGenerateContentSetup.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName, 'Kore')
   assert.equal(body.bidiGenerateContentSetup.systemInstruction.parts[0].text, VOICE_SYSTEM_PROMPT)
   assert.deepEqual(body.bidiGenerateContentSetup.tools[0].functionDeclarations, VOICE_TOOLS)
-  for (const field of ['model', 'generationConfig.responseModalities', 'generationConfig.speechConfig', 'systemInstruction.role', 'systemInstruction.parts', 'tools.0', 'inputAudioTranscription', 'outputAudioTranscription']) {
-    // The SDK's shallow mask uses each immediate child key; arrays expose their index.
-    if (field === 'tools.0') assert.ok(body.fieldMask.includes('tools.0'))
-    else assert.ok(body.fieldMask.split(',').includes(field), field)
-  }
+  assert.equal(body.fieldMask, 'model,generationConfig,systemInstruction,tools,inputAudioTranscription,outputAudioTranscription')
   assert.equal(request.body.includes(key), false)
+})
+
+test('extended-thinking Live setup declares a thinking level and non-blocking tools', async () => {
+  const setups = []
+  for (const model of ['gemini-3.8-live-extended-thinking', 'gemini-3.8-live']) {
+    await mintVoiceToken({ model, readKey: async () => 'test-only-value', fetch: async (_url, options) => {
+      setups.push(JSON.parse(options.body).bidiGenerateContentSetup)
+      return { ok: true, json: async () => ({ name: 'auth_tokens/one' }) }
+    } })
+  }
+  assert.deepEqual(setups[0].generationConfig.thinkingConfig, { thinkingLevel: 'LOW' })
+  assert.ok(setups[0].tools[0].functionDeclarations.every((tool) => tool.behavior === 'NON_BLOCKING'))
+  assert.equal(setups[1].generationConfig.thinkingConfig, undefined)
+  assert.deepEqual(setups[1].tools[0].functionDeclarations, VOICE_TOOLS)
 })
 
 test('missing voice key is a distinct error without network access', async () => {

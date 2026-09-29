@@ -1,4 +1,5 @@
 import http from 'node:http'
+import { execFile } from 'node:child_process'
 import { guardedAnswerNotice } from './pane-notice.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
@@ -323,7 +324,15 @@ function safeSecretAnswer(ask, values, records) {
   return { safe, refs }
 }
 
-export async function startDaemon({ port, secretStore: injectedSecretStore } = {}) {
+function runIssueCommand(binary, argv, body) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(binary, argv, { timeout: 20_000, encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(stdout))
+    child.stdin.on('error', reject)
+    child.stdin.end(body)
+  })
+}
+
+export async function startDaemon({ port, secretStore: injectedSecretStore, issueRunner = runIssueCommand } = {}) {
   // The config file fills in whatever the spawner's environment left unset,
   // so the daemon is reachable on its public origin no matter who started it.
   const config = applyConfig()
@@ -1011,8 +1020,35 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
     if (pathname.startsWith('/api/voice/')) {
       requireHumanPath(req)
+      if (pathname === '/api/voice/issue' && req.method === 'POST') {
+        const issue = await readJson(req)
+        if (!issue || typeof issue.title !== 'string' || !issue.title.trim() || issue.title.trim().length > 120 ||
+            typeof issue.details !== 'string' || issue.details.length > 4000 ||
+            !['unblock', 'dashboard', 'other'].includes(issue.about) ||
+            (issue.ticket !== undefined && typeof issue.ticket !== 'string')) {
+          return sendJson(res, 400, { error: 'Invalid issue' })
+        }
+        if (process.env.UNBLOCK_ISSUE_DRY === '1') return sendJson(res, 200, { number: 0, url: '' })
+        const repo = process.env.UNBLOCK_ISSUE_REPO || 'shelf-group/agent-rails'
+        const title = `[${issue.about === 'dashboard' ? 'dashboard' : 'unblock'}] ${issue.title.trim()}`
+        const viewer = proxyIdentity(req)?.login || 'local'
+        const body = `Filed by voice from the unblock panel by ${viewer} at ${new Date().toISOString()}.\nAbout: ${issue.about}\nOn screen: ${issue.ticket || 'the list'}\n\n${issue.details}\n\nPick-up: triage like any dogfood issue; comment 'fixed in <version>' when live.\n`
+        const gh = process.env.UNBLOCK_GH || (existsSync(join(homedir(), '.local/bin/gh')) ? join(homedir(), '.local/bin/gh') : '/opt/homebrew/bin/gh')
+        const argv = ['issue', 'create', '-R', repo, '--title', title, '--body-file', '-', '--label', 'dogfood-unblock']
+        try {
+          let output
+          try { output = await issueRunner(gh, argv, body) } catch (error) {
+            if (error.killed || error.signal || !/label/i.test(String(error.stderr || ''))) throw error
+            output = await issueRunner(gh, argv.slice(0, -2), body)
+          }
+          const url = String(output).trim().split(/\r?\n/).at(-1)
+          const number = Number(url.match(/^https:\/\/[^\s/]+\/[^\s/]+\/[^\s/]+\/issues\/(\d+)$/)?.[1])
+          if (!Number.isSafeInteger(number) || number < 1) throw new Error('invalid issue URL')
+          return sendJson(res, 200, { number, url })
+        } catch { return sendJson(res, 502, { error: 'Could not file the issue' }) }
+      }
       const settings = {
-        gemini: { id: 'gemini', label: 'Gemini', model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live-extended-thinking', keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key', envName: 'GEMINI_API_KEY', voice: process.env.UNBLOCK_VOICE_NAME || 'Kore' },
+        gemini: { id: 'gemini', label: 'Gemini', model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live', keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key', envName: 'GEMINI_API_KEY', voice: process.env.UNBLOCK_VOICE_NAME || 'Kore' },
         xai: { id: 'xai', label: 'Grok', model: process.env.UNBLOCK_XAI_MODEL || 'grok-voice-think-fast-2.0', keyRef: process.env.UNBLOCK_XAI_KEY_REF || 'xai-api-key', envName: 'XAI_API_KEY', voice: process.env.UNBLOCK_XAI_VOICE || 'eve' },
       }
       const positive = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback

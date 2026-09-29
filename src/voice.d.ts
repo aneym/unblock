@@ -52,6 +52,8 @@ export type VoiceUi =
   | { do: 'fill'; ticket: string; values: Record<string, unknown>; field_context: Record<string, string> }
   /** End the call once the goodbye has finished playing. */
   | { do: 'end_call' }
+  /** An issue was filed; the capsule shows a small "Filed #n ↗" chip linking to it. */
+  | { do: 'filed'; number: number; url: string }
 
 /** What a tool call returns: `speech` is read aloud as-is; only { ok, speech } goes to the model. */
 export interface ToolResult {
@@ -81,6 +83,8 @@ export interface VoiceSessionDeps<A> {
   getAsks(): Promise<A[]>
   /** POST /api/answer. Rejects with an Error carrying `.code` (e.g. STALE_REVISION, ASK_NOT_OPEN) on failure. */
   postAnswer(body: AnswerBody): Promise<{ complete?: boolean }>
+  /** POST /api/voice/issue. Files the owner's request for the agents to pick up. Rejects with an Error on failure. */
+  fileIssue?(issue: VoiceIssue): Promise<{ number: number; url: string }>
   now?: () => number
 }
 
@@ -95,6 +99,18 @@ export interface VoiceSession {
  * ask_preview for that ticket in this session.
  */
 export function createVoiceSession<A>(deps: VoiceSessionDeps<A>): VoiceSession
+
+/** What the owner asked to change, filed as a GitHub issue the agents pick up. */
+export interface VoiceIssue {
+  /** Short imperative title, e.g. "Show dates on the Answered list". */
+  title: string
+  /** The owner's own words, lightly tidied; never a secret. */
+  details: string
+  /** What it is about. */
+  about: 'unblock' | 'dashboard' | 'other'
+  /** The ticket on screen when it was filed, if any (added by the session, not the model). */
+  ticket?: string
+}
 
 /** VOICE_TOOLS in the xAI realtime `session.tools` shape (lowercase JSON-schema types). Pure. */
 export function xaiTools(tools?: VoiceToolDeclaration[]): { type: 'function'; name: string; description: string; parameters: Record<string, unknown> }[]

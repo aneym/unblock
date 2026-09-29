@@ -24,24 +24,21 @@ export async function mintVoiceToken({ readKey = defaultReadKey, fetch = globalT
   }
   const modelName = model.startsWith('models/') ? model : `models/${model}`
   const newSessionExpireTime = new Date(now() + 2 * 60_000).toISOString()
+  const extendedThinking = modelName.includes('extended-thinking')
   const setup = {
     model: modelName,
     generationConfig: {
       responseModalities: ['AUDIO'],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+      ...(extendedThinking ? { thinkingConfig: { thinkingLevel: 'LOW' } } : {}),
     },
     systemInstruction: { role: 'user', parts: [{ text: VOICE_SYSTEM_PROMPT }] },
-    tools: [{ functionDeclarations: VOICE_TOOLS }],
+    tools: [{ functionDeclarations: extendedThinking ? VOICE_TOOLS.map((tool) => ({ ...tool, behavior: 'NON_BLOCKING' })) : VOICE_TOOLS }],
     inputAudioTranscription: {},
     outputAudioTranscription: {},
   }
-  // The SDK flattens bidiGenerateContentSetup.setup, then getFieldMasks scans
-  // its top level and the immediate child keys (including the empty objects).
-  const fieldMask = Object.entries(setup).flatMap(([name, value]) =>
-    value && typeof value === 'object' && Object.keys(value).length
-      ? Object.keys(value).map((child) => `${name}.${child}`)
-      : [name],
-  ).join(',')
+  // The token API accepts the setup's top-level keys, not nested field paths.
+  const fieldMask = Object.keys(setup).join(',')
   const body = {
     expireTime: new Date(now() + 30 * 60_000).toISOString(),
     newSessionExpireTime,

@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import type { VoiceProvider, VoiceSpend } from '../../src/voice.js'
 import { Icon } from './icons'
+import { voiceAudioError } from './lib/voice-audio'
 import type { TranscriptLine, VoiceState } from './lib/voice-live'
 
 export function TalkButton({ active, onClick }: { active: boolean; onClick(): void }) {
@@ -13,34 +15,60 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
   provider?: VoiceProvider; bothConfigured: boolean; onSwitch(): void; spend?: VoiceSpend
   minutesLeft: boolean; blockedLink: { url: string; label: string } | null
 }) {
-  if (!state || state.name === 'ended') return null
-  if (state.name === 'unconfigured') return <div className="voice-bar" role="status">
-    <div className="voice-bar-inner">Voice needs an API key. It's waiting in the queue.</div>
-  </div>
-  if (state.name === 'capped') return <div className="voice-bar" role="status">
-    <div className="voice-bar-inner">Voice hit this month's{state.cap ? ` $${state.cap} cap` : ' cap'}.</div>
-  </div>
-  if (state.name === 'error') return <div className="voice-bar" role="alert">
-    <div className="voice-bar-inner"><span className="voice-message">{state.message}</span>
-      <button className="voice-action" type="button" onClick={onRetry}>Retry</button></div>
-  </div>
-  const label = { connecting: 'Connecting…', listening: 'Listening', speaking: 'Speaking' }[state.name]
-  return <div className="voice-bar" role="status" aria-live="polite">
-    <div className="voice-bar-inner">
-      <span className={`voice-state voice-${state.name}`}><span className="voice-dot" />{label}</span>
-      <div className="voice-transcript" aria-label="Call transcript">
-        {transcript.slice(-2).map((line, index) => <p key={index}>
-          <strong>{line.who === 'you' ? 'You' : 'Unblock'}</strong> {line.text}
-        </p>)}
-        {blockedLink && <a href={blockedLink.url} target="_blank" rel="noopener noreferrer">Open {blockedLink.label} ↗</a>}
-        {(spend || minutesLeft) && <small className="voice-meta">
-          {spend && `$${spend.spent_usd.toFixed(2)} of $${spend.cap_usd} this month`}
-          {minutesLeft && <span>1 min left</span>}
-        </small>}
-      </div>
-      {bothConfigured && provider && <button className="voice-action voice-provider" type="button" onClick={onSwitch}
-        title="Switch voice provider">{provider === 'xai' ? 'Grok' : 'Gemini'}</button>}
-      <button className="voice-action" type="button" onClick={onEnd}>End</button>
+  const [filed, setFiled] = useState<{ number: number; url: string } | null>(null)
+  const [lastState, setLastState] = useState<VoiceState | null>(null)
+  useEffect(() => {
+    if (state && state.name !== 'ended') { setLastState(state); return }
+    if (lastState) {
+      const timer = window.setTimeout(() => setLastState(null), 180)
+      return () => window.clearTimeout(timer)
+    }
+  }, [state, lastState])
+  useEffect(() => {
+    let timer: number | undefined
+    const onFiled = (event: Event) => {
+      const detail = (event as CustomEvent<{ number: number; url: string }>).detail
+      setFiled(detail)
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => setFiled(null), 8000)
+    }
+    window.addEventListener('unblock:voice-filed', onFiled)
+    return () => { window.removeEventListener('unblock:voice-filed', onFiled); window.clearTimeout(timer) }
+  }, [])
+
+  const exiting = !state || state.name === 'ended'
+  const current = exiting ? lastState : state
+  if (!current) return null
+  const inactive = current.name === 'unconfigured' || current.name === 'capped' || current.name === 'error'
+  const label = current.name === 'unconfigured' ? "Voice needs an API key. It's waiting in the queue."
+    : current.name === 'capped' ? `Voice hit this month's${current.cap ? ` $${current.cap} cap` : ' cap'}.`
+      : current.name === 'error' ? voiceAudioError(new Error(current.message))
+        : current.name === 'ended' ? ''
+          : { connecting: 'Connecting…', listening: 'Listening', speaking: 'Speaking' }[current.name]
+  const latest = transcript.at(-1)
+  const other = provider === 'xai' ? 'Gemini' : 'Grok'
+  const switchButton = bothConfigured && provider && <button className="voice-switch" type="button" onClick={onSwitch}
+    title={`Switch to ${other}`}>Switch to {other}</button>
+  const meta = [provider && (provider === 'xai' ? 'Grok' : 'Gemini'),
+    spend && `$${spend.spent_usd.toFixed(2)} of $${spend.cap_usd}`,
+    minutesLeft && '1 min left'].filter(Boolean).join(' · ')
+
+  return <div className={`voice-capsule${inactive ? ' voice-capsule-inactive' : ''}${exiting ? ' voice-exiting' : ''}`}
+    role={current.name === 'error' ? 'alert' : 'status'} aria-live="polite">
+    <span className={`voice-orb voice-${inactive ? 'connecting' : current.name}`} aria-hidden="true">
+      {current.name === 'speaking' ? <span className="voice-wave"><i /><i /><i /></span> : <span className="voice-dot" />}
+    </span>
+    <div className="voice-copy">
+      <p className="voice-line">{!inactive && latest ? <>{latest.who === 'you' && <span className="voice-speaker">You </span>}{latest.text}</> : label}</p>
+      {!inactive && meta && <small className="voice-meta">{meta}{switchButton && <span className="voice-mobile-switch"> · {switchButton}</span>}</small>}
+      {(blockedLink || filed) && <span className="voice-chips">
+        {blockedLink && <a className="voice-chip" href={blockedLink.url} target="_blank" rel="noopener noreferrer">Open {blockedLink.label} ↗</a>}
+        {filed && <a className="voice-chip" href={filed.url} target="_blank" rel="noopener noreferrer">Filed #{filed.number} ↗</a>}
+      </span>}
     </div>
+    {inactive ? <button className="voice-action" type="button" onClick={onRetry}>Retry</button> : <>
+      <span className="voice-desktop-switch">{switchButton}</span>
+      <button className="voice-end" type="button" onClick={onEnd} aria-label="End call"><Icon name="phone-down" size={18} /></button>
+    </>}
   </div>
 }

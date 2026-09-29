@@ -98,7 +98,7 @@ test('navigation focuses the deck, opens screen asks and links, and uses current
   assert.deepEqual((await voice.handle('show_details', { open: false })).ui, { do: 'details', ticket: first.ticket, open: false })
   assert.deepEqual((await voice.handle('show_screen_ask', { n: 1 })).ui, { do: 'show_ask', ticket: screen.ticket })
   assert.match((await voice.handle('show_screen_ask', { n: 1 })).speech, /a credential/)
-  for (const name of ['ask_read', 'ask_preview', 'ask_answer', 'ask_skip', 'ask_send_back']) {
+  for (const name of ['ask_read', 'ask_preview', 'ask_answer']) {
     const result = await voice.handle(name, {})
     assert.equal(result.ok, false, name)
     assert.equal(result.speech, 'That one needs the screen.', name)
@@ -110,6 +110,44 @@ test('navigation focuses the deck, opens screen asks and links, and uses current
   assert.match((await voice.handle('queue_list', {})).speech, /Studio choice/)
   assert.match((await voice.handle('show_queue', { project: 'unknown' })).speech, /Projects are/)
   assert.deepEqual((await voice.handle('end_call', {})).ui, { do: 'end_call' })
+})
+
+test('shown screen-only asks can be skipped or sent back, but never read or answered', async () => {
+  const item = ask('ub_screen', [field('key', { type: 'secret' })])
+  const next = ask('ub_next', [field('answer')], { title: 'Next choice' })
+  const { posted, voice } = session([item, next])
+  await voice.handle('show_screen_ask', { n: 1 })
+  const skipped = await voice.handle('ask_skip', {})
+  assert.equal(skipped.ok, true)
+  assert.deepEqual(skipped.ui, { do: 'show_ask', ticket: next.ticket })
+  await voice.handle('show_screen_ask', { n: 1 })
+  assert.equal((await voice.handle('ask_read', {})).speech, 'That one needs the screen.')
+  const bounced = await voice.handle('ask_send_back', { note: 'Make your own API keys' })
+  assert.equal(bounced.ok, true)
+  assert.deepEqual(posted, [{ ticket: item.ticket, revision: item.revision, reply: 'Make your own API keys', bounce: true }])
+  assert.deepEqual(bounced.ui, { do: 'show_ask', ticket: next.ticket })
+})
+
+test('file_issue includes the shown ask and reports no provider or a filing failure', async () => {
+  const item = ask('ub_shown', [field('answer')])
+  const issues = []
+  const voice = createVoiceSession({ getAsks: async () => [item], postAnswer: async () => ({}), fileIssue: async (issue) => { issues.push(issue); return { number: 42, url: 'https://github.com/org/repo/issues/42' } } })
+  await voice.handle('ask_read', { n: 1 })
+  const result = await voice.handle('file_issue', { title: 'Show dates', details: 'Answered list should show dates', about: 'dashboard' })
+  assert.deepEqual(issues, [{ title: 'Show dates', details: 'Answered list should show dates', about: 'dashboard', ticket: item.ticket }])
+  assert.equal(result.speech, 'Filed as issue 42.')
+  assert.deepEqual(result.ui, { do: 'filed', number: 42, url: 'https://github.com/org/repo/issues/42' })
+  assert.equal((await session([item]).voice.handle('file_issue', { title: 'Show dates', details: '', about: 'other' })).speech, "I can't file issues from here.")
+  const broken = createVoiceSession({ getAsks: async () => [item], postAnswer: async () => ({}), fileIssue: async () => { throw new Error('private error') } })
+  assert.equal((await broken.handle('file_issue', { title: 'Show dates', details: '', about: 'other' })).speech, "That didn't file. Try again.")
+})
+
+test('speech does not double punctuate titles or labels ending in punctuation', async () => {
+  const item = ask('ub_punctuation', [field('decision', { label: 'Which fix?', type: 'choice', choices: [{ value: 'yes', label: 'Fix (#2253)?' }] })], { title: 'Fix (#2253)?' })
+  const { voice } = session([item])
+  assert.doesNotMatch((await voice.handle('ask_read', { n: 1 })).speech, /[?!]\./)
+  assert.doesNotMatch((await voice.handle('queue_list', {})).speech, /[?!]\./)
+  assert.doesNotMatch((await voice.handle('queue_summary', {})).speech, /[?!]\./)
 })
 
 test('one-link asks accept any spoken reference and use singular speech', async () => {

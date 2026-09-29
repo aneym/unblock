@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, BASE, FinishedError, VIEWER } from './lib/api'
+import { api, ApiError, BASE, FinishedError, NetworkError, VIEWER } from './lib/api'
+import { clearLocal } from './lib/drafts'
 import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
 import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
-import { SoloCard } from './SoloCard'
+import { SoloCard, type SendRecovery } from './SoloCard'
 import { dismissBanner, listPasskeys, type BannerEvent } from './lib/passkey'
 import { TalkButton, VoiceBar } from './VoiceBar'
 import type { TranscriptLine, VoiceState } from './lib/voice-live'
@@ -128,6 +129,22 @@ export default function App() {
   const [selectedTicket, setSelectedTicket] = useState<string | null>(pinned)
   const [showAnswered, setShowAnswered] = useState(false)
   const [doneTickets, setDoneTickets] = useState<ReadonlySet<string>>(new Set())
+  const outbox = useRef(new Set<string>())
+  const [sendNotice, setSendNotice] = useState<
+    { ticket: string; title: string; reason: string; kind: 'failure' } |
+    { ticket: string; title: string; kind: 'partial' } | null
+  >(null)
+  const [recoveries, setRecoveries] = useState<Record<string, SendRecovery>>({})
+  useEffect(() => {
+    if (BASE) return
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!outbox.current.size) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [])
   const [hiddenProducts, setHiddenProducts] = useState<ReadonlySet<string>>(() => {
     try {
       const names = JSON.parse(localStorage.getItem('unblock.hiddenProducts') || '[]')
@@ -350,12 +367,46 @@ export default function App() {
   if (currentIndex >= 0) following.current = asks.slice(currentIndex + 1).map((ask) => ask.ticket)
   const finish = (ticket: string) => {
     setDoneTickets((previous) => new Set([...previous, ticket]))
-    void load()
+    if (!outbox.current.has(ticket)) void load()
     if (selectedRef.current !== ticket) return
     const waiting = asksRef.current.filter((ask) => ask.ticket !== ticket)
     const next = following.current.find((t) => waiting.some((ask) => ask.ticket === t)) ?? waiting[0]?.ticket
     if (next) choose(next)
     else goToList()
+  }
+  const queueSend = (ticket: string, body: unknown, recovery: SendRecovery) => {
+    if (outbox.current.has(ticket)) return false
+    outbox.current.add(ticket)
+    setSendNotice((current) => current?.ticket === ticket ? null : current)
+    const title = data?.asks.find((ask) => ask.ticket === ticket)?.title || ticket
+    void api<{ complete: boolean }>('/api/answer', body).then((result) => {
+      if (result.complete) {
+        clearLocal(ticket)
+        setRecoveries((previous) => { const next = { ...previous }; delete next[ticket]; return next })
+      } else {
+        // A partial answer stays open and can be revisited with its local draft.
+        setDoneTickets((previous) => { const next = new Set(previous); next.delete(ticket); return next })
+        setSendNotice({ ticket, title, kind: 'partial' })
+      }
+    }).catch((cause: unknown) => {
+      if (cause instanceof FinishedError || (cause instanceof ApiError && cause.code === 'ASK_NOT_OPEN')) {
+        clearLocal(ticket)
+        return
+      }
+      const reason = cause instanceof ApiError && cause.code === 'STALE_REVISION'
+        ? 'The agent changed this ask. Check it again'
+        : cause instanceof ApiError && cause.code === 'HUMAN_ONLY'
+          ? 'Approvals only count from your own signed-in page. Open this ask from the tailnet link'
+          : cause instanceof NetworkError ? 'The connection to unblock dropped, even after retrying'
+            : cause instanceof Error ? cause.message : 'Unknown error'
+      setRecoveries((previous) => ({ ...previous, [ticket]: recovery }))
+      setDoneTickets((previous) => { const next = new Set(previous); next.delete(ticket); return next })
+      setSendNotice({ ticket, title, reason, kind: 'failure' })
+    }).finally(() => {
+      outbox.current.delete(ticket)
+      void load()
+    })
+    return true
   }
   useEffect(() => {
     if (!selectedTicket || !selected) return
@@ -398,6 +449,15 @@ export default function App() {
           {VIEWER && !BASE && !finished && <TalkButton active={voiceState?.name === 'connecting' || voiceState?.name === 'listening' || voiceState?.name === 'speaking'} onClick={() => startCall()} />}
         </div>
       </header>
+      {!BASE && sendNotice && <div className={`outbox-notice${sendNotice.kind === 'partial' ? ' is-partial' : ''}`} role="status">
+        <span>{sendNotice.kind === 'partial'
+          ? <>Saved “{sendNotice.title}”, but it still needs more.</>
+          : <>Couldn't send “{sendNotice.title}”: {sendNotice.reason}.</>}</span>
+        <button className="text-button" type="button" onClick={() => {
+          choose(sendNotice.ticket)
+          setSendNotice(null)
+        }}>Open it</button>
+      </div>}
       {VIEWER && !BASE && <VoiceBar state={voiceState} transcript={transcript} provider={provider}
         bothConfigured={providers?.providers.filter((item) => item.configured).length === 2}
         spend={spend} minutesLeft={minutesLeft} blockedLink={blockedLink}
@@ -416,7 +476,7 @@ export default function App() {
           <h2>{error ? "Can't reach the queue. Retrying…" : 'Loading the queue…'}</h2>
           <p>{error}</p>
         </div>
-      ) : selectedTicket && selected ? (
+      ) : selectedTicket && selected && !(selected.status === 'open' && doneTickets.has(selectedTicket)) ? (
         <main className="shell">
           <section className="ask-pane" aria-label="Selected ask">
             <nav className="ask-navigation" aria-label="Ask navigation">
@@ -436,6 +496,7 @@ export default function App() {
             <SoloCard
               key={selected.ticket} ask={selected} passkeys={passkeys}
               onFinished={() => finish(selected.ticket)} onReload={load}
+              queueSend={!BASE ? queueSend : undefined} recovery={recoveries[selected.ticket]}
               voiceDetails={voiceDetails?.ticket === selected.ticket && voiceDetails.nonce > consumedDetails.current ? voiceDetails : undefined}
               voiceFill={voiceFill?.ticket === selected.ticket && voiceFill.nonce > consumedFill.current ? voiceFill : undefined}
               onVoiceDetailsApplied={consumeVoiceDetails} onVoiceFillApplied={consumeVoiceFill}

@@ -1,7 +1,7 @@
 import { createVoiceSession, type VoiceProvider, type VoiceSessionToken, type VoiceSpend, type VoiceUi } from '../../../src/voice.js'
 import type { Ask } from '../deck'
 import { api, ApiError } from './api'
-import { createPlayer, startMic } from './voice-audio'
+import { createPlayer, startMic, voiceAudioError } from './voice-audio'
 import { connectGemini } from './voice-gemini'
 import { connectXai } from './voice-xai'
 
@@ -38,7 +38,7 @@ interface VoiceCallbacks {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : 'Voice call failed. Please try again.'
+  return voiceAudioError(error)
 }
 
 /** The AudioContext must be created and resumed by the tap handler before import(). */
@@ -66,6 +66,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   const rules = createVoiceSession<Ask>({
     getAsks: async () => (await api<{ asks: Ask[] }>('/api/queue')).asks,
     postAnswer: (body) => api('/api/answer', body),
+    fileIssue: (issue) => api('/api/voice/issue', issue),
   })
   const transcripts: Record<TranscriptLine['who'], string> = { you: '', agent: '' }
   const release = () => {
@@ -150,6 +151,9 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
                 awaitingGoodbyeAudio = true
               }
               goodbyeTimer = window.setTimeout(end, 6000)
+            }
+            if (result.ui.do === 'filed') {
+              window.dispatchEvent(new CustomEvent('unblock:voice-filed', { detail: result.ui }))
             }
             onUi(result.ui)
           }

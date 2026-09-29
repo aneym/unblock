@@ -241,8 +241,21 @@ function Details({ ask, answered, herdrHref, topLinks, voiceDetails, onVoiceDeta
   )
 }
 
-export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, voiceFill, onVoiceDetailsApplied, onVoiceFillApplied, voiceCallActive }: {
+export interface SendRecovery {
+  revision: number
+  values: Values
+  notes: Record<string, string>
+  reply: string
+  bounced: Record<string, string>
+  backNote: string
+  planNote: string
+  editing: boolean
+}
+
+export function SoloCard({ ask, onFinished, onReload, queueSend, recovery, passkeys, voiceDetails, voiceFill, onVoiceDetailsApplied, onVoiceFillApplied, voiceCallActive }: {
   ask: Ask; onFinished: () => void; onReload: () => Promise<void>; passkeys: PasskeyState
+  queueSend?: (ticket: string, body: unknown, recovery: SendRecovery) => boolean
+  recovery?: SendRecovery
   voiceDetails?: { open: boolean; nonce: number }
   voiceFill?: { values: Record<string, unknown>; field_context: Record<string, string>; nonce: number }
   onVoiceDetailsApplied: (nonce: number) => boolean
@@ -271,6 +284,7 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
     if (approvalKind && typeof local?.values?.edited_text === 'string') {
       values.edited_text = local.values.edited_text
     }
+    if (recovery?.revision === ask.revision) Object.assign(values, recovery.values)
     // The recommendation is the pre-picked answer, so one tap sends it. It
     // stays out of the draft until touched: an agent reading drafts must never
     // mistake the page's default for a choice, and a sent-back field never
@@ -286,8 +300,8 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
     }
     return {
       values,
-      notes: { ...(ask.field_context || {}), ...(useLocal ? local.notes : {}) },
-      reply: useLocal ? local.reply : ask.draft_reply || '',
+      notes: recovery?.revision === ask.revision ? recovery.notes : { ...(ask.field_context || {}), ...(useLocal ? local.notes : {}) },
+      reply: recovery?.revision === ask.revision ? recovery.reply : useLocal ? local.reply : ask.draft_reply || '',
       prePicked,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -297,16 +311,16 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
   const [notes, setNotes] = useState(seeded.notes)
   const [voiceFilled, setVoiceFilled] = useState(false)
   const [bounced, setBounced] = useState<Record<string, string>>(
-    () => approvalKind ? {} : readLocal(ask.ticket)?.bounced || {},
+    () => recovery?.revision === ask.revision ? recovery.bounced : approvalKind ? {} : readLocal(ask.ticket)?.bounced || {},
   )
   const [checked, setChecked] = useState<number[]>(() => {
     try { return JSON.parse(localStorage.getItem(`ub_steps_${ask.ticket}`) || '[]') as number[] }
     catch { return [] }
   })
   const [reply, setReply] = useState(seeded.reply)
-  const [showPlanNote, setShowPlanNote] = useState(false)
-  const [planNote, setPlanNote] = useState('')
-  const [editing, setEditing] = useState(!!seeded.values.edited_text)
+  const [showPlanNote, setShowPlanNote] = useState(!!recovery?.planNote)
+  const [planNote, setPlanNote] = useState(recovery?.planNote || '')
+  const [editing, setEditing] = useState(recovery?.editing ?? !!seeded.values.edited_text)
   const [editDraft, setEditDraft] = useState(
     typeof seeded.values.edited_text === 'string' ? seeded.values.edited_text : ask.message?.text || '',
   )
@@ -316,8 +330,8 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
   const focalActionsRef = useRef<HTMLDivElement>(null)
   const actionBarRef = useRef<HTMLDivElement>(null)
   const [focalActionsInView, setFocalActionsInView] = useState(false)
-  const [sendBackOpen, setSendBackOpen] = useState(false)
-  const [backNote, setBackNote] = useState('')
+  const [sendBackOpen, setSendBackOpen] = useState(!!recovery?.backNote)
+  const [backNote, setBackNote] = useState(recovery?.backNote || '')
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error' | 'passkey'>('idle')
   const [status, setStatus] = useState('')
   const [errorText, setErrorText] = useState('')
@@ -534,12 +548,24 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
     }
     writeLocal(ask.ticket, { values: localValues, notes: merged.notes, reply: merged.reply, bounced: next })
   }
-  const finish = () => {
+  const finish = (optimistic = false) => {
     completed.current = true
     window.clearTimeout(timer.current)
     timer.current = undefined
-    clearLocal(ask.ticket)
-    window.setTimeout(onFinished, 1200)
+    if (!optimistic) clearLocal(ask.ticket)
+    if (optimistic) onFinished()
+    else window.setTimeout(onFinished, 1200)
+  }
+  const sendOptimistically = (body: unknown) => {
+    if (!queueSend || BASE) return false
+    const current = latest.current
+    if (!queueSend(ask.ticket, body, {
+      revision: ask.revision, values: { ...current.values }, notes: { ...current.notes },
+      reply: current.reply, bounced: { ...bounced }, backNote, planNote, editing,
+    })) return true
+    setState('done')
+    finish(true)
+    return true
   }
   const submit = async (verdict?: string, assertion?: Assertion) => {
     // Not isBusy: a passkey-gated submit is called while state is already
@@ -562,15 +588,17 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
       if (kind === 'message' && field.name === 'edited_text') continue
       if (isMissing(payload[field.name]) && !field.must_decide) payload[field.name] = null
     }
+    const body = {
+      ticket: ask.ticket, revision: ask.revision, values: payload,
+      reply: kind === 'consent' ? '' : latest.current.reply,
+      field_context: kind === 'consent' ? {} : latest.current.notes,
+      field_bounce: approvalKind ? {} : bounced,
+      ...(assertion ? { assertion } : {}),
+    }
+    if (sendOptimistically(body)) return
     setState('sending'); setStatus('Sending…'); setErrorText('')
     try {
-      const result = await api<{ complete: boolean }>('/api/answer', {
-        ticket: ask.ticket, revision: ask.revision, values: payload,
-        reply: kind === 'consent' ? '' : latest.current.reply,
-        field_context: kind === 'consent' ? {} : latest.current.notes,
-        field_bounce: approvalKind ? {} : bounced,
-        ...(assertion ? { assertion } : {}),
-      })
+      const result = await api<{ complete: boolean }>('/api/answer', body)
       setState('done'); setStatus(result.complete ? 'Sent' : 'Saved, still incomplete')
       if (result.complete) finish()
     } catch (error) {
@@ -593,9 +621,11 @@ export function SoloCard({ ask, onFinished, onReload, passkeys, voiceDetails, vo
   }
   const sendBack = async (note = backNote) => {
     if (isBusy) return
+    const body = { ticket: ask.ticket, revision: ask.revision, reply: note, bounce: true }
+    if (sendOptimistically(body)) return
     setState('sending'); setStatus('Sending back…'); setErrorText('')
     try {
-      await api('/api/answer', { ticket: ask.ticket, revision: ask.revision, reply: note, bounce: true })
+      await api('/api/answer', body)
       setState('done'); setStatus('Sent back — the agent will rework it')
       finish()
     } catch (error) {

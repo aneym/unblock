@@ -2,6 +2,7 @@ import { groupOf, isMissing, sortAsks, unansweredFields } from './queue-model.js
 import { APPROVAL_PURPOSES } from './schema.js'
 
 const clean = (value) => String(value ?? '').replace(/https?:\/\/\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?\/\S*|\bub_[\w-]+\b/gi, 'the queue page').trim()
+const sentence = (value) => { const text = clean(value); return text + (/[.?!]$/.test(text) ? '' : '.') }
 const midSentence = (value) => {
   const text = clean(value).replace(/\.$/, '')
   return /^[A-Z][A-Z]/.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1)
@@ -34,10 +35,11 @@ export const VOICE_TOOLS = [
   { name: 'show_screen_ask', description: 'Show a screen-only ask by its number in the screen list.', parameters: object({ n: number }, ['n']) },
   { name: 'open_link', description: 'Open a link from an ask, by number or spoken label.', parameters: object({ n: number, which: { type: 'STRING', description: 'Link number or spoken label.' } }) },
   { name: 'show_details', description: 'Open or close the ask details.', parameters: object({ n: number, open: { type: 'BOOLEAN' } }) },
+  { name: 'file_issue', description: 'File a problem or requested change immediately; no read-back needed.', parameters: object({ title: { type: 'STRING', description: 'Short imperative title.' }, details: { type: 'STRING', description: 'The human’s own words, without secrets.' }, about: { type: 'STRING', enum: ['unblock', 'dashboard', 'other'] } }, ['title', 'details', 'about']) },
   { name: 'end_call', description: 'Finish the voice call.', parameters: object({}) },
 ]
 
-export const VOICE_SYSTEM_PROMPT = `You are triaging the human’s unblock queue by voice. You NEVER make decisions for them. Every answer comes from their mouth; if unsure, ask again. Open with queue_summary and read its speech. Ask whether to work through the queue, jump to a project, or hear queue_list. When they say go, start at one. Work on one ask at a time: ask_read, read its speech VERBATIM, then stop and wait. Never read another until this is answered, skipped, or sent back. A number, label or yes is their answer; "accept all" means accept_all_recommended only when they explicitly say it. A must_decide field always needs their explicit answer. If they qualify an answer, put the qualification in that field's context. Always call ask_preview and read its speech aloud. Wait for an explicit spoken yes BEFORE ask_answer with the exact same arguments; if they change anything, preview again. After sending, briefly confirm and move on. Skip only when they ask to skip; send back only with their own note. Never read ticket IDs or URLs aloud. Screen-only asks need a passkey, credential or paste: mention them once as needing the queue page, then move on. You are also the human’s hands on the page: when they ask to see, open, filter, go back, show answered, open a link, show details or hang up, call the matching tool immediately and confirm in a few words. Never name tools aloud. Never announce that you are about to call a tool; just do it. If a tool fails, say its speech once and wait; never retry the same tool with the same arguments. After end_call, say nothing more. Never ask for or repeat a secret. Do not submit partial answers if the human goes quiet. Do not argue with a rejected recommendation. Keep your own words short. Close with how many are left.`
+export const VOICE_SYSTEM_PROMPT = `You are triaging the human’s unblock queue by voice. You NEVER make decisions for them. Every answer comes from their mouth; if unsure, ask again. Open with queue_summary and read its speech. Ask whether to work through the queue, jump to a project, or hear queue_list. When they say go, start at one. Work on one ask at a time: ask_read, read its speech VERBATIM, then stop and wait. Never read another until this is answered, skipped, or sent back. A number, label or yes is their answer; "accept all" means accept_all_recommended only when they explicitly say it. A must_decide field always needs their explicit answer. If they qualify an answer, put the qualification in that field's context. Always call ask_preview and read its speech aloud. Wait for an explicit spoken yes BEFORE ask_answer with the exact same arguments; if they change anything, preview again. After sending, briefly confirm and move on. Skip only when they ask to skip; send back only with their own note. Never read ticket IDs or URLs aloud. Screen-only asks need a passkey, credential or paste to answer: mention them once as needing the queue page, then move on. You can skip or send back any open ask, including screen-only asks; neither action needs its credential. When the human reports a problem, asks for something to work differently, or says "file an issue", call file_issue at once. Use a short imperative title and their own words as details. Confirm with the issue number; no read-back is needed because filing is reversible. You are also the human’s hands on the page: when they ask to see, open, filter, go back, show answered, open a link, show details or hang up, call the matching tool immediately and confirm in a few words. Never name tools aloud. Never announce that you are about to call a tool; just do it. If a tool fails, say its speech once and wait; never retry the same tool with the same arguments. After end_call, say nothing more. Never ask for or repeat a secret. Do not submit partial answers if the human goes quiet. Do not argue with a rejected recommendation. Keep your own words short. Close with how many are left.`
 
 export function voiceDeck(asks) {
   const voice = []
@@ -66,14 +68,14 @@ export function age(date, now = Date.now()) {
 }
 
 export function fieldSpeech(field, n) {
-  const lines = [`Question ${n}: ${clean(field.label || field.name)}.`]
+  const lines = [`Question ${n}: ${sentence(field.label || field.name)}`]
   if (field.type === 'choice') {
     const choices = field.choices || []
-    lines.push(`Options: ${choices.map((choice, i) => `${i + 1}, ${clean(choice.label || choice.value)}`).join('. ')}.`)
+    lines.push(`Options: ${choices.map((choice, i) => sentence(`${i + 1}, ${clean(choice.label || choice.value)}`)).join(' ')}`)
     if (field.must_decide) lines.push('This one is yours to call, so I am not recommending.')
     else if (field.recommend) {
       const idx = choices.findIndex((choice) => choice.value === field.recommend.value)
-      lines.push(`I recommend ${idx >= 0 ? `option ${idx + 1}` : clean(field.recommend.value)}, because ${midSentence(field.recommend.why)}.`)
+      lines.push(sentence(`I recommend ${idx >= 0 ? `option ${idx + 1}` : clean(field.recommend.value)}, because ${midSentence(field.recommend.why)}`))
     }
     lines.push('Say the number, or say skip.')
   } else if (field.type === 'confirm') {
@@ -81,7 +83,7 @@ export function fieldSpeech(field, n) {
   } else if (field.type === 'secret' || field.type === 'paste') {
     lines.push(`This one needs a ${field.type === 'secret' ? 'credential' : 'paste from your machine'}, which does not go over voice. Open the queue page for it. Say skip to move on.`)
   } else {
-    if (!field.must_decide && field.recommend) lines.push(`I suggest ${clean(field.recommend.value)}, because ${midSentence(field.recommend.why)}.`)
+    if (!field.must_decide && field.recommend) lines.push(sentence(`I suggest ${clean(field.recommend.value)}, because ${midSentence(field.recommend.why)}`))
     lines.push('Say your answer, or say skip.')
   }
   return lines.join(' ')
@@ -90,11 +92,11 @@ export function fieldSpeech(field, n) {
 export function askSpeech(ask, now = Date.now()) {
   const fields = unansweredFields(ask)
   const lines = [
-    `${ask.purpose === 'blocker' ? 'A blocker' : 'A decision'} on ${clean(groupOf(ask))}, ${age(ask.created_at, now)}. ${clean(ask.title)}.`,
+    `${ask.purpose === 'blocker' ? 'A blocker' : 'A decision'} on ${clean(groupOf(ask))}, ${age(ask.created_at, now)}. ${sentence(ask.title)}`,
     clean(ask.why),
     ask.gating === 'park' || ask.gating === true ? 'An agent is stopped waiting on this.' : '',
   ]
-  if (ask.steps?.length) lines.push(`Steps: ${ask.steps.map((step, i) => `${i + 1}, ${clean(step)}`).join('. ')}.`)
+  if (ask.steps?.length) lines.push(`Steps: ${ask.steps.map((step, i) => sentence(`${i + 1}, ${clean(step)}`)).join(' ')}`)
   lines.push(fields.length === 1 ? 'There is one question.' : `There are ${fields.length} questions.`)
   fields.forEach((field, i) => lines.push(fieldSpeech(field, i + 1)))
   if (fields.length > 1 && fields.every((field) => !field.must_decide && field.recommend)) lines.push('You can say "accept all recommended" to take every recommendation at once.')
@@ -125,8 +127,8 @@ export function confirmSpeech(ask, values, skipped = [], context = {}) {
     return `${clean(field.label || name)}: ${value === null ? 'unanswered' : clean(choice?.label || value)}${context[name] ? `, with the condition ${clean(context[name])}` : ''}`
   })
   const parts = []
-  if (said.length) parts.push(`I have ${said.join('; ')}.`)
-  if (skipped.length) parts.push(`Skipping ${skipped.map(clean).join(', ')}.`)
+  if (said.length) parts.push(sentence(`I have ${said.join('; ')}`))
+  if (skipped.length) parts.push(sentence(`Skipping ${skipped.map(clean).join(', ')}`))
   parts.push('Say submit to send it, or tell me what to change.')
   return parts.join(' ')
 }
@@ -181,7 +183,7 @@ export function createVoiceSession(deps) {
     const fresh = voiceDeck((await deps.getAsks()).filter((ask) => ask.status === 'open' && !completed.has(ask.ticket) && (!focus || groupOf(ask) === focus)))
     const later = fresh.voice.filter((ask) => skipped.includes(ask.ticket))
       .sort((a, b) => skipped.indexOf(a.ticket) - skipped.indexOf(b.ticket))
-    return { voice: [...fresh.voice.filter((ask) => !skipped.includes(ask.ticket)), ...later], screen: fresh.screen }
+    return { voice: [...fresh.voice.filter((ask) => !skipped.includes(ask.ticket)), ...later], screen: [...fresh.screen.filter(({ ask }) => !skipped.includes(ask.ticket)), ...fresh.screen.filter(({ ask }) => skipped.includes(ask.ticket))] }
   }
   const get = (current, n) => Number.isInteger(n) && n >= 1 ? current.voice[n - 1] :
     n === undefined ? (shown ? current.voice.find((ask) => ask.ticket === shown) || current.screen.find(({ ask }) => ask.ticket === shown)?.ask : undefined) || current.voice[0] : undefined
@@ -189,7 +191,7 @@ export function createVoiceSession(deps) {
     try {
       const current = await deck()
       const next = current.voice.length ? current.voice[Math.min(n, current.voice.length) - 1] : undefined
-      return next ? { speech: ` Next is number ${current.voice.indexOf(next) + 1}, ${clean(next.title)}.`, ticket: next.ticket } : { speech: ' That was the last one.' }
+      return next ? { speech: ` Next is number ${current.voice.indexOf(next) + 1}, ${sentence(next.title)}`, ticket: next.ticket } : { speech: ' That was the last one.' }
     } catch {
       return { speech: '' }
     }
@@ -231,6 +233,16 @@ export function createVoiceSession(deps) {
       let ticket
       try {
         if (name === 'end_call') return { ok: true, speech: 'Talk soon.', ui: { do: 'end_call' } }
+        if (name === 'file_issue') {
+          if (!deps.fileIssue) return fail("I can't file issues from here.")
+          const title = typeof args.title === 'string' ? args.title.trim() : ''
+          const details = typeof args.details === 'string' ? args.details : ''
+          if (!title || !['unblock', 'dashboard', 'other'].includes(args.about)) return fail("That didn't file. Try again.")
+          try {
+            const { number, url } = await deps.fileIssue({ title, details, about: args.about, ...(shown ? { ticket: shown } : {}) })
+            return { ok: true, speech: `Filed as issue ${number}.`, ui: { do: 'filed', number, url } }
+          } catch { return fail("That didn't file. Try again.") }
+        }
         if (name === 'show_answered') {
           const answered = (await deps.getAsks()).filter((ask) => ask.status === 'answered')
             .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
@@ -263,13 +275,13 @@ export function createVoiceSession(deps) {
           const spread = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([p, n]) => `${n} on ${clean(p)}`).join(', ')
           const eligible = current.voice.filter((ask) => scoped.includes(ask))
           const onScreen = current.screen.filter(({ ask }) => scoped.includes(ask)).length
-          const top = eligible.slice(0, 3).map((ask, i) => `${i + 1}, ${clean(ask.title)}`).join('. ')
-          return { ok: true, speech: `${scoped.length} open: ${spread}. ${top ? `The ones that matter: ${top}. ` : ''}${onScreen ? `${onScreen} ${onScreen === 1 ? 'needs' : 'need'} the screen. ` : ''}Say read one to hear the first, or name a project to filter.` }
+          const top = eligible.slice(0, 3).map((ask, i) => sentence(`${i + 1}, ${clean(ask.title)}`)).join(' ')
+          return { ok: true, speech: `${scoped.length} open: ${spread}. ${top ? `The ones that matter: ${top} ` : ''}${onScreen ? `${onScreen} ${onScreen === 1 ? 'needs' : 'need'} the screen. ` : ''}Say read one to hear the first, or name a project to filter.` }
         }
         if (name === 'queue_list') {
           const voice = args.project ? current.voice.filter((ask) => groupOf(ask).toLowerCase() === String(args.project).toLowerCase()) : current.voice
           const screen = (args.project ? current.screen.filter(({ ask }) => groupOf(ask).toLowerCase() === String(args.project).toLowerCase()) : current.screen)
-          const spoken = voice.length ? voice.map((ask) => `${current.voice.indexOf(ask) + 1}. ${clean(groupOf(ask))}. ${clean(ask.title)}. ${age(ask.created_at, now())}.`).join(' ') : 'No voice asks in that project.'
+          const spoken = voice.length ? voice.map((ask) => `${current.voice.indexOf(ask) + 1}. ${sentence(groupOf(ask))} ${sentence(ask.title)} ${age(ask.created_at, now())}.`).join(' ') : 'No voice asks in that project.'
           return { ok: true, speech: spoken + (screen.length ? ` On screen only: ${screen.map(({ ask }, i) => `${i + 1}, ${clean(ask.title)}`).join('; ')}. Say show screen one to open it.` : '') }
         }
         if (name === 'show_screen_ask') {
@@ -279,10 +291,22 @@ export function createVoiceSession(deps) {
           const need = { approval: 'your passkey', secret: 'a credential', paste: 'a paste' }[item.reason]
           return { ok: true, ticket, speech: `That one needs ${need}; it's on screen now.`, ui: { do: 'show_ask', ticket } }
         }
+        if (name === 'ask_answer' && shown && pending.has(shown) &&
+            !(current.voice.some((item) => item.ticket === shown) || current.screen.some(({ ask }) => ask.ticket === shown))) {
+          const prior = (await deps.getAsks()).find((item) => item.ticket === shown)
+          if (prior && prior.status !== 'open') {
+            pending.delete(shown)
+            return fail('That one is already closed.', shown)
+          }
+        }
         const ask = get(current, args.n)
         if (!ask) return fail('That number is not in the voice queue. Hear the list again.')
         ticket = ask.ticket
-        if (current.screen.some(({ ask: item }) => item.ticket === ticket) && !['open_link', 'show_details'].includes(name)) return fail('That one needs the screen.', ticket)
+        if (name === 'ask_answer' && pending.has(ticket) && pending.get(ticket).revision !== ask.revision) {
+          pending.delete(ticket)
+          return fail('The agent changed that one. Read it again.', ticket)
+        }
+        if (current.screen.some(({ ask: item }) => item.ticket === ticket) && !['open_link', 'show_details', 'ask_skip', 'ask_send_back'].includes(name)) return fail('That one needs the screen.', ticket)
         if (name === 'ask_read') {
           shown = ticket
           return { ok: true, ticket, speech: askSpeech(ask, now()), ui: { do: 'show_ask', ticket } }
@@ -309,7 +333,7 @@ export function createVoiceSession(deps) {
         if (name === 'ask_skip') {
           if (!skipped.includes(ticket)) skipped.push(ticket)
           pending.delete(ticket)
-          const next = await after(args.n || current.voice.indexOf(ask) + 1)
+          const next = await after(current.voice.includes(ask) ? (args.n || current.voice.indexOf(ask) + 1) : 1)
           return { ok: true, ticket, speech: `Skipped for now.${next.speech}`, ui: next.ui }
         }
         if (name === 'ask_send_back') {
@@ -317,7 +341,7 @@ export function createVoiceSession(deps) {
           await deps.postAnswer({ ticket, revision: ask.revision, reply: args.note, bounce: true })
           pending.delete(ticket)
           completed.add(ticket)
-          const next = await after(args.n || current.voice.indexOf(ask) + 1)
+          const next = await after(current.voice.includes(ask) ? (args.n || current.voice.indexOf(ask) + 1) : 1)
           return { ok: true, ticket, changed: true, speech: `Sent back to the agent.${next.speech}`, ui: next.ui }
         }
         if (name === 'ask_preview' || name === 'ask_answer') {
