@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scoping</title>
+<link rel="icon" href="../favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page: #FFFFFF; --rail: #F9F8F7; --card: #FFFFFF;
+  --border: #E7E6E4; --ink: #111111; --dim: #6F6D69;
+  --primary-ink: #FFFFFF;
+  --orange-text: #C4610A; --orange-bg: #FBECDD;
+  --red-text: #C9423D; --red-bg: #FDEBEC;
+  --blue-text: #2F74A0; --blue-bg: #E7F3F8;
+  --green-text: #3F7A59; --green-bg: #EDF3EC;
+  --gray-text: #6F6D69; --gray-bg: #F1F1EF;
+  color-scheme: light;
+}
+:root[data-theme=dark] {
+  --page: #191919; --rail: #202020; --card: #202020;
+  --border: #363636; --ink: #EEEEEE; --dim: #9B9A97;
+  --primary-ink: #111111;
+  --orange-text: #E8964A; --orange-bg: #3D2B1C;
+  --red-text: #E6716B; --red-bg: #3E2322;
+  --blue-text: #5EA3DB; --blue-bg: #1D3246;
+  --green-text: #6DB38A; --green-bg: #1F3328;
+  --gray-text: #9B9A97; --gray-bg: #2A2A28;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) {
+  --page: #191919; --rail: #202020; --card: #202020;
+  --border: #363636; --ink: #EEEEEE; --dim: #9B9A97;
+  --primary-ink: #111111;
+  --orange-text: #E8964A; --orange-bg: #3D2B1C;
+  --red-text: #E6716B; --red-bg: #3E2322;
+  --blue-text: #5EA3DB; --blue-bg: #1D3246;
+  --green-text: #6DB38A; --green-bg: #1F3328;
+  --gray-text: #9B9A97; --gray-bg: #2A2A28;
+  color-scheme: dark;
+} }
+* { box-sizing: border-box; }
+html { background: var(--page); -webkit-text-size-adjust: 100%; }
+body { margin: 0; min-width: 320px; background: var(--page); color: var(--ink);
+  font: 15px/24px 'Geist', system-ui, sans-serif; }
+button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: default; opacity: .5; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+a { color: inherit; text-underline-offset: 3px; overflow-wrap: anywhere; }
+code, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; }
+
+.bar { position: sticky; top: 0; z-index: 5; height: 52px; background: var(--page);
+  border-bottom: 1px solid var(--border); }
+.bar-inner { max-width: 760px; height: 100%; margin: 0 auto; padding: 0 24px;
+  display: flex; align-items: center; gap: 12px; }
+.bar-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bar-name a { text-decoration: none; color: var(--dim); font-weight: 500; }
+.live { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 13px;
+  color: var(--dim); white-space: nowrap; flex-shrink: 0; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gray-text); }
+.live.on .dot { background: var(--green-text); }
+.live.off .dot { background: var(--orange-text); }
+
+main { max-width: 760px; margin: 0 auto; padding: 28px 24px 200px; }
+h1 { font-size: 30px; line-height: 38px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 6px; }
+.meta { color: var(--dim); font-size: 13px; margin: 0 0 8px; }
+.meta a { color: var(--dim); }
+.banner { margin: 12px 0 0; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  background: var(--orange-bg); color: var(--orange-text); }
+.banner[hidden] { display: none; }
+section { margin-top: 36px; }
+h2 { font-size: 13px; line-height: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--dim); margin: 0 0 12px; }
+
+.quote { margin: 0 0 10px; padding: 12px 16px; border-radius: 10px; background: var(--rail);
+  border: 1px solid var(--border); }
+.quote p { margin: 0; }
+.more { border: 0; background: none; padding: 4px 0; color: var(--dim); font-size: 13px; text-decoration: underline;
+  text-underline-offset: 3px; }
+.quote .src { margin-top: 6px; font-size: 12px; color: var(--dim); }
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h3, .md h4 { font-size: 16px; line-height: 24px; margin: 20px 0 6px; font-weight: 600; }
+.md p { margin: 0 0 12px; }
+.md ul, .md ol { margin: 0 0 12px; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md pre { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--gray-bg);
+  overflow-x: auto; }
+.md :not(pre) > code { padding: 1px 5px; border-radius: 4px; background: var(--gray-bg); }
+.md table { width: 100%; border-collapse: collapse; margin: 0 0 12px; font-size: 14px; display: block;
+  overflow-x: auto; }
+.md th, .md td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.md th { font-weight: 600; }
+
+.q { padding: 18px 0 20px; border-top: 1px solid var(--border); }
+.q:first-of-type { border-top: 0; padding-top: 4px; }
+.q-head { display: flex; gap: 12px; align-items: baseline; }
+.q-id { flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500;
+  color: var(--dim); min-width: 28px; }
+.q-body { min-width: 0; flex: 1; }
+.q-text { font-size: 17px; line-height: 26px; font-weight: 600; margin: 0; }
+.tag { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 999px; font-size: 12px;
+  line-height: 20px; font-weight: 500; vertical-align: 2px; white-space: nowrap; }
+.tag.answered { background: var(--green-bg); color: var(--green-text); }
+.tag.dropped { background: var(--gray-bg); color: var(--gray-text); }
+.rec { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--blue-bg); }
+.rec b { color: var(--blue-text); font-weight: 600; }
+.why { margin: 8px 0 0; color: var(--dim); font-size: 14px; line-height: 22px; }
+.settled { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--green-bg); }
+.settled b { color: var(--green-text); font-weight: 600; }
+.q.is-dropped .q-text, .q.is-dropped .rec { opacity: .6; }
+
+.reply { margin-top: 12px; display: flex; gap: 8px; align-items: flex-end; }
+textarea { width: 100%; min-height: 40px; max-height: 240px; resize: none; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--card); line-height: 22px;
+  overflow-y: auto; }
+textarea:focus { outline: none; border-color: var(--ink); }
+textarea::placeholder { color: var(--dim); }
+.btn { flex-shrink: 0; height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); font-size: 14px; font-weight: 500; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--gray-bg); }
+.btn.primary { background: var(--ink); color: var(--primary-ink); border-color: var(--ink); }
+.btn.primary:hover:not(:disabled) { background: var(--ink); opacity: .88; }
+.hint { margin-top: 6px; font-size: 12px; color: var(--dim); }
+
+.notes { margin: 10px 0 0; padding: 0; list-style: none; }
+.note { padding: 8px 0; border-top: 1px solid var(--border); }
+.notes .note:first-child { border-top: 0; }
+.note-meta { font-size: 12px; line-height: 18px; color: var(--dim); display: flex; gap: 8px; flex-wrap: wrap; }
+.note-who { font-weight: 600; color: var(--ink); }
+.note.agent .note-who { color: var(--blue-text); }
+.note-text { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.q .notes { padding: 4px 12px; border-radius: 8px; background: var(--rail); border: 1px solid var(--border); }
+.state-delivered { color: var(--green-text); }
+.state-retrying, .state-queued, .state-sending { color: var(--orange-text); }
+.state-failed, .state-no_pane, .state-error { color: var(--red-text); }
+
+.decision { padding: 10px 0; border-top: 1px solid var(--border); }
+.decision:first-child { border-top: 0; padding-top: 0; }
+.decision p { margin: 0; }
+.decision .words { color: var(--dim); font-size: 14px; margin-top: 2px; }
+.empty { color: var(--dim); }
+
+.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--page);
+  border-top: 1px solid var(--border); padding: 10px 0 calc(10px + env(safe-area-inset-bottom)); }
+.dock-inner { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+.dock .reply { margin: 0; }
+.dock textarea { min-height: 44px; }
+.dock .btn { height: 44px; }
+
+.index-row { display: flex; gap: 12px; align-items: baseline; padding: 14px 0; border-top: 1px solid var(--border);
+  text-decoration: none; }
+.index-row:first-child { border-top: 0; }
+.index-row .t { font-weight: 600; flex: 1; min-width: 0; }
+.index-row .n { color: var(--dim); font-size: 13px; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .bar-inner, main, .dock-inner { padding-left: 16px; padding-right: 16px; }
+  main { padding-top: 20px; }
+  h1 { font-size: 24px; line-height: 31px; }
+  .q-head { flex-direction: column; gap: 2px; }
+  .q .reply { flex-wrap: wrap; }
+  .q .reply textarea { flex-basis: 100%; }
+  .q .reply .btn { flex: 1; }
+  .live .label { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <div class="bar-name" id="barName">Scoping</div>
+  <div class="live" id="live" title="Live updates"><span class="dot"></span><span class="label">Connecting</span></div>
+</div></header>
+<main id="main"><p class="empty">Loading…</p></main>
+<div class="dock" id="dock" hidden><div class="dock-inner">
+  <div class="reply">
+    <textarea id="thought" rows="1" placeholder="Drop a thought for the lane"></textarea>
+    <button class="btn primary" id="thoughtSend" type="button">Send</button>
+  </div>
+</div></div>
+<script>
+(() => {
+  'use strict'
+  const boot = window.__SCOPE_BOOT__ || {}
+  const slug = boot.slug || (location.pathname.match(/^\/s\/([a-z0-9][a-z0-9-]{0,63})\/?$/) || [])[1] || null
+  const $ = (sel, root = document) => root.querySelector(sel)
+  const el = (tag, attrs = {}, ...kids) => {
+    const node = document.createElement(tag)
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value == null || value === false) continue
+      if (key === 'class') node.className = value
+      else if (key === 'html') node.innerHTML = value
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value)
+      else node.setAttribute(key, value === true ? '' : value)
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) node.append(kid instanceof Node ? kid : String(kid))
+    return node
+  }
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+
+  // ---- storage (per-viewer conveniences only; the record lives in unblock) ----
+  const store = {
+    get(key) { try { return localStorage.getItem(key) } catch { return null } },
+    set(key, value) { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key) } catch {} },
+  }
+  const draftKey = (qid) => `scope:${slug}:${qid || 'thought'}`
+
+  // ---- time, always ET for Alex ----
+  const fmtTime = (iso) => {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return String(iso || '')
+    const now = new Date()
+    const opts = { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }
+    const sameDay = d.toLocaleDateString('en-US', { timeZone: 'America/New_York' }) === now.toLocaleDateString('en-US', { timeZone: 'America/New_York' })
+    if (!sameDay) Object.assign(opts, { month: 'short', day: 'numeric' })
+    return `${d.toLocaleString('en-US', opts)} ET`
+  }
+
+  // ---- small, safe markdown ----
+  function inline(text) {
+    let out = esc(text)
+    const codes = []
+    out = out.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000` })
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`)
+    out = out.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener">${u}</a>`)
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
+    out = out.replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
+    return out.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[Number(i)]}</code>`)
+  }
+  function markdown(src) {
+    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n')
+    const html = []
+    let i = 0
+    const isTableSep = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line)
+    const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+    while (i < lines.length) {
+      const line = lines[i]
+      if (/^```/.test(line)) {
+        const body = []
+        i++
+        while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++])
+        i++
+        html.push(`<pre><code>${esc(body.join('\n'))}</code></pre>`)
+        continue
+      }
+      const h = line.match(/^(#{1,4})\s+(.*)$/)
+      if (h) { html.push(`<h${h[1].length < 3 ? 3 : 4}>${inline(h[2])}</h${h[1].length < 3 ? 3 : 4}>`); i++; continue }
+      if (/\|/.test(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+        const head = cells(line)
+        i += 2
+        const rows = []
+        while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) rows.push(cells(lines[i++]))
+        html.push(`<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`)
+        continue
+      }
+      const list = line.match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/)
+      if (list) {
+        const ordered = /\d/.test(list[2])
+        const items = []
+        while (i < lines.length) {
+          const m = lines[i].match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/)
+          if (m) { items.push(m[3]); i++; continue }
+          if (/^\s{2,}\S/.test(lines[i]) && items.length) { items[items.length - 1] += ' ' + lines[i].trim(); i++; continue }
+          break
+        }
+        const tag = ordered ? 'ol' : 'ul'
+        html.push(`<${tag}>${items.map((it) => `<li>${inline(it)}</li>`).join('')}</${tag}>`)
+        continue
+      }
+      if (!line.trim()) { i++; continue }
+      const para = [line]
+      i++
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*([-*]|\d+[.)])\s)/.test(lines[i]) &&
+        !(/\|/.test(lines[i]) && i + 1 < lines.length && isTableSep(lines[i + 1]))) para.push(lines[i++])
+      html.push(`<p>${inline(para.join(' '))}</p>`)
+    }
+    return html.join('')
+  }
+
+  // ---- network ----
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: body ? 'POST' : 'GET',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+    let data = null
+    try { data = await res.json() } catch {}
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${res.status}`), { status: res.status })
+    return data
+  }
+
+  const live = $('#live')
+  function setLive(state) {
+    live.className = `live ${state}`
+    $('.label', live).textContent = state === 'on' ? 'Live' : state === 'off' ? 'Reconnecting' : 'Connecting'
+  }
+
+  // ---- index mode: /s/ ----
+  async function renderIndex() {
+    document.title = 'Scoping'
+    const main = $('#main')
+    try {
+      const { scopes } = await api('/api/scope')
+      main.replaceChildren(
+        el('h1', {}, 'Scoping'),
+        el('p', { class: 'meta' }, 'Every scoping lane with a live page.'),
+        el('section', {}, scopes.length
+          ? scopes.map((s) => el('a', { class: 'index-row', href: `/s/${s.slug}` },
+              el('span', { class: 't' }, s.title || s.slug),
+              el('span', { class: 'n' }, s.open ? `${s.open} open` : 'nothing open')))
+          : el('p', { class: 'empty' }, 'No scoping lane has published a scope yet.')),
+      )
+      setLive('on')
+    } catch (error) {
+      main.replaceChildren(el('p', { class: 'empty' }, `Could not load: ${error.message}`))
+      setLive('off')
+    }
+  }
+
+  // ---- scope mode: /s/<slug> ----
+  let scope = null
+  let scopeError = null
+  const notes = new Map() // id -> note (server) ; 'tmp-*' -> optimistic
+  const qNodes = new Map() // qid -> {root, parts}
+  let built = false
+  let asksOpen = false
+
+  const deliveryLabel = (n) => ({
+    sending: 'Sending…', queued: 'Sent, waiting for the lane', retrying: 'Lane busy, retrying',
+    delivered: 'Delivered', failed: 'Not delivered', no_pane: 'Lane has no pane', error: 'Failed to send',
+  }[n.delivery] || '')
+
+  function noteNode(n) {
+    const from = n.from === 'agent' ? 'Lane' : 'You'
+    const label = n.from === 'alex' ? deliveryLabel(n) : ''
+    return el('li', { class: `note ${n.from}` },
+      el('div', { class: 'note-meta' },
+        el('span', { class: 'note-who' }, from),
+        n.qid && !n.inQuestion ? el('span', {}, n.qid) : null,
+        el('span', {}, fmtTime(n.at)),
+        label ? el('span', { class: `state-${n.delivery}` }, label) : null),
+      el('p', { class: 'note-text' }, n.text))
+  }
+
+  function sortedNotes() {
+    return [...notes.values()].sort((a, b) => (a.at || '').localeCompare(b.at || '') || String(a.id).localeCompare(String(b.id)))
+  }
+
+  function allThread() {
+    const extra = Array.isArray(scope && scope.thread) ? scope.thread : []
+    const fromFile = extra.filter((t) => t && t.text).map((t, i) => ({ id: `f${i}`, from: t.from === 'alex' ? 'alex' : 'agent', text: String(t.text), at: t.at || '', delivery: 'delivered' }))
+    const db = sortedNotes()
+    const near = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) < 120000
+    // Each stored note hides at most one file entry, so repeated identical lines all survive.
+    const used = new Set()
+    const dup = (t) => {
+      const match = db.find((n) => !used.has(n.id) && n.from === t.from && n.text === t.text && near(n.at, t.at))
+      if (match) used.add(match.id)
+      return Boolean(match)
+    }
+    return [...db, ...fromFile.filter((t) => !dup(t))]
+      .sort((a, b) => (a.at || '').localeCompare(b.at || ''))
+  }
+
+  function autosize(ta) {
+    ta.style.height = 'auto'
+    ta.style.height = `${Math.min(ta.scrollHeight + 2, 240)}px`
+  }
+
+  const inFlight = new Set()
+  // `restore` is what goes back in a box if the send fails: the words as typed, never a prefix we added.
+  async function send(text, qid, ta, draftQid = qid, restore = text) {
+    const clean = String(text || '').trim()
+    if (!clean) return
+    const key = `${qid || ''}|${clean}`
+    if (inFlight.has(key)) return
+    // A repeat of the note just sent on the same question (a double tap) is not sent again.
+    const last = sortedNotes().filter((n) => n.from === 'alex' && (n.qid || null) === (qid || null) && n.delivery !== 'error').at(-1)
+    if (last && last.text === clean && Date.now() - Date.parse(last.at) < 60000) {
+      if (ta) { ta.value = ''; store.set(draftKey(draftQid), ''); autosize(ta) }
+      banner('Already sent.')
+      return
+    }
+    inFlight.add(key)
+    const tmp = { id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, from: 'alex', qid: qid || null, text: clean, at: new Date().toISOString(), delivery: 'sending' }
+    notes.set(tmp.id, tmp)
+    if (ta) { ta.value = ''; store.set(draftKey(draftQid), ''); autosize(ta) }
+    renderDynamic()
+    try {
+      const { note } = await api(`/api/scope/${slug}/note`, qid ? { text: clean, qid } : { text: clean })
+      notes.delete(tmp.id)
+      if (!notes.has(note.id) || notes.get(note.id).delivery === 'queued') notes.set(note.id, note)
+    } catch (error) {
+      tmp.delivery = 'error'
+      if (ta) {
+        // The question may have been removed while this was in flight; then the text goes to the thought box.
+        const target = ta.isConnected ? ta : $('#thought')
+        const words = String(restore || '').trim()
+        const back = target === ta ? words : `(on ${draftQid}) ${words}`
+        const typed = target.value.trim()
+        target.value = typed ? `${back}\n\n${typed}` : back
+        store.set(draftKey(target === ta ? draftQid : null), target.value)
+        autosize(target)
+        banner(`That note did not send (${error.message}). It is back in the box.`)
+      } else {
+        banner(`That did not send (${error.message}). Try again.`)
+      }
+      setTimeout(() => { notes.delete(tmp.id); renderDynamic() }, 6000)
+    } finally {
+      inFlight.delete(key)
+    }
+    renderDynamic()
+  }
+
+  function replyBox(qid, getRec) {
+    const ta = el('textarea', { rows: 1, placeholder: qid ? 'Your answer, or "r" for the recommendation' : '' })
+    ta.value = store.get(draftKey(qid)) || ''
+    const go = () => {
+      let text = ta.value.trim()
+      if (!text) return
+      const rec = getRec()
+      if (/^r$/i.test(text) && rec) text = `Take the recommendation: ${rec}`
+      // A question the lane has since removed can't take an answer; send it as a thought.
+      if (qid && !(scope.questions || []).some((x) => x && x.id === qid)) send(`(on ${qid}, since removed) ${text}`, null, ta, qid, ta.value)
+      else send(text, qid, ta, qid, ta.value)
+    }
+    ta.addEventListener('input', () => { store.set(draftKey(qid), ta.value); autosize(ta) })
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (e.metaKey || e.ctrlKey || !matchMedia('(pointer: coarse)').matches)) {
+        e.preventDefault(); go()
+      }
+    })
+    const take = el('button', { class: 'btn', type: 'button', onclick: () => {
+      const rec = getRec()
+      if (rec) send(`Take the recommendation: ${rec}`, qid, null)
+    } }, 'Take recommendation')
+    const sendBtn = el('button', { class: 'btn primary', type: 'button', onclick: go }, 'Send')
+    requestAnimationFrame(() => autosize(ta))
+    return { node: el('div', { class: 'reply' }, ta, take, sendBtn), ta, take }
+  }
+
+  function questionNode(q) {
+    const parts = {}
+    parts.text = el('p', { class: 'q-text' })
+    parts.rec = el('div', { class: 'rec' })
+    parts.why = el('p', { class: 'why' })
+    parts.settled = el('div', { class: 'settled' })
+    parts.notes = el('ul', { class: 'notes' })
+    const box = replyBox(q.id, () => {
+      const cur = (scope.questions || []).find((x) => x.id === q.id)
+      return cur && cur.recommendation
+    })
+    parts.box = box
+    parts.id = el('span', { class: 'q-id' }, q.id)
+    const root = el('article', { class: 'q', id: `q-${q.id}` },
+      el('div', { class: 'q-head' }, parts.id,
+        el('div', { class: 'q-body' }, parts.text, parts.rec, parts.why, parts.settled, parts.notes, box.node)))
+    return { root, parts }
+  }
+
+  function updateQuestion(entry, q) {
+    const { parts, root } = entry
+    const status = q.status === 'answered' || q.status === 'dropped' ? q.status : 'open'
+    root.classList.toggle('is-dropped', status === 'dropped')
+    parts.text.dataset.last = q.text || ''
+    parts.text.replaceChildren(q.text || '', status !== 'open' ? el('span', { class: `tag ${status}` }, status === 'answered' ? 'Answered' : 'Dropped') : '')
+    parts.rec.hidden = !q.recommendation || status === 'answered'
+    parts.rec.innerHTML = q.recommendation ? `<b>Recommended:</b> ${inline(q.recommendation)}` : ''
+    parts.why.hidden = !q.why || status === 'answered'
+    parts.why.innerHTML = q.why ? inline(q.why) : ''
+    const answer = q.answer || ''
+    parts.settled.hidden = !(status === 'answered' && answer)
+    parts.settled.innerHTML = answer ? `<b>Decided:</b> ${inline(answer)}` : ''
+    parts.box.take.hidden = !q.recommendation || status !== 'open'
+    parts.box.ta.placeholder = status === 'open' ? (q.recommendation ? 'Your answer, or "r" for the recommendation' : 'Your answer') : 'Change your answer or add to it'
+    const mine = sortedNotes().filter((n) => n.qid === q.id)
+    parts.notes.hidden = mine.length === 0
+    parts.notes.replaceChildren(...mine.map((n) => noteNode({ ...n, inQuestion: true })))
+  }
+
+  let bannerTimer = null
+  function banner(text) {
+    const b = $('#banner')
+    if (!b) return
+    b.textContent = text
+    b.hidden = !text
+    clearTimeout(bannerTimer)
+    if (text) bannerTimer = setTimeout(() => { if (!scopeError) b.hidden = true }, 8000)
+  }
+
+  function buildShell() {
+    const main = $('#main')
+    main.replaceChildren(
+      el('h1', { id: 'title' }),
+      el('p', { class: 'meta', id: 'meta' }),
+      el('p', { class: 'banner', id: 'banner', hidden: true }),
+      el('section', { id: 'askSec' }, el('h2', {}, 'Your ask'), el('div', { id: 'ask' })),
+      el('section', { id: 'planSec' }, el('h2', {}, 'Plan'), el('div', { class: 'md', id: 'plan' })),
+      el('section', { id: 'qSec' }, el('h2', {}, 'Questions'), el('div', { id: 'questions' })),
+      el('section', { id: 'decSec' }, el('h2', {}, 'Decided'), el('div', { id: 'decisions' })),
+      el('section', { id: 'threadSec' }, el('h2', {}, 'Thread'), el('ul', { class: 'notes', id: 'thread' })),
+    )
+    const dock = $('#dock')
+    dock.hidden = false
+    const ta = $('#thought')
+    ta.value = store.get(draftKey(null)) || ''
+    const go = () => send(ta.value, null, ta)
+    ta.addEventListener('input', () => { store.set(draftKey(null), ta.value); autosize(ta) })
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && (e.metaKey || e.ctrlKey || !matchMedia('(pointer: coarse)').matches)) {
+        e.preventDefault(); go()
+      }
+    })
+    $('#thoughtSend').addEventListener('click', go)
+    autosize(ta)
+    built = true
+  }
+
+  function renderScope() {
+    if (!scope) return
+    if (!built) buildShell()
+    const title = scope.title || slug
+    document.title = `${title} · Scoping`
+    $('#barName').replaceChildren(el('a', { href: '/s/' }, 'Scoping'), ' / ', title)
+    $('#title').textContent = title
+    const open = (scope.questions || []).filter((q) => !q.status || q.status === 'open').length
+    $('#meta').replaceChildren(scope.updated_at ? `Updated ${fmtTime(scope.updated_at)} · ` : '',
+      el('a', { href: '#qSec' }, `${open} open question${open === 1 ? '' : 's'}`),
+      /^https?:\/\//i.test(scope.doc_url || '') ? el('span', {}, ' · ', el('a', { href: scope.doc_url, target: '_blank', rel: 'noopener' }, 'Full doc')) : '')
+
+    const asks = Array.isArray(scope.ask) ? scope.ask : []
+    $('#askSec').hidden = asks.length === 0
+    const shown = asksOpen ? asks : asks.slice(0, 2)
+    $('#ask').replaceChildren(...shown.map((a) => el('div', { class: 'quote' },
+      el('p', {}, `“${a.quote || ''}”`),
+      el('div', { class: 'src' }, [a.date, a.source].filter(Boolean).join(' · ')))),
+      asks.length > 2 ? el('button', { class: 'more', type: 'button', onclick: () => { asksOpen = !asksOpen; renderScope() } },
+        asksOpen ? 'Show fewer' : `Show ${asks.length - 2} more`) : '')
+
+    $('#planSec').hidden = !scope.plan_md
+    $('#plan').innerHTML = markdown(scope.plan_md)
+
+    // Questions are keyed by id so a live rewrite never touches a reply box.
+    const qs = (Array.isArray(scope.questions) ? scope.questions : []).filter((q) => q && q.id)
+    const wrap = $('#questions')
+    const wanted = new Set(qs.map((q) => q.id))
+    pruneOrphans(wanted)
+    for (const [qid, entry] of qNodes) {
+      if (wanted.has(qid)) continue
+      // Keep an unsent draft reachable; its question is gone, so it will go as a thought.
+      entry.root.classList.add('is-dropped')
+      entry.parts.text.replaceChildren(entry.parts.text.dataset.last || '', el('span', { class: 'tag dropped' }, 'Removed by the lane'))
+      entry.parts.rec.hidden = true
+      entry.parts.why.hidden = true
+      entry.parts.box.take.hidden = true
+      entry.parts.box.ta.placeholder = 'Sends as a thought'
+    }
+    let prev = null
+    for (const q of qs) {
+      let entry = qNodes.get(q.id)
+      if (!entry) { entry = questionNode(q); qNodes.set(q.id, entry) }
+      if (prev ? prev.nextSibling !== entry.root : wrap.firstChild !== entry.root) {
+        prev ? prev.after(entry.root) : wrap.prepend(entry.root)
+      }
+      updateQuestion(entry, q)
+      prev = entry.root
+    }
+    $('#qSec').hidden = qNodes.size === 0
+
+    const decs = Array.isArray(scope.decisions) ? scope.decisions : []
+    $('#decSec').hidden = decs.length === 0
+    $('#decisions').replaceChildren(...decs.map((d) => el('div', { class: 'decision' },
+      el('p', {}, el('span', { class: 'mono', style: 'color:var(--dim);margin-right:8px' }, d.id || ''), d.decision || ''),
+      d.alex_words || d.at ? el('p', { class: 'words' }, [d.alex_words ? `“${d.alex_words}”` : '', d.at ? fmtTime(d.at) : ''].filter(Boolean).join(' · ')) : null)))
+
+    const b = $('#banner')
+    if (scopeError) { b.textContent = scopeError; b.hidden = false }
+    renderThread()
+  }
+
+  function renderThread() {
+    const list = allThread()
+    $('#threadSec').hidden = list.length === 0
+    $('#thread').replaceChildren(...list.map((n) => noteNode(n)))
+  }
+
+  // A question the lane removed disappears once its box is empty.
+  function pruneOrphans(wanted = new Set((scope.questions || []).filter((q) => q && q.id).map((q) => q.id))) {
+    for (const [qid, entry] of qNodes) {
+      if (!wanted.has(qid) && !entry.parts.box.ta.value.trim()) { entry.root.remove(); qNodes.delete(qid) }
+    }
+    const sec = $('#qSec')
+    if (sec) sec.hidden = qNodes.size === 0
+  }
+
+  function renderDynamic() {
+    if (!scope) return
+    pruneOrphans()
+    for (const q of scope.questions || []) {
+      const entry = qNodes.get(q.id)
+      if (entry) updateQuestion(entry, q)
+    }
+    renderThread()
+  }
+
+  function applyState(data) {
+    if (data.scope) scope = data.scope
+    scopeError = data.error || null
+    if (Array.isArray(data.notes)) for (const n of data.notes) notes.set(n.id, n)
+    renderScope()
+  }
+
+  function applyNote(n) {
+    notes.set(n.id, n)
+    for (const [id, tmp] of notes) {
+      if (String(id).startsWith('tmp-') && tmp.text === n.text && tmp.qid === (n.qid || null) && n.from === 'alex') notes.delete(id)
+    }
+    renderDynamic()
+  }
+
+  let poll = null
+  function startPolling() {
+    if (poll) return
+    poll = setInterval(async () => {
+      try { applyState(await api(`/api/scope/${slug}`)) } catch {}
+    }, 5000)
+  }
+  function stopPolling() { clearInterval(poll); poll = null }
+
+  function connect() {
+    const es = new EventSource(`/api/scope/${slug}/events`)
+    es.addEventListener('state', (e) => { applyState(JSON.parse(e.data)); setLive('on'); stopPolling() })
+    es.addEventListener('scope', (e) => { applyState(JSON.parse(e.data)) })
+    es.addEventListener('note', (e) => { applyNote(JSON.parse(e.data)) })
+    es.onopen = () => { setLive('on'); stopPolling() }
+    es.onerror = () => { setLive('off'); startPolling() }
+  }
+
+  async function renderScopePage() {
+    try {
+      applyState(await api(`/api/scope/${slug}`))
+      setLive('connecting')
+    } catch (error) {
+      $('#main').replaceChildren(
+        el('h1', {}, slug),
+        el('p', { class: 'empty' }, error.status === 404 ? 'This lane has not published its scope yet. The page will fill in when it does.' : `Could not load: ${error.message}`))
+      setLive('off')
+      setTimeout(renderScopePage, 5000)
+      return
+    }
+    connect()
+  }
+
+  if (slug) renderScopePage()
+  else renderIndex()
+})()
+</script>
+</body>
+</html>

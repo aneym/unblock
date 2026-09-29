@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { execFile } from 'node:child_process'
 import { guardedAnswerNotice } from './pane-notice.js'
+import { createScopeRoutes } from './scope.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -342,6 +343,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
   const store = new Store()
+  const scopeRoutes = createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity })
   // A delayed store can be injected by tests to exercise the real async put boundary.
   const secretStore = injectedSecretStore ?? new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
   // Resolve the secret backend now rather than on the first /api/health. In
@@ -710,12 +712,17 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     // deliberately exempts it, rather than open unless someone remembers.
     const isPublic =
       pathname === '/api/health' ||
+      (pathname === '/s' || pathname.startsWith('/s/')) ||
       // Built panel assets carry nothing secret; the page itself is gated by
       // its link token, which is checked in handleTokenRoute.
       staticAsset(pathname) !== null ||
       pathname.startsWith('/u/')
     if (!isPublic && !isAuthorized(req, authSecret)) {
       return sendJson(res, 401, { error: 'unauthorized' })
+    }
+
+    if (pathname === '/api/scope' || pathname.startsWith('/api/scope/') || pathname === '/s' || pathname.startsWith('/s/')) {
+      return scopeRoutes.handle(req, res, url)
     }
 
     if (req.method === 'GET' && pathname === '/api/events') {
@@ -1171,6 +1178,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     for (const listeners of askClients.values()) {
       for (const client of listeners) client.write(': keepalive\n\n')
     }
+    scopeRoutes.keepalive()
   }, 25_000)
   keepalive.unref()
   async function sweep() {
@@ -1206,6 +1214,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     isClosed = true
     clearInterval(keepalive)
     clearInterval(sweeper)
+    await scopeRoutes.close()
     for (const client of clients) client.end()
     clients.clear()
     for (const listeners of askClients.values()) {

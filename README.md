@@ -268,6 +268,19 @@ names (`UNBLOCK_PUBLIC_ORIGIN`, `UNBLOCK_TRUSTED_PROXY`, `UNBLOCK_ALLOWED_USERS`
 Agents then hand out `https://<origin>/#ask=<ticket>`; for someone off the
 tailnet, `POST /api/links {ticket}` still mints a burn-on-answer token.
 
+## Scoping pages
+
+Each scoping lane writes `<slug>/scope.json` under `UNBLOCK_SCOPING_DIR`
+(default: `~/.agent-rails/scoping`). The page at `<public_origin>/s/<slug>`
+shows its plan and questions live. A trusted tailnet viewer can answer a
+question or add a thought; the daemon records each note in SQLite and prompts
+the lane's `scope.pane`. The lane updates `scope.json` to reflect the answer.
+
+`unblock scope` lists pages and open questions. `unblock scope url <slug>`
+prints the page URL, `unblock scope notes <slug> [--since N] [--from alex|agent]`
+reads the thread, and `unblock scope reply <slug> <text...>` posts an agent reply.
+All support `--json`.
+
 ## Layout
 
 ```

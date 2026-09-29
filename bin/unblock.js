@@ -344,6 +344,43 @@ async function link(args) {
   const data = await request('/api/links', { ticket, ttl_seconds: 900 })
   output(data, `${data.url}\nexpires in ${Math.max(1, Math.round((data.expires_at - Date.now()) / 60000))}m`)
 }
+async function scope(args) {
+  // Reply content is prose: option-like words after the slug are not CLI flags.
+  if (args[0] === 'reply') {
+    const [sub, slug, ...words] = args
+    if (!slug || !words.length) fail('usage: unblock scope reply <slug> <text...> [--json]')
+    if (words.at(-1) === '--json') { json = true; words.pop() }
+    if (!words.length) fail('usage: unblock scope reply <slug> <text...> [--json]')
+    const data = await request(`/api/scope/${encodeURIComponent(slug)}/reply`, { text: words.join(' ') })
+    return output(data, `replied #${data.note.id}`)
+  }
+  const { rest, opts } = flags(args, { '--since': true, '--from': true })
+  const [sub = 'list', slug, ...extra] = rest
+  if (sub === 'list' && !slug && !extra.length && !Object.keys(opts).length) {
+    const { scopes } = await request('/api/scope')
+    const health = await request('/api/health')
+    const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
+    const listed = scopes.map((item) => ({ ...item, url: `${base}/s/${item.slug}` }))
+    return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
+  }
+  if (!slug || (sub !== 'reply' && extra.length)) fail('usage: unblock scope [list] | url <slug> | notes <slug> [--since N] [--from alex|agent] | reply <slug> <text...> [--json]')
+  if (sub === 'url' && !Object.keys(opts).length) {
+    const health = await request('/api/health')
+    const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
+    const url = `${base}/s/${encodeURIComponent(slug)}`
+    return output({ url }, url)
+  }
+  if (sub === 'notes') {
+    if (opts['--since'] !== undefined && !/^\d+$/.test(opts['--since'])) fail('--since must be a nonnegative integer')
+    if (opts['--from'] && !['alex', 'agent'].includes(opts['--from'])) fail('--from must be alex or agent')
+    const query = new URLSearchParams()
+    if (opts['--since'] !== undefined) query.set('since', opts['--since'])
+    if (opts['--from']) query.set('from', opts['--from'])
+    const data = await request(`/api/scope/${encodeURIComponent(slug)}/notes?${query}`)
+    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.qid ? ` [${note.qid}]` : ''} ${note.text}`).join('\n'))
+  }
+  fail('usage: unblock scope [list] | url <slug> | notes <slug> [--since N] [--from alex|agent] | reply <slug> <text...> [--json]')
+}
 async function peek(args) {
   const { rest } = flags(args, {})
   if (rest.length !== 1) fail('usage: unblock peek <ticket>')
@@ -470,6 +507,7 @@ unblock link <ticket> [--share]                  the stable queue link; --share 
 unblock peek <ticket>                            what they have typed so far
 unblock reveal <ticket> <field>                  print a stored secret (this machine only)
 unblock mirror [path]                            write BLOCKERS.md from the queue
+unblock scope [list|url|notes|reply]             scoping pages, notes and agent replies
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
 unblock mcp                                      run the MCP server
@@ -491,6 +529,7 @@ try {
   else if (command === 'peek') await peek(input)
   else if (command === 'reveal') await reveal(input)
   else if (command === 'mirror') await mirror(input)
+  else if (command === 'scope') await scope(input)
   else if (command === 'daemon') await daemonCmd(input)
   else if (command === 'ui' || command === 'mcp') {
     if (input.includes('--json')) fail(`${command} does not support --json`)

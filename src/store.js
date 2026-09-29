@@ -215,6 +215,20 @@ export class Store {
         record_json TEXT NOT NULL,
         queued_at   INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS scope_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT NOT NULL,
+        author TEXT NOT NULL CHECK (author IN ('alex','agent')),
+        kind TEXT NOT NULL CHECK (kind IN ('answer','thought','reply')),
+        qid TEXT,
+        text TEXT NOT NULL,
+        who TEXT,
+        created_at TEXT NOT NULL,
+        delivery TEXT,
+        delivered_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS scope_notes_slug_idx ON scope_notes(slug, id);
     `)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
@@ -246,6 +260,45 @@ export class Store {
 
   close() {
     this.#db.close()
+  }
+
+  // ----------------------------------------------------------- scope notes
+
+  #scopeNote(row) {
+    return row && {
+      id: row.id, slug: row.slug, from: row.author, kind: row.kind,
+      qid: row.qid, text: row.text, at: row.created_at,
+      delivery: row.delivery, delivered_at: row.delivered_at,
+    }
+  }
+
+  addScopeNote({ slug, author, kind, qid, text, who }) {
+    const at = new Date().toISOString()
+    const result = this.#db.prepare(`INSERT INTO scope_notes
+      (slug, author, kind, qid, text, who, created_at, delivery)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null)
+    return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))
+  }
+
+  scopeNotes(slug, { since = 0, author } = {}) {
+    const sql = `SELECT * FROM scope_notes WHERE slug = ? AND id > ?${author ? ' AND author = ?' : ''} ORDER BY id ASC`
+    return this.#db.prepare(sql).all(...(author ? [slug, since, author] : [slug, since])).map((row) => this.#scopeNote(row))
+  }
+
+  pendingScopeNotes(slug) {
+    return this.#db.prepare(`SELECT * FROM scope_notes WHERE slug = ? AND author = 'alex'
+      AND delivered_at IS NULL AND delivery IN ('queued','retrying','no_pane') ORDER BY id ASC`)
+      .all(slug).map((row) => this.#scopeNote(row))
+  }
+
+  markScopeNotes(ids, delivery, deliveredAt = null) {
+    if (!ids.length) return []
+    const update = this.#db.prepare('UPDATE scope_notes SET delivery = ?, delivered_at = ? WHERE id = ?')
+    const read = this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?')
+    return this.transaction(() => ids.map((id) => {
+      update.run(delivery, deliveredAt, id)
+      return this.#scopeNote(read.get(id))
+    }).filter(Boolean))
   }
 
   // ---------------------------------------------------------------- asks
