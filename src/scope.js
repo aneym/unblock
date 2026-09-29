@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
+import { lintDoc, lintText } from './scope-lint.js'
 import { readAsset, readAssetBody, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID } from './scope-doc.js'
@@ -255,13 +256,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
     if (body.via !== undefined && body.via !== (relay ? 'admin' : 'voice')) return sendJson(res, 400, { error: 'invalid via' })
     if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
+    if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
     const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, docWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
-      return sendJson(res, newThread && !result.duplicate ? 201 : 200, result)
+      return sendJson(res, result.error === 'unslop' ? 422 : newThread && !result.duplicate ? 201 : 200, result)
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
@@ -284,6 +286,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
+    const storedSections = scope.doc.sections
     if (body.client_id !== undefined) {
       const duplicate = scope.threads.find((thread) => thread.messages.some((message) => message.client_id === body.client_id)
         || thread.resolution?.client_id === body.client_id || thread.parked_client_id === body.client_id)
@@ -392,6 +395,24 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
+    if (!human) {
+      const { keep = [] } = body
+      const changed = docWrite ? body.sections.filter((section) => {
+        const stored = storedSections.find((old) => old.id === section.id)
+        return !stored || stored.heading !== section.heading || stored.body_md !== section.body_md
+      }) : []
+      const lint = docWrite ? lintDoc(changed, { keep }) : { findings: [], warnings: [] }
+      if (!docWrite) {
+        for (const field of ['text', 'recommendation', 'why', 'decision']) {
+          if (typeof body[field] === 'string') lint.findings.push(...lintText(body[field], { keep }).map((finding) => ({ field, ...finding })))
+        }
+        for (const [index, option] of (Array.isArray(body.options) ? body.options : []).entries()) {
+          lint.findings.push(...lintText(option, { keep }).map((finding) => ({ field: `options[${index}]`, ...finding })))
+        }
+      }
+      if (lint.findings.length) return { error: 'unslop', findings: lint.findings }
+      if (docWrite) result.warnings = lint.warnings
+    }
     scope.updated_at = at
     if (disk.version !== 2) {
       let backup = join(dir, 'scope.v1.json'), n = 2

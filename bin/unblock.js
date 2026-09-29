@@ -7,6 +7,7 @@ import { dirname, extname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import { IMAGE_LINE } from '../src/scope-assets.js'
+import { lintDoc } from '../src/scope-lint.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
@@ -68,6 +69,15 @@ function wrap(text, width = 80, prefix = '') {
   return lines.join('\n')
 }
 
+function lintOutput({ findings = [], warnings = [] }) {
+  for (const finding of findings) console.error(`${finding.section ? `§${finding.section}` : finding.field} ${finding.rule}: "${finding.match}" -> ${finding.hint}`)
+  for (const warning of warnings) console.error(`§${warning.section}: ${warning.count} words (limit 120). Say it with a picture or cut it.`)
+  if (findings.length) {
+    console.error('Run /unslop over the doc (or fix these) and publish again. Keep a real name with --keep "<term>".')
+    process.exit(2)
+  }
+}
+
 async function request(path, body, { start = true, method } = {}) {
   let base
   try { base = await daemon({ start }) } catch (error) { fail(error.message, 1) }
@@ -86,6 +96,7 @@ async function request(path, body, { start = true, method } = {}) {
   let data
   try { data = await response.json() } catch { fail(`invalid response from queue`, 1) }
   if (!response.ok) {
+    if (response.status === 422 && data.error === 'unslop') lintOutput(data)
     const message = data.error || `HTTP ${response.status}`
     if (['ASK_NOT_OPEN', 'PAY_NOT_ALLOWED', 'RECEIPT_NOT_ALLOWED'].includes(data.code)) fail(message, 5)
     if (response.status === 404) fail(message, 3)
@@ -108,8 +119,10 @@ function flags(args, allowed) {
     const arg = args[i]
     if (arg === '--json') { json = true; continue }
     if (arg in allowed) {
-      opts[arg] = allowed[arg] ? args[++i] : true
-      if (opts[arg] === undefined) fail(`${arg} needs a value`)
+      const value = allowed[arg] ? args[++i] : true
+      if (value === undefined) fail(`${arg} needs a value`)
+      if (arg === '--keep') (opts[arg] ??= []).push(value)
+      else opts[arg] = value
     } else if (arg.startsWith('--')) fail(`unknown option: ${arg}`)
     else rest.push(arg)
   }
@@ -442,23 +455,31 @@ async function uploadDocImages(slug, doc, source) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | threads <slug> [--open] [--json]'
+  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
     const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why', '--option']
+    for (let i = 0; i < words.length; i++) {
+      if (words[i] !== '--keep') continue
+      if (words[i + 1] === undefined) fail('--keep needs a value')
+      ;(opts['--keep'] ??= []).push(words[i + 1])
+      words.splice(i, 2)
+      i--
+    }
     let threadId
     if (sub !== 'ask' && THREAD_ID.test(words[0] ?? '')) threadId = words.shift()
     while (allowed.includes(words[0])) {
       const option = words.shift(), value = words.shift()
       if (value === undefined) fail(`${option} needs a value`)
-      if (option === '--option') (opts[option] ??= []).push(value)
+      if (option === '--option' || option === '--keep') (opts[option] ??= []).push(value)
       else opts[option] = value
     }
     if (!slug) fail(usage)
     const base = `/api/scope/${encodeURIComponent(slug)}`
-    const options = opts['--option'] !== undefined ? { options: opts['--option'] } : {}
+    const keep = opts['--keep'] !== undefined ? { keep: opts['--keep'] } : {}
+    const options = { ...keep, ...(opts['--option'] !== undefined ? { options: opts['--option'] } : {}) }
     if (sub === 'edit') {
       if (!threadId || words.length || !Object.keys(opts).length || (!!opts['--section'] !== !!opts['--quote'])) fail(usage)
       const data = await request(`${base}/threads/${threadId}/edit`, { ...(opts['--section'] !== undefined ? { section: opts['--section'], quote: opts['--quote'] } : {}), ...options })
@@ -471,7 +492,7 @@ async function scope(args) {
     }
     if (sub === 'resolve') {
       if (!threadId || words.length) fail(usage)
-      const data = await request(`${base}/threads/${threadId}/resolve`, opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {})
+      const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}) })
       return output(data, `resolved ${data.thread.id}`)
     }
     if (!words.length || words[0] === '--to') fail(usage)
@@ -480,11 +501,11 @@ async function scope(args) {
     else {
       if (opts['--option'] !== undefined) fail(usage)
       const { scope } = await request(base)
-      data = await request(`${base}/threads`, { section: 'title', quote: scope.title, kind: 'comment', text: words.join(' ') })
+      data = await request(`${base}/threads`, { section: 'title', quote: scope.title, kind: 'comment', text: words.join(' '), ...keep })
     }
     return output(data, `replied ${data.thread.id}`)
   }
-  const { rest, opts } = flags(args, { '--since': true, '--from': true, '--open': false })
+  const { rest, opts } = flags(args, { '--since': true, '--from': true, '--open': false, '--keep': true })
   const [verb = 'list', name, ...extra] = rest
   if (verb === 'list' && !name && !extra.length && !Object.keys(opts).length) {
     const { scopes } = await request('/api/scope')
@@ -500,9 +521,12 @@ async function scope(args) {
     const url = `${base}/s/${encodeURIComponent(name)}`
     return output({ url }, url)
   }
-  if (verb === 'doc') {
+  if (opts['--keep'] && !['doc', 'lint'].includes(verb)) fail(usage)
+  if (verb === 'doc' || verb === 'lint') {
     if (opts['--since'] || opts['--open']) fail(usage)
+    if (verb === 'lint' && !opts['--from']) fail(usage)
     if (!opts['--from']) {
+      if (opts['--keep']) fail(usage)
       const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
       return output({ revision: scope.revision, sections: scope.doc.sections }, docToMarkdown(scope.doc))
     }
@@ -511,8 +535,28 @@ async function scope(args) {
       const raw = readFileSync(opts['--from'], 'utf8')
       doc = opts['--from'].endsWith('.json') ? JSON.parse(raw) : docFromMarkdown(raw)
     } catch (error) { fail(error.message) }
+    if (verb === 'lint') {
+      let sections = Array.isArray(doc) ? doc : doc.sections
+      try {
+        const base = await daemon({ start: false }), token = authToken()
+        const response = await fetch(`${base}/api/scope/${encodeURIComponent(name)}`, {
+          headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const { scope } = await response.json()
+        const stored = scope.doc.sections
+        sections = sections.filter((section) => {
+          const old = stored.find((item) => item.id === section.id)
+          return !old || old.heading !== section.heading || old.body_md !== section.body_md
+        })
+      } catch { console.error('Could not read the current scope; linting every section.') }
+      const result = lintDoc(sections, { keep: opts['--keep'] })
+      lintOutput(result)
+      return output(result, 'No unslop findings.')
+    }
     try { await uploadDocImages(name, doc, opts['--from']) } catch (error) { fail(error.message, 1) }
-    const data = await request(`/api/scope/${encodeURIComponent(name)}/doc`, { sections: Array.isArray(doc) ? doc : doc.sections }, { method: 'PUT' })
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/doc`, { sections: Array.isArray(doc) ? doc : doc.sections, ...(opts['--keep'] ? { keep: opts['--keep'] } : {}) }, { method: 'PUT' })
+    lintOutput(data)
     return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
   }
   if (verb === 'threads') {
@@ -664,7 +708,9 @@ unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "te
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
-unblock scope doc <slug> [--from <file.md|file.json>]
+unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
+unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
+  ask, reply, edit and resolve also accept --keep "term" (repeatable).
   --from uploads local image lines and renders HTML mocks ("phone" = 390px).
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status

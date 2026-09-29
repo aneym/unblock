@@ -305,6 +305,17 @@ and confirms it with `scope resolve`. A reply without T# is a general comment.
 all scoping commands support `--json`. Voice uses the same thread paths and the
 queue's voice keys, spend ledger and $20 monthly cap.
 
+### Unslop gate
+
+Lane-written headings, body text, captions and thread text are checked for AI tells
+and internal jargon. Code, images and URLs are skipped; human and Admin relay
+words are never checked. Findings refuse the write with HTTP 422 and CLI exit 2.
+Run `/unslop`, then `unblock scope lint <slug> --from doc.md` to check locally
+without publishing. Repeat `--keep "Name"` to keep a real name on lint or a write.
+Sections over 120 prose words get a warning, not a refusal.
+Doc writes and local lint check only new or changed sections; if lint cannot read
+the current scope, it checks every section and says so.
+
 ### Scope images and mocks
 
 Put each image on its own line: `![Inbox](mocks/inbox.png)` or
