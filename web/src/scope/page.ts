@@ -48,7 +48,12 @@ function replaceAround(root: HTMLElement, nodes: Node[], kept?: HTMLElement | nu
   for (const node of nodes.slice(index + 1)) root.append(node)
 }
 function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
-  const reply = kept.querySelector<HTMLElement>('.reply'), nextReply = fresh.querySelector('.reply')
+  const reply = kept.querySelector<HTMLElement>('.reply'), nextReply = fresh.querySelector<HTMLElement>('.reply')
+  const textarea = reply?.querySelector<HTMLTextAreaElement>('textarea'), nextTextarea = nextReply?.querySelector('textarea'), note = reply?.querySelector<HTMLElement>('.composer-note')
+  if (reply && nextReply && textarea && nextTextarea) {
+    const nodes = [...nextReply.childNodes].flatMap(node => node === nextTextarea ? note ? [note, textarea] : [textarea] : [node])
+    replaceAround(reply, nodes, textarea)
+  }
   kept.className = fresh.className
   kept.toggleAttribute('data-sending', fresh.hasAttribute('data-sending'))
   const nodes = [...fresh.childNodes].map(node => node === nextReply && reply ? reply : node)
@@ -352,6 +357,8 @@ function renderCards() {
   const active = document.activeElement as HTMLElement | null
   const kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
+  const keptThread = kept?.dataset.t && scope?.threads.find(t => t.id === kept.dataset.t)
+  if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
   const makeCard = (t: Thread) => kept?.dataset.t === t.id ? refreshCard(kept, card(t)) : card(t)
   const mainNodes: Node[] = visible.filter(t => !missing.has(t.id)).map(makeCard)
   if (composer?.parentElement === cards) mainNodes.push(composer)
@@ -509,8 +516,10 @@ function renderComposer() {
   const key = composerKey()
   let node = document.querySelector<HTMLElement>('.card.composer')
   if (node?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft !== key) { node?.remove(); node = null }
-  if (!node) {
-    node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  const fresh = document.createElement('div'); fresh.className = 'card composer comment on'; fresh.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  if (node) refreshCard(node, fresh)
+  else {
+    node = fresh
     if (phone()) sheet.replaceChildren(node)
     else if (composing?.general || !scope?.doc.sections.some(s => s.id === composing?.section)) cards.prepend(node)
     else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }

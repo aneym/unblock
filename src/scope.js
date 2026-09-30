@@ -263,6 +263,20 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   }
 
   async function handle(req, res, url) {
+    const parts = url.pathname.slice('/api/scope/'.length).split('/')
+    const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/scope/')
+    const refused = (status, message) => {
+      if (write && status >= 400 && status < 500) console.error(`unblock: scope write refused slug=${parts[0]} thread=${parts[1] === 'threads' && THREAD_ID.test(parts[2]) ? parts[2] : '-'} verb=${parts[3] || parts[1] || '-'} status=${status} error=${String(message).replace(/[\r\n]/g, ' ')}`)
+    }
+    try {
+      return await handleRoute(req, res, url, (res, status, body) => { refused(status, body?.error); return sendJson(res, status, body) })
+    } catch (error) {
+      refused(error.status, error.message)
+      throw error
+    }
+  }
+
+  async function handleRoute(req, res, url, sendJson) {
     const pathname = url.pathname
     if (pathname === '/s' || pathname === '/s/') {
       if (req.method === 'GET') return page(res, null)
@@ -465,9 +479,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const client = body.client_id === undefined ? {} : { client_id: body.client_id }
     const via = body.via === undefined ? {} : { via: body.via }
     const at = new Date().toISOString()
-    const text = (value, limit = human ? 4000 : 600) => {
-      const cleaned = typeof value === 'string' ? human ? value.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim() : compact(value) : ''
-      if (!cleaned || cleaned.length > limit) bad('invalid text')
+    const text = (value, limit = human ? 4000 : 600, preserve = false) => {
+      const sanitized = typeof value === 'string' ? human ? value.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '') : compact(value) : ''
+      const cleaned = preserve ? sanitized : sanitized.trim()
+      if (cleaned.length > limit) bad(`your answer is too long (${cleaned.length} of ${limit} characters)`)
+      if (!cleaned.trim()) bad('invalid text')
       return cleaned
     }
     const setOptions = (thread) => {
@@ -563,8 +579,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       } else if (human) {
         const how = body.how ?? 'resolve'
         if (!['take', 'own', 'resolve'].includes(how)) bad('invalid how')
-        const decision = text(body.decision, 600)
-        const words = body.alex_words == null ? decision : text(body.alex_words)
+        const decision = text(body.decision, 4000, true)
+        const words = body.alex_words == null ? decision : text(body.alex_words, 4000, true)
         thread.status = 'resolved'
         thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client }
         noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
