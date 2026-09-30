@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
+import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
@@ -365,14 +366,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   }
 
   async function moveApprovedTab(slug, revision) {
-    try {
-      const pane = readScope(slug)?.scope?.pane
-      const tab = JSON.parse(await promptPane(['pane', 'get', pane])).result?.pane?.tab_id
-      if (!tab) return
-      const label = JSON.parse(await promptPane(['tab', 'get', tab])).result?.tab?.label
-      if (typeof label === 'string' && label.startsWith('[scoping]')) await promptPane(['tab', 'rename', tab, label.slice(9).trim()])
-      await new Promise((resolve, reject) => execFile(process.env.UNBLOCK_HERDR_LANE || join(homedir(), '.local/bin/herdr-lane'), ['section', tab, 'inflight', '--by', 'alex', '--note', `scope approved r${revision}`], { timeout: 10000 }, (error) => error ? reject(error) : resolve()))
-    } catch { /* Moving the tab is best effort; the approval is already durable. */ }
+    await moveTabToInflight({ pane: readScope(slug)?.scope?.pane, revision })
   }
 
   function approveScope(slug, scope, body, human) {
@@ -394,19 +388,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (problems.length) bad(problems[0])
     const dir = join(root, slug)
     writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nMode: ${body.mode}\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${human.login}\nVia: ${body.via ?? 'page'}\n\n${comment}\n`)
-    const index = join(root, 'INDEX.md')
-    const previous = existsSync(index) ? readFileSync(index, 'utf8') : ''
-    const text = compact(comment)
-    const log = `- ${at_et} · ${slug} r${scope.revision} · ${body.mode === 'approve' ? 'approved' : body.mode === 'approve_with_changes' ? 'approved with changes' : 'not yet'} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
-    const heading = /^## Approvals[ \t]*$/m.exec(previous)
-    let updated
-    if (heading) {
-      const start = previous.indexOf('\n', heading.index)
-      const next = start < 0 ? -1 : previous.slice(start + 1).search(/^## /m)
-      const end = next < 0 ? previous.length : start + 1 + next
-      updated = previous.slice(0, end) + (end && previous[end - 1] !== '\n' ? '\n' : '') + log + previous.slice(end)
-    } else updated = previous + (previous && !previous.endsWith('\n') ? '\n' : '') + '\n## Approvals\n' + log
-    writeFileSync(index, updated)
+    appendApprovalIndex(root, { slug, revision: scope.revision, mode: body.mode, comment, at_et })
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: body.mode, text: comment, who: human.login, via: body.via })

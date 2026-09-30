@@ -8,7 +8,8 @@ import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { applyConfig } from './config.js'
+import { applyConfig, daemonRoot } from './config.js'
+import { createLivedocApprovals } from './scope-approvals.js'
 import {
   approveOptions, dismissBanner, enrollAuthOptions, listPasskeys, register, registerOptions,
   removeCredential, verifyApprovalAssertion,
@@ -1261,12 +1262,20 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   }
   const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)
   sweeper.unref()
+  let livedocApprovals = null
+  if (process.env.UNBLOCK_LIVEDOC_APPROVALS === '1' ||
+      (process.env.UNBLOCK_LIVEDOC_APPROVALS !== '0' && ROOT === daemonRoot())) {
+    livedocApprovals = createLivedocApprovals({ stateFile: join(stateDir(), 'livedoc-approvals.json') })
+    const pollMs = Number(process.env.UNBLOCK_LIVEDOC_POLL_MS)
+    livedocApprovals.start(pollMs > 0 ? pollMs : 60000)
+  }
 
   async function close() {
     if (isClosed) return
     isClosed = true
     clearInterval(keepalive)
     clearInterval(sweeper)
+    livedocApprovals?.stop()
     await scopeRoutes.close()
     for (const client of clients) client.end()
     clients.clear()

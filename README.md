@@ -33,6 +33,8 @@ database, and answer UI. Agent integrations are clients of that service:
 - Every client reaches the same database at
   `~/.local/state/unblock/queue.db` unless `UNBLOCK_STATE_DIR` is set.
 
+The installed Studio daemon polls live-doc approvals every 60 seconds, logs them in the scoping INDEX, and moves approved tabs to In flight (`UNBLOCK_LIVEDOC_APPROVALS=0` disables it; `UNBLOCK_LIVEDOC_POLL_MS` sets the interval).
+
 ## How it works
 
 Two calls, and only one of them stops the agent.
