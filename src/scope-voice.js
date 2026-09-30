@@ -22,6 +22,7 @@ export const SCOPE_VOICE_TOOLS = [
   { name: 'resolve', description: 'When asked to resolve this, propose a decision or confirm the pending one.', parameters: object({ decision: string }) },
   { name: 'comment', description: 'Propose a comment on the selection or section in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
   { name: 'reply', description: 'Propose a reply to the focused thread in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
+  { name: 'approve_scope', description: 'When he approves the scope (approve it, ship it, move to build) or says not yet. Read back and wait for yes.', parameters: object({ mode: { type: 'STRING', enum: ['approve', 'approve_with_changes', 'not_yet'] }, note: string }, ['mode']) },
   { name: 'set_speed', description: 'Change speaking speed immediately, without a read-back.', parameters: object({ speed: { type: 'NUMBER', description: 'Speaking speed multiplier, from 0.7 to 1.5.' }, change: { type: 'STRING', enum: ['faster', 'slower', 'normal'] } }) },
   { name: 'end_call', description: 'Finish the voice call when asked.', parameters: object({}) },
 ]
@@ -31,6 +32,7 @@ export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc writte
 Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. If the point is worth keeping on the doc, call comment: its read-back is the offer. Otherwise stop. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
 Feedback, decisions and answers to the doc's questions: answer on the focused thread (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
 Wait until he finishes a thought before calling a writing tool. Pass his own words; never paraphrase. Comment and reply read back; wait for his yes, then call confirm.
+When he approves the scope or says not yet, use approve_scope; it reads back first.
 Unclear intent: ask exactly "Want that as a comment, or just an answer?" Write nothing.
 "Next" or "what's next": next_question; "back" or "previous": previous_question; "read it": read_thread. Navigate with next_section, previous_section, go_to_section, scroll, show_resolved.
 "Faster", "slower", "normal speed" or a speed number: set_speed at once, no read-back. Say tool speech as given, except explain supplies context for your spoken answer. Never read ids, links or tool names aloud or announce tool calls. On failure, say its speech once and wait. After end_call say nothing. Keep your own words under twelve, except spoken explanations.`
@@ -107,13 +109,17 @@ export function createScopeVoiceSession(deps) {
             pending = { kind, text, ...(kind === 'reply' ? { thread: target } : { anchor: target }) }
             filingThread = pending.thread
             filingLabel = kind === 'comment' ? `Proposed comment: "${filingQuote(text)}"` : `Proposed reply on ${target}: "${filingQuote(text)}"`
-            return { ok: true, speech: `${kind === 'comment' ? 'Comment' : 'Reply'}: "${filingQuote(text, 20)}" ${kind === 'comment' ? 'File it?' : 'Send it?'}` }
+            return result(`${kind === 'comment' ? 'Comment' : 'Reply'}: "${filingQuote(text, 20).replace(/https?:\/\/\S+/gi, '')}" ${kind === 'comment' ? 'File it?' : 'Send it?'}`)
           }
           const confirm = async () => {
             if (!proposal) return fail('Nothing to confirm.')
             pending = proposal
             let sent
-            if (proposal.kind === 'comment') sent = await file('doc', proposal.text, undefined, () => deps.postThread({ anchor: proposal.anchor, text: proposal.text, via: 'voice' }), 'Posted.')
+            if (proposal.kind === 'approve') {
+              sent = await send(() => deps.postApprove({ mode: proposal.mode, comment: proposal.note ?? '', via: 'voice', client_id: crypto.randomUUID() }), ({ approve: 'Approved. The lane moves to build.', approve_with_changes: 'Approved with changes.', not_yet: 'Sent. The lane keeps scoping.' })[proposal.mode])
+              if (sent.ok) filingLabel = ({ approve: 'Approved the scope', approve_with_changes: 'Approved with changes', not_yet: 'Sent: not yet' })[proposal.mode]
+            }
+            else if (proposal.kind === 'comment') sent = await file('doc', proposal.text, undefined, () => deps.postThread({ anchor: proposal.anchor, text: proposal.text, via: 'voice' }), 'Posted.')
             else if (proposal.kind === 'reply') sent = await file('doc', proposal.text, proposal.thread, () => deps.postReply(proposal.thread, { text: proposal.text, via: 'voice' }), 'Sent.')
             else sent = await send(() => deps.postResolve(proposal.thread, { decision: proposal.text, alex_words: proposal.text, how: proposal.how, via: 'voice' }), 'Resolved.')
             if (sent.ok) pending = null
@@ -163,6 +169,21 @@ export function createScopeVoiceSession(deps) {
             const text = words(args.text)
             if (!text) return fail("I didn't catch that.")
             return file('lane', text, undefined, () => deps.postLaneNote({ text, via: 'voice' }), 'Noted for the lane.')
+          }
+          if (name === 'approve_scope') {
+            const mode = args.mode, note = words(args.note)
+            if (!['approve', 'approve_with_changes', 'not_yet'].includes(mode)) return fail("I can't do that here.")
+            if (['approve', 'approve_with_changes'].includes(scope.approval?.mode)) return fail('This scope is already approved.')
+            if (!deps.postApprove) return fail("I can't approve from here. Use the Approve button.")
+            if (unfinished(note)) { filingLabel = 'Waiting for the rest'; return fail('Go on.') }
+            if (!note && mode === 'approve_with_changes') return fail('What should the lane change first?')
+            if (!note && mode === 'not_yet') return fail("What's missing?")
+            pending = { kind: 'approve', mode, note }
+            filingLabel = 'Proposed approval'
+            if (mode === 'approve_with_changes') return result(`Approve with changes: "${note}" The lane folds it in, then builds. Send it?`)
+            if (mode === 'not_yet') return result(`Not yet: "${note}" Send it?`)
+            const count = scope.threads.filter(item => item.status === 'open').length
+            return result(`Approve this scope and move to build?${count ? count === 1 ? " 1 open question closes with the lane's recommendation." : ` ${count} open questions close with the lane's recommendations.` : ''}${note ? ` Your note: "${note}"` : ''}`)
           }
           if (name === 'set_speed') {
             if (['gemini', 'live'].includes(deps.getProvider?.())) return fail('I can only change speed on GPT Realtime or Grok.')

@@ -82,7 +82,7 @@ export interface ScopeVoiceDeps {
   /** Optional: receives one feed line per tool call (see ScopeFeedLine). Never affects the tool result, even if it throws. */
   onFeed?(line: ScopeFeedLine): void
   /** Optional: the provider this call runs on, once known. Speaking speed is unavailable on 'gemini' and 'live'. */
-  getProvider?(): VoiceProvider | 'live' | undefined
+  getProvider?(): VoiceProvider | undefined
   /** Optional clock for the 10-second filing dedupe; defaults to Date.now(). */
   now?(): number
   /** Current scope (GET /api/scope/<slug>). Called before every tool. */
@@ -102,6 +102,8 @@ export interface ScopeVoiceDeps {
   postReject(thread: string, body: { text: string; via: 'voice' }): Promise<{ thread: Thread }>
   /** POST /api/scope/<slug>/threads/<id>/park (human): "Not now". */
   postPark(thread: string, body: { via: 'voice' }): Promise<{ thread: Thread }>
+  /** Optional: POST /api/scope/<slug>/approve after a read-back and confirmation. A queued reply counts as sent. */
+  postApprove?(body: { mode: 'approve' | 'approve_with_changes' | 'not_yet'; comment: string; via: 'voice'; client_id: string }): Promise<unknown>
 }
 
 export interface ScopeVoiceSession {
@@ -140,6 +142,11 @@ export interface ScopeVoiceSession {
  * - comment { text }: anchors to the selection, else the focused section (anchorInSection on its heading),
  *   else the title; propose without writing; speech 'Comment: "<text>" File it?'
  * - reply { text }: on the focused thread, propose without writing; speech 'Reply: "<text>" Send it?'
+ * - approve_scope { mode: 'approve'|'approve_with_changes'|'not_yet', note?: STRING }: propose scope approval,
+ *   read back and wait for confirm to postApprove with his cleaned note, via 'voice' and a UUID client_id.
+ *   Changes and not yet require a note. Already approved scopes and hosts without postApprove refuse to send.
+ *   Feed: "Proposed approval", then "Approved the scope" / "Approved with changes" / "Sent: not yet".
+ *   cancel drops it with "Okay, dropped." Incomplete notes fail with "Go on." and "Waiting for the rest".
  * - end_call {}: speech "Talk soon.", ui end_call.
  * - set_speed { speed?: NUMBER, change?: 'faster'|'slower'|'normal' }: "talk faster", "slow down", "normal speed",
  *   "go 1.3". Not a proposal: it never touches a pending one. getProvider() is 'gemini' or 'live' → ok:false
