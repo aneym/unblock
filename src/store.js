@@ -52,13 +52,6 @@ export function finished(ask) {
   return error
 }
 
-/**
- * The verdict, per purpose, that a WebAuthn assertion gates. Tailscale
- * identity alone is forgeable by any agent on this machine (they share the
- * macOS user with `tailscaled`), so these three go through Touch ID as well.
- * Spend does not: Link's own push to Alex's phone is spend's human check.
- */
-
 // Prune long-closed rows so the queue file cannot grow without bound.
 // Everything closed keeps a 30-day window for `unblock_check` stragglers
 // and post-mortems; after that it is noise the hydrate loop pays for.
@@ -376,7 +369,7 @@ export class Store {
         JSON.stringify(body.steps),
         JSON.stringify(body.links),
         JSON.stringify(body.tried),
-        body.only_you,
+        body.only_you ?? null,
         JSON.stringify(origin),
         key,
         created,
@@ -418,7 +411,7 @@ export class Store {
     const at = nowMs()
     this.#db
       .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
-      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you,
+      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you ?? null,
         plan ? JSON.stringify(plan) : null, spend ? JSON.stringify(spend) : null, message ? JSON.stringify(message) : null,
         consent_blocked_by ?? null, summary ?? null, minutes ?? null, after ?? null, JSON.stringify(blocks ?? null),
         permission ? JSON.stringify(permission) : null, at, ask.id)

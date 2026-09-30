@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-
 const state = mkdtempSync(join(process.env.UNBLOCK_TEST_TMPDIR || tmpdir(), 'unblock-v2-'))
 process.env.UNBLOCK_STATE_DIR = state
 process.env.UNBLOCK_CONFIG_DIR = join(state, 'config')
