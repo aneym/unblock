@@ -42,12 +42,20 @@ export function createLivedocApprovals({
   herdr = process.env.HERDR_BIN_PATH || 'herdr',
   herdrLane = process.env.UNBLOCK_HERDR_LANE || join(homedir(), '.local/bin/herdr-lane'),
 } = {}) {
-  let seen = []
+  let seen = [], seeding = true
   try {
     const state = JSON.parse(readFileSync(stateFile, 'utf8'))
-    if (Array.isArray(state.seen)) seen = state.seen.filter((key) => typeof key === 'string').slice(-500)
+    if (state && Array.isArray(state.seen)) { seen = state.seen.filter((key) => typeof key === 'string').slice(-500); seeding = false }
   } catch {}
   let running = null, timer = null
+
+  function saveState() {
+    try {
+      mkdirSync(dirname(stateFile), { recursive: true, mode: 0o700 })
+      writeFileSync(stateFile + '.tmp', JSON.stringify({ seen }), { mode: 0o600 })
+      renameSync(stateFile + '.tmp', stateFile)
+    } catch { /* Keep the in-memory record when storage is unavailable. */ }
+  }
 
   async function poll() {
     try {
@@ -63,16 +71,17 @@ export function createLivedocApprovals({
         if (!approval) continue
         const slug = doc.slug, key = slug + '\n' + approval.at
         if (seen.includes(key)) continue
-        appendApprovalIndex(root, { slug, revision: approval.revision, mode: approval.mode, comment: approval.comment, at_et: approval.at_et })
+        if (seeding) { seen.push(key); continue }
+        try { appendApprovalIndex(root, { slug, revision: approval.revision, mode: approval.mode, comment: approval.comment, at_et: approval.at_et }) }
+        catch { continue }
+        // A stale state file can repeat a line once after a daemon restart.
+        seen = [...seen, key].slice(-500)
+        saveState()
         if (['approve', 'approve_with_changes'].includes(approval.mode) && typeof doc.pane === 'string' && doc.pane.trim()) {
           await moveTabToInflight({ pane: doc.pane, revision: approval.revision, herdr, herdrLane })
         }
-        const next = [...seen, key].slice(-500)
-        mkdirSync(dirname(stateFile), { recursive: true, mode: 0o700 })
-        writeFileSync(stateFile + '.tmp', JSON.stringify({ seen: next }), { mode: 0o600 })
-        renameSync(stateFile + '.tmp', stateFile)
-        seen = next
       }
+      if (seeding) { seeding = false; saveState() }
     } catch { /* Retry on the next tick when livedoc or local storage is unavailable. */ }
   }
 

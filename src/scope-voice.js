@@ -38,7 +38,9 @@ Unclear intent: ask exactly "Want that as a comment, or just an answer?" Write n
 "Faster", "slower", "normal speed" or a speed number: set_speed at once, no read-back. Say tool speech as given, except explain supplies context for your spoken answer. Never read ids, links or tool names aloud or announce tool calls. On failure, say its speech once and wait. After end_call say nothing. Keep your own words under twelve, except spoken explanations.`
 
 const clean = (value, stripIdentifiers = true) => {
-  let text = String(value ?? '').replace(/https?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|so|co|sh|me|us|uk)\b(?::\d+)?(?:\/\S*)?/gi, 'a link').replace(/\bT\d+\b/g, '')
+  let text = String(value ?? '').replace(/https?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|so|co|sh|me|us|uk)\b(?::\d+)?(?:\/\S*)?/gi, 'a link').replace(/\b(?:(?:[Tt][Hh][Rr][Ee][Aa][Dd][Ss]?|[Qq][Uu][Ee][Ss][Tt][Ii][Oo][Nn][Ss]?|[Cc][Oo][Mm][Mm][Ee][Nn][Tt][Ss]?)\s+)?T\d+\b(?:\s*(?:,\s*(?:(?:and|or)\s+)?|(?:and|or)\s+)T\d+\b)*/g, (ids) => (ids.match(/T\d+/g)?.length || 0) > 1 ? 'those' : 'that one')
+    .replace(/(?:\b[Ss][Ee][Cc][Tt][Ii][Oo][Nn]\s+)?§[\w-]+/g, 'that section')
+    .replace(/(^|[.!?]\s+|["“'(]\s*)(that one|those|that section)\b/g, (_, prefix, phrase) => prefix + phrase[0].toUpperCase() + phrase.slice(1))
   if (stripIdentifiers) text = text.replace(/\b[a-z0-9]+(?:_[a-z0-9]+)+\b/gi, '')
   return text.replace(/\s+/g, ' ').replace(/\s+([,.!?;:])/g, '$1').trim()
 }
@@ -116,7 +118,7 @@ export function createScopeVoiceSession(deps) {
             pending = proposal
             let sent
             if (proposal.kind === 'approve') {
-              sent = await send(() => deps.postApprove({ mode: proposal.mode, comment: proposal.note ?? '', via: 'voice', client_id: crypto.randomUUID() }), ({ approve: 'Approved. The lane moves to build.', approve_with_changes: 'Approved with changes.', not_yet: 'Sent. The lane keeps scoping.' })[proposal.mode])
+              sent = await send(() => deps.postApprove({ mode: proposal.mode, comment: proposal.note ?? '', via: 'voice', client_id: proposal.client_id }), ({ approve: 'Approved. The lane moves to build.', approve_with_changes: 'Approved with changes.', not_yet: 'Sent. The lane keeps scoping.' })[proposal.mode])
               if (sent.ok) filingLabel = ({ approve: 'Approved the scope', approve_with_changes: 'Approved with changes', not_yet: 'Sent: not yet' })[proposal.mode]
             }
             else if (proposal.kind === 'comment') sent = await file('doc', proposal.text, undefined, () => deps.postThread({ anchor: proposal.anchor, text: proposal.text, via: 'voice' }), 'Posted.')
@@ -178,7 +180,7 @@ export function createScopeVoiceSession(deps) {
             if (unfinished(note)) { filingLabel = 'Waiting for the rest'; return fail('Go on.') }
             if (!note && mode === 'approve_with_changes') return fail('What should the lane change first?')
             if (!note && mode === 'not_yet') return fail("What's missing?")
-            pending = { kind: 'approve', mode, note }
+            pending = { kind: 'approve', mode, note, client_id: crypto.randomUUID() }
             filingLabel = 'Proposed approval'
             if (mode === 'approve_with_changes') return result(`Approve with changes: "${note}" The lane folds it in, then builds. Send it?`)
             if (mode === 'not_yet') return result(`Not yet: "${note}" Send it?`)

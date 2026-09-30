@@ -38,6 +38,9 @@ exit 0
 `)
   writeFileSync(lane, `#!/bin/sh\necho "herdr-lane $*" >> '${log}'\n`)
   for (const f of [livedoc, herdr, lane]) chmodSync(f, 0o755)
+  // A state file already exists, so these runs act on every approval (r26: a first run with no state only records).
+  mkdirSync(join(dir, 'state'))
+  writeFileSync(join(dir, 'state', 'livedoc-approvals.json'), JSON.stringify({ seen: [] }))
   const make = () => createLivedocApprovals({ root, stateFile: join(dir, 'state', 'livedoc-approvals.json'), livedoc, herdr, herdrLane: lane })
   const calls = () => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter((l) => !l.startsWith('livedoc ')) : []
   const index = () => readFileSync(join(root, 'INDEX.md'), 'utf8')

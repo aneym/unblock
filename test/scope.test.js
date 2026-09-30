@@ -74,7 +74,10 @@ test('a failing tag retries independently without redelivering the own-pane note
     writeFileSync(stub, original + '\n[ "$3" = "w5H:pBAD" ] && exit 1\nexit 0\n')
     const posted = await h.request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor: { section: 'title', quote: 'Demo scope' }, text: 'hey @pBAD look' } })
     assert.equal(posted.status, 201)
-    await h.until(() => h.paneLines().split('agent prompt w5H:pBAD ').length >= 4, 'tag retried three times')
+    // Each retry spawns herdr twice; under heavy load three retries can take well over the harness's 2 s budget.
+    const deadline = Date.now() + 15000
+    while (h.paneLines().split('agent prompt w5H:pBAD ').length < 4 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.ok(h.paneLines().split('agent prompt w5H:pBAD ').length >= 4, 'tag retried three times within 15s')
     assert.equal(h.paneLines().split('agent prompt w5H:pT1 ').length - 1, 1)
     const note = (await h.request('/api/scope/demo/notes', { headers: h.bearer })).json.notes[0]
     assert.equal(note.delivery, 'delivered')

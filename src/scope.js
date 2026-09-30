@@ -109,129 +109,142 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     void deliver(slug, job)
   }
 
+  function cutUnits(text, n) {
+    const unit = text.charCodeAt(n - 1)
+    return text.slice(0, unit >= 0xd800 && unit <= 0xdbff ? n - 1 : n)
+  }
+
   async function deliver(slug, job) {
-    while (!closed) {
-      job.again = false
-      let notes = store.pendingScopeNotes(slug)
-      const targets = store.pendingScopeTargets(slug)
-      if (!notes.length && !targets.length) break
-      const scope = readScope(slug)?.scope
-      const approvalUnavailable = !scope?.approval && notes.some((note) => APPROVAL_MODES.includes(note.event))
-      if (approvalUnavailable) notes = notes.filter((note) => !APPROVAL_MODES.includes(note.event))
-      const pane = scope?.pane
-      if (typeof pane !== 'string' || !PANE.test(pane)) {
-        emitNotes(store.markScopeNotes(notes.map((note) => note.id), 'no_pane'))
-        notes = []
-        if (!targets.length && !approvalUnavailable) { job.again = false; break }
-      }
-      const laneNotes = notes.filter(note => note.event === 'lane_note')
-      const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
-      const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
-      const joined = comments.map((note) => {
-        const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
-        const heading = headingOf(scope, note.anchor?.section ?? 'title')
-        const quote = quoteSnippet(note.anchor?.quote ?? '')
-        const text = compact(note.text)
-        if (note.event === 'new') return note.anchor.section === 'title'
-          ? `${alex} (general): ${text} (new ${note.thread})`
-          : `${alex} on §${heading} "${quote}": ${text} (new ${note.thread})`
-        if (note.event === 'reject') return `${alex} rejected the recommendation on ${note.thread} (§${heading} "${quote}")${text ? `: ${text.replace(/\.$/, '')}.` : ', no reason given.'} Offer a new option: unblock scope reply ${slug} ${note.thread} --rec "<new recommendation>" "<one line>"`
-        if (note.event === 'park') return `${alex} parked ${note.thread} (§${heading} "${quote}") for later. No action needed.`
-        if (note.event === 'take' || note.event === 'own') return `${alex}${note.event === 'take' ? ` took the recommendation on ${note.thread}` : ` answered ${note.thread} his own way`} (§${heading} "${quote}"): ${text.replace(/\.$/, '')}. Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
-        if (note.event === 'resolve') {
-          const words = note.words && note.words !== note.text && note.words !== 'Take the recommendation' ? ` His words: "${compact(note.words)}".` : ''
-          return `${alex} resolved ${note.thread} (§${heading} "${quote}") as: ${text.replace(/\.$/, '')}.${words} Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
+    try {
+      while (!closed) {
+        job.again = false
+        let notes = store.pendingScopeNotes(slug)
+        const targets = store.pendingScopeTargets(slug)
+        if (!notes.length && !targets.length) break
+        const scope = readScope(slug)?.scope
+        const headingFor = (id) => Array.isArray(scope?.doc?.sections) ? headingOf(scope, id) : id
+        const approvalUnavailable = !scope?.approval && notes.some((note) => APPROVAL_MODES.includes(note.event))
+        if (approvalUnavailable) notes = notes.filter((note) => !APPROVAL_MODES.includes(note.event))
+        const pane = scope?.pane
+        if (typeof pane !== 'string' || !PANE.test(pane)) {
+          emitNotes(store.markScopeNotes(notes.filter((note) => note.delivery !== 'no_pane').map((note) => note.id), 'no_pane'))
+          notes = []
+          if (!targets.length && !approvalUnavailable) { job.again = false; break }
         }
-        return `${alex}${note.event === 'reopen' ? ' reopened' : ' on'} ${note.thread} (§${heading} "${quote}"): ${text}`
-      }).join(' | ')
-      let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
-      if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
-      let retry = approvalUnavailable, held = false
-      async function send(key, targetPane, text, mark) {
-        let status
-        try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
-        if (closed) return
-        if (status === 'working' || status === 'blocked') {
-          const first = job.holds.get(key) ?? Date.now()
-          job.holds.set(key, first)
-          // A pane blocked on a permission prompt is never typed into; only a working pane hits the cap.
-          if (status === 'blocked' || Date.now() - first < delay(process.env.UNBLOCK_SCOPE_HOLD_MAX_MS, 900000)) {
-            mark('held')
-            held = true
-            return
+        const laneNotes = notes.filter(note => note.event === 'lane_note')
+        const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
+        const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
+        const joined = comments.map((note) => {
+          const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
+          const heading = headingFor(note.anchor?.section ?? 'title')
+          const quote = quoteSnippet(note.anchor?.quote ?? '')
+          const text = compact(note.text)
+          if (note.event === 'new') return note.anchor.section === 'title'
+            ? `${alex} (general): ${text} (new ${note.thread})`
+            : `${alex} on §${heading} "${quote}": ${text} (new ${note.thread})`
+          if (note.event === 'reject') return `${alex} rejected the recommendation on ${note.thread} (§${heading} "${quote}")${text ? `: ${text.replace(/\.$/, '')}.` : ', no reason given.'} Offer a new option: unblock scope reply ${slug} ${note.thread} --rec "<new recommendation>" "<one line>"`
+          if (note.event === 'park') return `${alex} parked ${note.thread} (§${heading} "${quote}") for later. No action needed.`
+          if (note.event === 'take' || note.event === 'own') return `${alex}${note.event === 'take' ? ` took the recommendation on ${note.thread}` : ` answered ${note.thread} his own way`} (§${heading} "${quote}"): ${text.replace(/\.$/, '')}. Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
+          if (note.event === 'resolve') {
+            const words = note.words && note.words !== note.text && note.words !== 'Take the recommendation' ? ` His words: "${compact(note.words)}".` : ''
+            return `${alex} resolved ${note.thread} (§${heading} "${quote}") as: ${text.replace(/\.$/, '')}.${words} Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
+          }
+          return `${alex}${note.event === 'reopen' ? ' reopened' : ' on'} ${note.thread} (§${heading} "${quote}"): ${text}`
+        }).join(' | ')
+        let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
+        if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
+        let retry = approvalUnavailable, held = false
+        async function send(key, targetPane, text, mark) {
+          let status
+          try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
+          if (closed) return
+          if (status === 'working' || status === 'blocked') {
+            const first = job.holds.get(key) ?? Date.now()
+            job.holds.set(key, first)
+            // A pane blocked on a permission prompt is never typed into; only a working pane hits the cap.
+            if (status === 'blocked' || Date.now() - first < delay(process.env.UNBLOCK_SCOPE_HOLD_MAX_MS, 900000)) {
+              mark('held')
+              held = true
+              return
+            }
+          }
+          try {
+            await promptPane(['agent', 'prompt', targetPane, text])
+            mark('delivered')
+            job.holds.delete(key)
+            job.failures.delete(key)
+          } catch {
+            if (closed) return
+            const first = job.failures.get(key) ?? Date.now()
+            job.failures.set(key, first)
+            if (Date.now() - first >= 30 * 60_000) { mark('failed'); job.failures.delete(key) }
+            else { mark('retrying'); retry = true }
           }
         }
-        try {
-          await promptPane(['agent', 'prompt', targetPane, text])
-          mark('delivered')
-          job.holds.delete(key)
-          job.failures.delete(key)
-        } catch {
-          if (closed) return
-          const first = job.failures.get(key) ?? Date.now()
-          job.failures.set(key, first)
-          if (Date.now() - first >= 30 * 60_000) { mark('failed'); job.failures.delete(key) }
-          else { mark('retrying'); retry = true }
+        if (comments.length) await send('own', pane, line, (status) => {
+          // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
+          const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
+          emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
+        })
+        for (const note of laneNotes) {
+          let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
+          if (line.length > 700) line = `${cutUnits(line, 699)}…`
+          await send(`lane:${note.id}`, pane, line, (status) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          })
+        }
+        // Approval prompts remain separate, even when other feedback is waiting on the pane.
+        if (!held && !retry) for (const note of approvalNotes) {
+          const approval = scope.approval
+          const alex = `Alex${note.via === 'admin' ? ' in Admin' : note.via === 'voice' ? ' by voice' : ''}`
+          const text = compact(note.text)
+          const atEt = approval.mode === note.event && approval.comment === note.text ? approval.at_et : eastern(note.at)
+          const revision = approval.revision
+          const count = scope.threads.filter((thread) => thread.resolution?.how === 'approve' && thread.resolution.at === approval.at).length
+          const closedLine = count ? ` ${count} open thread${count === 1 ? '' : 's'} closed with your recommendation${count === 1 ? '' : 's'}.` : ''
+          const noteLine = !text ? '' : text.length > 600
+            ? ` Alex's note (long, in full at ${join(root, slug, 'APPROVAL.md')}): "${cutUnits(text, 300)}…"`
+            : ` Alex's note: "${text}"`
+          const line = note.event === 'not_yet'
+            ? `[scoping ${slug}] NOT YET from ${alex} (r${revision})${text.length > 600 ? `.${noteLine}` : `: "${text}"`} Keep scoping; answer it on the doc.`
+            : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
+          await send(`approval:${note.id}`, pane, line, (status) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          })
+          if (held || retry) break
+        }
+        const batches = new Map()
+        for (const target of targets) {
+          if (!batches.has(target.pane)) batches.set(target.pane, [])
+          batches.get(target.pane).push(target)
+        }
+        for (const [targetPane, batch] of batches) {
+          if (closed) break
+          const lines = [], valid = []
+          for (const target of batch) {
+            try {
+              const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
+              const heading = headingFor(target.anchor.section)
+              lines.push(`[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`)
+              valid.push(target)
+            } catch { store.markScopeTarget(target.id, target.pane, 'failed') }
+          }
+          if (!valid.length) continue
+          await send(`target:${targetPane}`, targetPane, lines.join(' | '), (status) => {
+            for (const target of valid) store.markScopeTarget(target.id, target.pane, status)
+          })
+        }
+        if ((retry || held) && !closed) {
+          await new Promise((resolve) => {
+            job.wake = resolve
+            job.timer = setTimeout(resolve, held ? delay(process.env.UNBLOCK_SCOPE_PAUSE_MS, 1500) : delay(process.env.UNBLOCK_SCOPE_RETRY_MS, 5000))
+            job.timer.unref()
+          })
+          job.wake = null
+          job.timer = null
         }
       }
-      if (comments.length) await send('own', pane, line, (status) => {
-        // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
-        const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
-        emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
-      })
-      for (const note of laneNotes) {
-        let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
-        if (line.length > 700) line = `${line.slice(0, 699)}…`
-        await send(`lane:${note.id}`, pane, line, (status) => {
-          if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
-        })
-      }
-      // Approval prompts remain separate, even when other feedback is waiting on the pane.
-      if (!held && !retry) for (const note of approvalNotes) {
-        const approval = scope.approval
-        const alex = `Alex${note.via === 'admin' ? ' in Admin' : note.via === 'voice' ? ' by voice' : ''}`
-        const text = compact(note.text)
-        const atEt = approval.mode === note.event && approval.comment === note.text ? approval.at_et : eastern(note.at)
-        const revision = approval.revision
-        const count = scope.threads.filter((thread) => thread.resolution?.how === 'approve' && thread.resolution.at === approval.at).length
-        const closedLine = count ? ` ${count} open thread${count === 1 ? '' : 's'} closed with your recommendation${count === 1 ? '' : 's'}.` : ''
-        const noteLine = !text ? '' : text.length > 600
-          ? ` Alex's note (long, in full at ${join(root, slug, 'APPROVAL.md')}): "${text.slice(0, 300)}…"`
-          : ` Alex's note: "${text}"`
-        const line = note.event === 'not_yet'
-          ? `[scoping ${slug}] NOT YET from ${alex} (r${revision})${text.length > 600 ? `.${noteLine}` : `: "${text}"`} Keep scoping; answer it on the doc.`
-          : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
-        await send(`approval:${note.id}`, pane, line, (status) => {
-          if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
-        })
-        if (held || retry) break
-      }
-      const batches = new Map()
-      for (const target of targets) {
-        if (!batches.has(target.pane)) batches.set(target.pane, [])
-        batches.get(target.pane).push(target)
-      }
-      for (const [targetPane, batch] of batches) {
-        if (closed) break
-        const pointer = batch.map((target) => {
-          const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
-          const heading = headingOf(scope, target.anchor.section)
-          return `[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`
-        }).join(' | ')
-        await send(`target:${targetPane}`, targetPane, pointer, (status) => {
-          for (const target of batch) store.markScopeTarget(target.id, target.pane, status)
-        })
-      }
-      if ((retry || held) && !closed) {
-        await new Promise((resolve) => {
-          job.wake = resolve
-          job.timer = setTimeout(resolve, held ? delay(process.env.UNBLOCK_SCOPE_PAUSE_MS, 1500) : delay(process.env.UNBLOCK_SCOPE_RETRY_MS, 5000))
-          job.timer.unref()
-        })
-        job.wake = null
-        job.timer = null
-      }
-    }
+    } catch { /* The next note or file change retries delivery. */ }
     delivering.delete(slug)
     if (job.again && !closed) schedule(slug)
   }

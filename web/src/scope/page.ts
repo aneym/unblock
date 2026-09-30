@@ -74,16 +74,8 @@ async function submitApproval() {
     approveDialog.close()
     if (queuedApproval?.timer) clearTimeout(queuedApproval.timer)
     queuedApproval = null
-    if (result.queued === true) {
-      const item: QueuedApproval = { clientId: result.client_id || client_id, mode, comment, failed: false }
-      queuedApproval = item
-      settleQueuedApproval()
-      if (queuedApproval === item) item.timer = window.setTimeout(() => {
-        if (queuedApproval !== item) return
-        item.failed = true; render()
-      }, 30_000)
-      render()
-    } else if (scope && result.approval) { scope.approval = result.approval; render(); publishApproval() }
+    if (result.queued === true) trackQueuedApproval(result.client_id || client_id, mode, comment)
+    else if (scope && result.approval) { scope.approval = result.approval; render(); publishApproval() }
     try { accept(await api(endpoint)) } catch {}
   } catch (error) { $('.error', approveDialog).textContent = error instanceof Error ? error.message : 'Approval failed' }
   finally { approving = false; updateApproveDialog() }
@@ -98,6 +90,17 @@ approveDialog.addEventListener('click', e => {
 approveDialog.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); void submitApproval() } })
 document.addEventListener('click', e => { if ((e.target as HTMLElement).closest('[data-action="approve-scope"]')) openApproveDialog() })
 window.addEventListener('scope:approve-open', openApproveDialog)
+function trackQueuedApproval(clientId: string, mode: string, comment: string) {
+  if (queuedApproval?.timer) clearTimeout(queuedApproval.timer)
+  const item: QueuedApproval = { clientId, mode, comment, failed: false }
+  queuedApproval = item
+  settleQueuedApproval()
+  if (queuedApproval === item) item.timer = window.setTimeout(() => {
+    if (queuedApproval !== item) return
+    item.failed = true; render()
+  }, 30_000)
+  render()
+}
 function settleQueuedApproval() {
   if (!queuedApproval || scope?.approval?.client_id !== queuedApproval.clientId) return
   if (queuedApproval.timer) clearTimeout(queuedApproval.timer)
@@ -578,7 +581,7 @@ function renderFeed() {
 }
 function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }); if (feedRows.length > 50) feedRows.shift(); renderFeed() }
 $('#talk').hidden = boot.voice === false
-$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, body), postApprove: async body => { const result = await api(`${endpoint}/approve`, body); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
+$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, body), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
 function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   scope = payload.scope
