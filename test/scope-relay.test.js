@@ -81,10 +81,16 @@ test('the Admin relay acts as Alex on scopes only, marked in Admin, and never tw
     assert.equal(scope.threads.find((t) => t.id === 'T2').messages.filter((m) => m.kind === 'reject').length, 1)
     assert.equal(scope.threads.find((t) => t.id === 'T4').messages.length, 2)
 
-    // 5. The relay must name each write (client_id: 1–64 of [A-Za-z0-9_-]) and may only say via admin.
+    // 5. The relay must name each write (client_id: 1–64 of [A-Za-z0-9_-]) and may say via admin (the default) or
+    //    via voice (Alex spoke in Admin, pJ0 TO-pHY-9, r30); nothing else.
     assert.equal((await post('/api/scope/demo/threads/T4/reply', { text: 'x' })).status, 400, 'client_id required')
     assert.equal((await post('/api/scope/demo/threads/T4/reply', { text: 'x', client_id: 'bad id!' })).status, 400)
-    assert.equal((await post('/api/scope/demo/threads/T4/reply', { text: 'x', client_id: 'adm-6', via: 'voice' })).status, 400)
+    assert.equal((await post('/api/scope/demo/threads/T4/reply', { text: 'x', client_id: 'adm-6', via: 'page' })).status, 400)
+    const spoken = await post('/api/scope/demo/threads/T4/reply', { text: 'Said out loud.', client_id: 'adm-6v', via: 'voice' })
+    assert.equal(spoken.status, 200, spoken.text)
+    await h.until(() => /Alex \(by voice\) on T4 [^\n]*Said out loud\./.test(paneLines()), 'the pane hears a relayed voice reply as by voice')
+    assert.equal((await get()).threads.find((t) => t.id === 'T4').messages.at(-1).via, 'voice')
+    assert.equal((await get()).threads.find((t) => t.id === 'T4').messages.filter((m) => m.via === 'admin').length, 2, 'relay writes without via (the first comment and the step 4 reply) stay admin')
     // Alex's own page can't claim to be Admin.
     assert.equal((await post('/api/scope/demo/threads/T4/reply', { text: 'x', via: 'admin' }, human)).status, 400)
 

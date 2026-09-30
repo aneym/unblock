@@ -366,10 +366,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
     if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
       || typeof body.body_md !== 'string' || (body.heading !== undefined && typeof body.heading !== 'string'))) return sendJson(res, 400, { error: 'invalid section patch' })
-    if (body.via !== undefined && body.via !== (relay ? 'admin' : 'voice')) return sendJson(res, 400, { error: 'invalid via' })
+    if (body.via !== undefined && !(relay ? ['admin', 'voice'] : ['voice']).includes(body.via)) return sendJson(res, 400, { error: 'invalid via' })
     if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
-    if (relay) body.via = 'admin'
+    if (relay && body.via === undefined) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
     const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
