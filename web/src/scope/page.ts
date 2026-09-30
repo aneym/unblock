@@ -20,6 +20,7 @@ const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZon
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
 let showResolved = storage.get('scope:showResolved') === 'true'
 let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
+let selectionRange: Range | null = null, selectionScrolling = false
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
@@ -422,13 +423,26 @@ function layout() {
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
     if (queued?.anchor?.general || n.classList.contains('composer') && composing?.general) return 8
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
-    return Math.max(8, (n.classList.contains('composer') ? selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
+    const composerRange = n.classList.contains('composer') && composing && rangeFromAnchor(composing)?.range
+    return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
-  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
-  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
-  if (top[0] < 8) { const shift = 8 - top[0]; top.forEach((_, i) => top[i] += shift) }
+  if (composing && !composing.general) {
+    const below: number[] = []
+    let above = top[pivot], bottom = top[pivot] + heights[pivot] + 10
+    for (let i = pivot - 1; i >= 0; i--) {
+      const candidate = Math.min(want[i], above - heights[i] - 10)
+      if (candidate < 8) below.unshift(i)
+      else { top[i] = candidate; above = candidate }
+    }
+    below.push(...nodes.map((_, i) => i).slice(pivot + 1))
+    for (const i of below) { top[i] = Math.max(want[i], bottom); bottom = top[i] + heights[i] + 10 }
+  } else {
+    for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
+    for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
+    if (top[0] < 8) { const shift = 8 - top[0]; top.forEach((_, i) => top[i] += shift) }
+  }
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0
   cards.style.height = `${height}px`; showSelection()
@@ -487,19 +501,53 @@ function renderSheet() {
   else sheet.replaceChildren(...fresh.childNodes)
 }
 function closeSheet() { document.body.classList.remove('sheet-open') }
+function docSelection() {
+  const sel = getSelection()
+  if (!sel?.rangeCount || sel.isCollapsed) return null
+  const range = sel.getRangeAt(0)
+  if (!doc.contains(range.startContainer) || !doc.contains(range.endContainer)) return null
+  const anchor = anchorFromRange(range)
+  return anchor ? { range, anchor } : null
+}
 function showSelection() {
   document.querySelector('[data-action="comment"]')?.remove()
-  if (!selection || composing) return
+  if (!selection || composing || selectionScrolling) return
+  const range = selectionRange?.startContainer.isConnected ? selectionRange : rangeFromAnchor(selection)?.range
+  const rect = range && [...range.getClientRects()].filter(r => r.width > 0).at(-1)
+  if (!rect) return
   const button = document.createElement('button'); button.className = 'add'; button.dataset.action = 'comment'; button.textContent = 'Comment'
-  if (phone()) { button.style.top = `${Math.max(56, selectionTop - scrollY - 40)}px`; button.style.left = '16px'; document.body.append(button) }
-  else { button.style.top = `${selectionTop - scrollY - cards.getBoundingClientRect().top - 4}px`; cards.append(button) }
+  document.body.append(button)
+  const width = button.offsetWidth, height = button.offsetHeight
+  const top = rect.bottom + 6 + height > innerHeight - 8 ? rect.top - height - 6 : rect.bottom + 6
+  button.style.top = `${Math.max(8, Math.min(top, innerHeight - height - 8))}px`
+  button.style.left = `${Math.max(8, Math.min(rect.right - width / 2, innerWidth - width - 8))}px`
 }
 function readSelection() {
   if (!zoom.hidden) return
-  const sel = getSelection(); if (!sel?.rangeCount || sel.isCollapsed) { if (!document.activeElement?.closest('.card,.add')) { selection = null; showSelection() } return }
-  const range = sel.getRangeAt(0), anchor = anchorFromRange(range)
-  if (anchor) { selection = anchor; selectionTop = range.getBoundingClientRect().top + scrollY; showSelection() }
+  const selected = docSelection()
+  if (selected) { selection = selected.anchor; selectionRange = selected.range.cloneRange(); selectionTop = selected.range.getBoundingClientRect().top + scrollY; showSelection() }
+  else if (!document.activeElement?.closest('.card,.add')) { selection = null; selectionRange = null; showSelection() }
 }
+function openSelectionComment(anchor = selection, range = selectionRange) {
+  if (!anchor) return
+  selection = anchor; selectionRange = range?.cloneRange() || null
+  if (range) selectionTop = range.getBoundingClientRect().top + scrollY
+  composing = anchor; renderCards(); showSelection()
+  $('.composer textarea', phone() ? sheet : cards).focus({ preventScroll: true })
+}
+doc.addEventListener('contextmenu', e => {
+  if (phone() || !zoom.hidden) return
+  const selected = docSelection()
+  if (!selected || ![...selected.range.getClientRects()].some(rect => rect.width > 0 && e.clientX >= rect.left - 2 && e.clientX <= rect.right + 2 && e.clientY >= rect.top - 2 && e.clientY <= rect.bottom + 2)) return
+  e.preventDefault(); openSelectionComment(selected.anchor, selected.range)
+})
+document.addEventListener('keydown', e => {
+  const modifier = /Mac|iPhone|iPad/.test(navigator.platform) ? e.metaKey : e.ctrlKey
+  if (!zoom.hidden || e.isComposing || e.code !== 'KeyM' || !modifier || !(e.altKey || e.shiftKey) || (e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return
+  const selected = docSelection()
+  if (!selected) return
+  e.preventDefault(); openSelectionComment(selected.anchor, selected.range)
+})
 function openGeneralComment() {
   const quote = scope?.doc.sections.find(s => s.id === 'title')?.heading.trim().slice(0, 300)
   if (!quote) return
@@ -531,7 +579,7 @@ function renderComposer() {
 }
 async function action(name: string, target: HTMLElement) {
   if (name === 'general-comment') { openGeneralComment(); return }
-  if (name === 'comment') { composing = selection; renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return }
+  if (name === 'comment') { openSelectionComment(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
   if (pending.has(key) || sending.has(key)) return
   const text = getDraft(key).trim()
@@ -657,7 +705,7 @@ $('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focus
 $('#scrim').onclick = closeSheet
 $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
-addEventListener('resize', layout); document.fonts.ready.then(layout)
+addEventListener('resize', () => { layout(); showSelection() }); document.fonts.ready.then(layout)
 let docWidth = doc.getBoundingClientRect().width, layoutFrame = 0
 new ResizeObserver(() => {
   const width = doc.getBoundingClientRect().width
@@ -666,7 +714,7 @@ new ResizeObserver(() => {
   cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layout)
 }).observe(doc)
 let scrollTimer = 0
-addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; if (focused && threadOnScreen(focused)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 180) })
+addEventListener('scroll', () => { selectionScrolling = true; showSelection(); clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { selectionScrolling = false; if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; if (focused && threadOnScreen(focused)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 150) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 const feedRows: (ScopeFeedLine & { at: Date })[] = []

@@ -206,7 +206,7 @@ details.why p { margin-top: 6px; color: var(--tx2); font-size: 13px; }
 .settled { font-size: 13.5px; }
 .settled b { font-weight: 650; }
 .settled .wait { display: block; color: var(--tx2); font-size: 12.5px; margin-top: 2px; }
-.add { position: absolute; right: 0; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 10px;
+.add { position: fixed; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 10px;
   border-radius: var(--radius-pill); background: var(--raised); border: 1px solid var(--line); box-shadow: var(--shadow-2); font-size: 13.5px; font-weight: 600; }
 
 /* phone */
@@ -243,7 +243,7 @@ details.why p { margin-top: 6px; color: var(--tx2); font-size: 13px; }
 svg .ac { fill:var(--ac); } svg .muted { fill:var(--tx2); } svg .ok { fill:var(--success); } svg .warn { fill:var(--warning); } marker path { fill:var(--control); }
 .callout { padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--accent-soft); } .callout.warning { background:color-mix(in srgb,var(--warning) 10%,var(--page)); } .callout.tip { background:color-mix(in srgb,var(--success) 10%,var(--page)); }
 .doc .body { display:grid; gap:14px; } .doc table { border-collapse:collapse; width:100%; font-size:14px; } td,th { border:1px solid var(--line); padding:8px; text-align:left; overflow-wrap:anywhere; } pre { white-space:pre-wrap; overflow-wrap:anywhere; } .error { color:var(--danger); } #detached { position:relative; font-size:13px; color:var(--tx2); } #detached .card { position:relative; margin-top:10px; } .add { z-index:6; } .live { font-size:12px; color:var(--tx2); } .delivery { font-size:12px; color:var(--tx2); } .index-row { display:block; color:var(--tx); padding:16px; border-bottom:1px solid var(--line); }
-@media(max-width:899px){ .add { position:fixed; right:auto; z-index:25; } }
+@media(max-width:899px){ .add { z-index:25; } }
 .mermaid svg .node rect, .mermaid svg .node circle, .mermaid svg .node polygon, .mermaid svg .node path { fill:var(--surface); stroke:var(--hairline); }
 .mermaid svg .edgePath path, .mermaid svg .flowchart-link { stroke:var(--control); fill:none; }
 .mermaid svg .nodeLabel, .mermaid svg .edgeLabel { color:var(--ink); fill:var(--ink); }
