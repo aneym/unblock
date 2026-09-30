@@ -536,7 +536,8 @@ async function scope(args) {
     let section
     try {
       const raw = readFileSync(opts['--from'], 'utf8').trim()
-      const heading = raw.match(/^#{1,3}[ \t]+(.+?)(?:[ \t]+\{#[^}]+\})?[ \t]*(?:\r?\n|$)/)
+      const heading = raw.match(/^#{1,3}[ \t]+(.+?)(?:[ \t]+\{#([^}]+)\})?[ \t]*(?:\r?\n|$)/)
+      if (heading?.[2] && heading[2] !== extra[0]) fail(`${opts['--from']} is headed {#${heading[2]}}, which names §${heading[2]}, not §${extra[0]}. Fix the id or patch §${heading[2]}.`, 1)
       section = { body_md: (heading ? raw.slice(heading[0].length) : raw).trim(), ...(heading ? { heading: heading[1] } : {}) }
       await uploadDocImages(name, [section], opts['--from'])
     } catch (error) { fail(error.message, 1) }

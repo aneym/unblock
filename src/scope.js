@@ -114,13 +114,15 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       let notes = store.pendingScopeNotes(slug)
       const targets = store.pendingScopeTargets(slug)
       if (!notes.length && !targets.length) break
-      const pane = readScope(slug)?.scope?.pane
+      const scope = readScope(slug)?.scope
+      const approvalUnavailable = !scope?.approval && notes.some((note) => APPROVAL_MODES.includes(note.event))
+      if (approvalUnavailable) notes = notes.filter((note) => !APPROVAL_MODES.includes(note.event))
+      const pane = scope?.pane
       if (typeof pane !== 'string' || !PANE.test(pane)) {
         emitNotes(store.markScopeNotes(notes.map((note) => note.id), 'no_pane'))
         notes = []
-        if (!targets.length) { job.again = false; break }
+        if (!targets.length && !approvalUnavailable) { job.again = false; break }
       }
-      const scope = readScope(slug)?.scope
       const laneNotes = notes.filter(note => note.event === 'lane_note')
       const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
       const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
@@ -143,7 +145,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }).join(' | ')
       let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
       if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
-      let retry = false, held = false
+      let retry = approvalUnavailable, held = false
       async function send(key, targetPane, text, mark) {
         let status
         try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
@@ -176,9 +178,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
         emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
       })
-      for (const note of laneNotes) await send(`lane:${note.id}`, pane, `[scoping ${slug}] Note from Alex's voice call (not a comment): ${note.text}`, (status) => {
-        if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
-      })
+      for (const note of laneNotes) {
+        let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
+        if (line.length > 700) line = `${line.slice(0, 699)}…`
+        await send(`lane:${note.id}`, pane, line, (status) => {
+          if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+        })
+      }
       // Approval prompts remain separate, even when other feedback is waiting on the pane.
       if (!held && !retry) for (const note of approvalNotes) {
         const approval = scope.approval
@@ -270,7 +276,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       try { brief = readFileSync(join(root, slug, 'BRIEF.md'), 'utf8').slice(0, 6000) } catch { /* No brief yet. */ }
       const words = (url.searchParams.get('q') || '').split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}-]/gu, '')).filter(Boolean).slice(0, 8)
       const said = await new Promise(resolve => {
-        execFile(process.env.UNBLOCK_ALEX_SAID || join(homedir(), '.local', 'bin', 'alex-said'), [...words, '--json', '--limit', '3', '--no-refresh'], { timeout: 2000 }, (error, stdout) => {
+        execFile(process.env.UNBLOCK_ALEX_SAID || join(homedir(), '.local', 'bin', 'alex-said'), ['--json', '--limit', '3', '--no-refresh', '--', ...words], { timeout: 2000 }, (error, stdout) => {
           if (error) return resolve([])
           try {
             const rows = JSON.parse(stdout)
