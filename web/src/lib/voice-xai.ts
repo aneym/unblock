@@ -34,7 +34,7 @@ export function connectXai(token: VoiceSessionToken, callbacks: VoiceAdapterCall
         sendToolResults: (results) => {
           for (const result of results) send({ type: 'conversation.item.create', item: {
             type: 'function_call_output', call_id: result.id,
-            output: JSON.stringify({ ok: result.ok, speech: result.speech }),
+            output: JSON.stringify({ ok: result.ok, speech: result.speech, ...(result.context !== undefined ? { context: result.context } : {}) }),
           } })
         },
         close: () => { closed = true; socket.close() },

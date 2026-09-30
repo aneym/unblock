@@ -41,8 +41,9 @@ export type ScopeVoiceUi =
 
 export interface ScopeToolResult {
   ok: boolean
-  /** Said as-is. Only { ok, speech } goes back to the model. */
+  /** Said as-is; explain instead returns grounding context for the model. */
   speech: string
+  context?: string
   ui?: ScopeVoiceUi
 }
 
@@ -74,6 +75,8 @@ export interface ScopeFeedLine {
 }
 
 export interface ScopeVoiceDeps {
+  fetchContext?(question: string): Promise<{ brief: string; said: { at_et: string; source: string; text: string }[] }>
+  postLaneNote(body: { text: string; via: 'voice' }): Promise<unknown>
   /** Optional: receives one feed line per tool call (see ScopeFeedLine). Never affects the tool result, even if it throws. */
   onFeed?(line: ScopeFeedLine): void
   /** Optional: the provider this call runs on, once known. Speaking speed works only on 'xai'. */

@@ -38,7 +38,7 @@ export async function connectGemini(token: VoiceSessionToken, callbacks: VoiceAd
     sendAudio: (audio) => live.sendRealtimeInput({ audio: { data: audio, mimeType: 'audio/pcm;rate=16000' } }),
     sendToolResults: (results) => {
       for (const result of results) live.sendToolResponse({ functionResponses: [{
-        id: result.id, name: result.name, response: { ok: result.ok, speech: result.speech },
+        id: result.id, name: result.name, response: { ok: result.ok, speech: result.speech, ...(result.context !== undefined ? { context: result.context } : {}) },
       }] })
     },
     close: () => live.close(),

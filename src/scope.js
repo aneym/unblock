@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, statSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -117,7 +118,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (!targets.length) { job.again = false; break }
       }
       const scope = readScope(slug)?.scope
-      const joined = notes.map((note) => {
+      const laneNotes = notes.filter(note => note.event === 'lane_note')
+      const comments = notes.filter(note => note.event !== 'lane_note')
+      const joined = comments.map((note) => {
         const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
         const heading = headingOf(scope, note.anchor?.section ?? 'title')
         const quote = quoteSnippet(note.anchor?.quote ?? '')
@@ -164,10 +167,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           else { mark('retrying'); retry = true }
         }
       }
-      if (notes.length) await send('own', pane, line, (status) => {
+      if (comments.length) await send('own', pane, line, (status) => {
         // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
-        const ids = notes.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
+        const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
         emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
+      })
+      for (const note of laneNotes) await send(`lane:${note.id}`, pane, `[scoping ${slug}] Note from Alex's voice call (not a comment): ${note.text}`, (status) => {
+        if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
       })
       const batches = new Map()
       for (const target of targets) {
@@ -234,6 +240,31 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (!SLUG.test(slug)) return sendJson(res, 404, { error: 'no such scope' })
     const state = readScope(slug)
     if (!state) return sendJson(res, 404, { error: 'no such scope' })
+    if (req.method === 'GET' && parts.length === 2 && action === 'context') {
+      requireHumanPath(req)
+      let brief = ''
+      try { brief = readFileSync(join(root, slug, 'BRIEF.md'), 'utf8').slice(0, 6000) } catch { /* No brief yet. */ }
+      const words = (url.searchParams.get('q') || '').split(/\s+/).map(word => word.replace(/[^\p{L}\p{N}-]/gu, '')).filter(Boolean).slice(0, 8)
+      const said = await new Promise(resolve => {
+        execFile(process.env.UNBLOCK_ALEX_SAID || join(homedir(), '.local', 'bin', 'alex-said'), [...words, '--json', '--limit', '3', '--no-refresh'], { timeout: 2000 }, (error, stdout) => {
+          if (error) return resolve([])
+          try {
+            const rows = JSON.parse(stdout)
+            resolve(Array.isArray(rows) ? rows.slice(0, 3).map(row => ({ at_et: String(row.at_et || ''), source: String(row.source || ''), text: String(row.text || '').slice(0, 400) })) : [])
+          } catch { resolve([]) }
+        })
+      })
+      return sendJson(res, 200, { brief, said })
+    }
+    if (req.method === 'POST' && parts.length === 2 && action === 'lane-note') {
+      requireHumanPath(req)
+      const body = await readJson(req)
+      if (!body || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 1000 || (body.via !== undefined && body.via !== 'voice')) return sendJson(res, 400, { error: 'invalid lane note' })
+      const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'lane_note', text: body.text, who: proxyIdentity(req).login, via: 'voice' })
+      emit(slug, 'note', note)
+      schedule(slug)
+      return sendJson(res, 200, { note })
+    }
     if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, notes: store.scopeNotes(slug) })
     if (req.method === 'GET' && parts.length === 2 && action === 'events') return watch(slug, req, res)
     if (req.method === 'GET' && parts.length === 2 && action === 'notes') {

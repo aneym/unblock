@@ -11,21 +11,28 @@ export const SCOPE_VOICE_TOOLS = [
   { name: 'go_to_section', description: 'Move to a section named by its heading or id.', parameters: object({ name: string }, ['name']) },
   { name: 'show_resolved', description: 'Show or hide resolved threads when asked.', parameters: object({ on: { type: 'BOOLEAN' } }, ['on']) },
   { name: 'scroll', description: 'Scroll the document up or down when asked.', parameters: object({ direction: { type: 'STRING', enum: ['up', 'down'] } }, ['direction']) },
-  { name: 'answer', description: 'What he says while a question or comment is focused, in his own words, filler removed.', parameters: object({ text: string }, ['text']) },
+  { name: 'explain', description: 'Answer a question about what something means, why, how it works or the options. Reads context only; never writes.', parameters: object({ question: string }, ['question']) },
+  { name: 'note_lane', description: 'Leave a quiet clarification note for the lane, never a comment from Alex.', parameters: object({ text: string }, ['text']) },
+  { name: 'answer', description: 'His answer, decision or feedback on the focused thread, in his own words, filler removed. Never a question to you.', parameters: object({ text: string }, ['text']) },
   { name: 'take_recommendation', description: 'When he says take the recommendation or go with yours.', parameters: object({}) },
   { name: 'reject', description: 'When he says no, try again, or give me options about the recommendation.', parameters: object({ reason: string }) },
   { name: 'park', description: 'When he says not now about the focused question.', parameters: object({}) },
   { name: 'confirm', description: 'When he says yes to the proposed answer.', parameters: object({}) },
   { name: 'cancel', description: 'When he says no to the proposed answer.', parameters: object({}) },
   { name: 'resolve', description: 'When asked to resolve this, propose a decision or confirm the pending one.', parameters: object({ decision: string }) },
-  { name: 'comment', description: 'When he says comment on this or note that, post his words on the selection or section.', parameters: object({ text: string }, ['text']) },
+  { name: 'comment', description: 'Feedback he wants on the doc, or his yes to Want me to note that on the doc? Post on the selection or section.', parameters: object({ text: string }, ['text']) },
   { name: 'reply', description: 'Send his reply to the focused thread.', parameters: object({ text: string }, ['text']) },
   { name: 'set_speed', description: 'Change speaking speed immediately, without a read-back.', parameters: object({ speed: { type: 'NUMBER', description: 'Speaking speed multiplier, from 0.7 to 1.5.' }, change: { type: 'STRING', enum: ['faster', 'slower', 'normal'] } }) },
   { name: 'end_call', description: 'Finish the voice call when asked.', parameters: object({}) },
 ]
 
 export const SCOPE_VOICE_KICKOFF = 'The call has started. Say "Ready." and nothing else, then wait for him.'
-export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc. A lane, an AI agent, wrote the doc and left questions in its margin; he reads it on screen and leads. You say only short acknowledgements and the speech your tools return; never summarize, list questions, or explain unless he asks. Whatever he says while a question is focused is his answer: call answer with his words, then say the confirm line it returns and wait; when he says yes, call confirm; when he says no to the confirm line or changes it, call cancel or answer again. "Take the recommendation" or "go with yours" means take_recommendation. "No", "I hate it", "try again" or "give me options" about the recommendation means reject, with his reason if he gave one. "Do X instead" is his own answer: call answer. "Not now" means park. On a focused comment, what he says is a reply: call answer. "Next" or "what's next" means next_question; "back" or "previous" means previous_question; "read it" means read_thread. He can move the page: next_section, previous_section, go_to_section, scroll, show_resolved. "Comment on this" or "note that" means comment. "Resolve this" means resolve. "Faster", "slower", "normal speed" or a number means set_speed at once, with no read-back. Say tool speech as given. Never read ids, links or tool names aloud, and never announce a tool call. If a tool fails, say its speech once and wait. After end_call, say nothing more. Keep your own words under twelve.`
+export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc written by a lane (an AI agent). Alex leads. Route intent, not focus.
+Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. Then ask once: "Want me to note that on the doc?" Call comment only on yes; no thanks writes nothing. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
+Feedback, decisions and answers to the doc's questions: answer on the focused thread (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
+Unclear intent: ask exactly "Want that as a comment, or just an answer?" Write nothing.
+"Next" or "what's next": next_question; "back" or "previous": previous_question; "read it": read_thread. Navigate with next_section, previous_section, go_to_section, scroll, show_resolved.
+"Faster", "slower", "normal speed" or a speed number: set_speed at once, no read-back. Say tool speech as given, except explain supplies context for your spoken answer. Never read ids, links or tool names aloud or announce tool calls. On failure, say its speech once and wait. After end_call say nothing. Keep your own words under twelve, except spoken explanations.`
 
 const clean = (value, stripIdentifiers = true) => {
   let text = String(value ?? '').replace(/https?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|ai|dev|app|so|co|sh|me|us|uk)\b(?::\d+)?(?:\/\S*)?/gi, 'a link').replace(/\bT\d+\b/g, '')
@@ -79,6 +86,36 @@ export function createScopeVoiceSession(deps) {
             if (!thread) return fail('Which one? Say next question.')
             if (thread.kind === 'comment') return send(() => deps.postReply(thread.id, { text, via: 'voice' }), 'Sent.')
             return propose(text)
+          }
+          if (name === 'explain') {
+            const question = textOf(args.question)
+            if (!question) return fail("I didn't catch that.")
+            const briefThread = (item) => [
+              `Thread (${item.kind}, ${item.status}): ${item.messages[0]?.text || ''}`,
+              item.recommendation && `Recommendation: ${item.recommendation}`,
+              item.options?.length && `Options: ${item.options.join('; ')}`,
+              item.why && `Why: ${item.why}`,
+              ...item.messages.slice(-2).map(message => `${message.from}: ${message.text}`),
+            ].filter(Boolean).join('\n')
+            const parts = [thread && `Focused thread:\n${briefThread(thread)}`,
+              ...sections.map(section => `${section.heading}\n${section.body_md.replace(/^[ \t]*```[^\n]*\n[\s\S]*?(?:^[ \t]*```[^\n]*(?:\n|$)|$(?![\s\S]))/gm, '')}`),
+              ...scope.threads.map(briefThread)].filter(Boolean)
+            let timer
+            try {
+              const extra = await Promise.race([
+                Promise.resolve().then(() => deps.fetchContext?.(question)),
+                new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000) }),
+              ])
+              if (extra?.brief) parts.push(`BRIEF: ${extra.brief}`)
+              if (extra?.said?.length) parts.push(`Alex said:\n${extra.said.map(item => `${item.at_et} (${item.source}): ${item.text}`).join('\n')}`)
+            } catch { /* Extra context is best-effort; the doc is still available. */ }
+            finally { clearTimeout(timer) }
+            return { ok: true, speech: '', context: parts.join('\n\n').slice(0, 12000) }
+          }
+          if (name === 'note_lane') {
+            const text = textOf(args.text)
+            if (!text) return fail("I didn't catch that.")
+            return send(() => deps.postLaneNote({ text, via: 'voice' }), 'Noted for the lane.')
           }
           if (name === 'set_speed') {
             if (deps.getProvider?.() === 'gemini') return fail('I can only change speed on Grok.')
@@ -182,6 +219,8 @@ export function createScopeVoiceSession(deps) {
       else if (name === 'show_resolved') label = args.on ? 'Showing resolved' : 'Hiding resolved'
       else if (name === 'scroll') label = `Scrolled ${args.direction}`
       else if (name === 'end_call') label = 'Ended the call'
+      else if (name === 'explain') label = `Answered: "${quote(args.question)}"`
+      else if (name === 'note_lane') label = 'Noted for the lane'
       else {
         id = postedThread || (name === 'confirm' || name === 'cancel' || name === 'resolve' && proposal ? proposal?.thread : thread?.id)
         if (name === 'read_thread') label = `Read ${id} aloud`

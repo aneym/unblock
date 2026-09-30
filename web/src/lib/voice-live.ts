@@ -15,7 +15,7 @@ export interface VoiceAdapter {
   sampleRate: 16000 | 24000
   sendAudio(audio: string): void
   setSpeed?(v: number): void
-  sendToolResults(results: { id: string; name: string; ok: boolean; speech: string }[]): void
+  sendToolResults(results: { id: string; name: string; ok: boolean; speech: string; context?: string }[]): void
   close(): void
 }
 export interface VoiceAdapterCallbacks {
@@ -34,7 +34,7 @@ export interface VoiceProfile {
   kickoff?: string
   prompt: string
   tools: VoiceToolDeclaration[]
-  rules: { handle(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; speech: string; ui?: any; changed?: boolean }> }
+  rules: { handle(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; speech: string; context?: string; ui?: any; changed?: boolean }> }
   session?: Record<string, unknown>
 }
 
@@ -185,7 +185,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
           }
           if (result.changed) onChanged()
           if (call.id && cancelledCalls.has(call.id)) continue
-          live?.sendToolResults([{ id: call.id, name: call.name, ok: result.ok, speech: result.speech }])
+          live?.sendToolResults([{ id: call.id, name: call.name, ok: result.ok, speech: result.speech, ...(result.context !== undefined ? { context: result.context } : {}) }])
         }
         toolResponsesPending--
         if (!toolResponsesPending && toolTurn && (endingTurn === undefined || toolTurn >= endingTurn)) afterPlayback(toolTurn, true)

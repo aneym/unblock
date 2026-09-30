@@ -134,7 +134,7 @@ test('scoping token pins the scoping prompt and tools', async () => {
   })
   assert.equal(setup.systemInstruction.parts[0].text, SCOPE_VOICE_PROMPT)
   assert.deepEqual(setup.tools[0].functionDeclarations.map((tool) => tool.name),
-    ['next_question', 'previous_question', 'read_thread', 'next_section', 'previous_section', 'go_to_section', 'show_resolved', 'scroll', 'answer', 'take_recommendation', 'reject', 'park', 'confirm', 'cancel', 'resolve', 'comment', 'reply', 'set_speed', 'end_call'])
+    ['next_question', 'previous_question', 'read_thread', 'next_section', 'previous_section', 'go_to_section', 'show_resolved', 'scroll', 'explain', 'note_lane', 'answer', 'take_recommendation', 'reject', 'park', 'confirm', 'cancel', 'resolve', 'comment', 'reply', 'set_speed', 'end_call'])
   assert.ok(setup.tools[0].functionDeclarations.every((tool) => tool.behavior === 'NON_BLOCKING'))
 })
 
