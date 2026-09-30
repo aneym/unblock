@@ -85,7 +85,7 @@ test('the prompt and tools put intent first', () => {
   for (const name of ['explain', 'note_lane', 'comment', 'reply', 'answer', 'set_speed']) assert.ok(names.includes(name), name)
   const explain = SCOPE_VOICE_TOOLS.find((tool) => tool.name === 'explain')
   assert.deepEqual(explain.parameters.required, ['question'])
-  for (const line of ['Want that as a comment, or just an answer?', 'Want me to note that on the doc?', "I don't know from the doc"]) assert.ok(SCOPE_VOICE_PROMPT.includes(line), line)
+  for (const line of ['Want that as a comment, or just an answer?', "I don't know from the doc"]) assert.ok(SCOPE_VOICE_PROMPT.includes(line), line)
   assert.match(SCOPE_VOICE_PROMPT, /explain/)
   assert.doesNotMatch(SCOPE_VOICE_PROMPT, /Whatever he says while a question is focused is his answer/, 'a focused thread no longer makes every sentence an answer')
   assert.match(SCOPE_VOICE_PROMPT, /set_speed/, 'the speed rule stays')

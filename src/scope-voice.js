@@ -20,16 +20,17 @@ export const SCOPE_VOICE_TOOLS = [
   { name: 'confirm', description: 'When he says yes to the proposed answer.', parameters: object({}) },
   { name: 'cancel', description: 'When he says no to the proposed answer.', parameters: object({}) },
   { name: 'resolve', description: 'When asked to resolve this, propose a decision or confirm the pending one.', parameters: object({ decision: string }) },
-  { name: 'comment', description: 'Feedback he wants on the doc, or his yes to Want me to note that on the doc? Post on the selection or section.', parameters: object({ text: string }, ['text']) },
-  { name: 'reply', description: 'Send his reply to the focused thread.', parameters: object({ text: string }, ['text']) },
+  { name: 'comment', description: 'Propose a comment on the selection or section in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
+  { name: 'reply', description: 'Propose a reply to the focused thread in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
   { name: 'set_speed', description: 'Change speaking speed immediately, without a read-back.', parameters: object({ speed: { type: 'NUMBER', description: 'Speaking speed multiplier, from 0.7 to 1.5.' }, change: { type: 'STRING', enum: ['faster', 'slower', 'normal'] } }) },
   { name: 'end_call', description: 'Finish the voice call when asked.', parameters: object({}) },
 ]
 
 export const SCOPE_VOICE_KICKOFF = 'The call has started. Say "Ready." and nothing else, then wait for him.'
 export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc written by a lane (an AI agent). Alex leads. Route intent, not focus.
-Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. Then ask once: "Want me to note that on the doc?" Call comment only on yes; no thanks writes nothing. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
+Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. If the point is worth keeping on the doc, call comment: its read-back is the offer. Otherwise stop. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
 Feedback, decisions and answers to the doc's questions: answer on the focused thread (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
+Wait until he finishes a thought before calling a writing tool. Pass his own words; never paraphrase. Comment and reply read back; wait for his yes, then call confirm.
 Unclear intent: ask exactly "Want that as a comment, or just an answer?" Write nothing.
 "Next" or "what's next": next_question; "back" or "previous": previous_question; "read it": read_thread. Navigate with next_section, previous_section, go_to_section, scroll, show_resolved.
 "Faster", "slower", "normal speed" or a speed number: set_speed at once, no read-back. Say tool speech as given, except explain supplies context for your spoken answer. Never read ids, links or tool names aloud or announce tool calls. On failure, say its speech once and wait. After end_call say nothing. Keep your own words under twelve, except spoken explanations.`
@@ -48,13 +49,35 @@ const result = (speech, ui) => ({ ok: true, speech: clean(speech), ...(ui ? { ui
 const fail = (speech) => ({ ok: false, speech: clean(speech) })
 const textOf = (value) => typeof value === 'string' ? value.trim() : ''
 
+const words = (value) => {
+  let text = textOf(value).replace(/\b(?:um|uh|erm|er|uhm|hmm)(?=[,.?!\s]|$),?/gi, '').trim()
+  while (/^(?:(?:so|yeah|okay|ok|well|you know|I mean)(?=[,.?!\s]|$)|(?:like|right)(?=,)),?\s*/i.test(text)) text = text.replace(/^(?:(?:so|yeah|okay|ok|well|you know|I mean)(?=[,.?!\s]|$)|(?:like|right)(?=,)),?\s*/i, '')
+  text = text.replace(/\b(\w+)(?:\s+\1\b)+/gi, '$1').replace(/\s+/g, ' ').trim()
+  return text ? text[0].toUpperCase() + text.slice(1) + (/[.?!]$/.test(text) ? '' : '.') : ''
+}
+const unfinished = (text) => /(?:…\.?|\.\.\.|[,—-]\.?)$/.test(text) || !/[?!]$/.test(text) && /\b(?:a|an|the|and|or|but|to|of|on|in|at|for|with|about|from|by|into|than|because|if|like|as|my|your|our|their)\.?$/i.test(text)
+const norm = (text) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean).join(' ')
+const filingQuote = (text, limit = 10) => { const parts = text.split(/\s+/); return parts.slice(0, limit).join(' ') + (parts.length > limit ? '…' : '') }
+
 export function createScopeVoiceSession(deps) {
   let pending = null
+  let filed = []
+  const now = () => deps.now?.() ?? Date.now()
+  const duplicate = (pool, text) => {
+    const at = now(), next = new Set(norm(text).split(' '))
+    filed = filed.filter(item => at - item.at <= 10000)
+    return filed.some(item => {
+      if (item.pool !== pool) return false
+      const prior = new Set(item.norm.split(' ')), union = new Set([...prior, ...next])
+      const intersection = [...next].filter(word => prior.has(word)).length
+      return union.size > 0 && intersection / union.size >= 0.75
+    })
+  }
   return {
     async handle(name, args = {}) {
       const proposal = pending
       if (name !== 'confirm' && name !== 'set_speed') pending = null
-      let scope, context, thread, postedThread, wrote = false
+      let scope, context, thread, postedThread, filingLabel, filingThread, wrote = false
       const run = async () => {
         try {
           ;({ scope } = await deps.getScope())
@@ -65,10 +88,34 @@ export function createScopeVoiceSession(deps) {
             try { const posted = await post(); postedThread = posted?.thread?.id; wrote = true; return result(speech) }
             catch (error) { return fail(`That didn't send: ${cut(error?.message || 'Please try again', 9)}`) }
           }
+          const already = (pool, text, id) => {
+            filingLabel = `Already filed: "${filingQuote(text)}"`
+            filingThread = id
+            return result(pool === 'doc' ? 'Already on the doc.' : 'Already noted.')
+          }
+          const file = async (pool, text, id, post, speech) => {
+            if (duplicate(pool, text)) return already(pool, text, id)
+            const sent = await send(post, speech)
+            if (sent.ok) filed.push({ pool, ...(id || postedThread ? { thread: id || postedThread } : {}), norm: norm(text), at: now() })
+            return sent
+          }
+          const proposeFiling = (kind, text, target) => {
+            text = words(text)
+            if (!text) return fail("I didn't catch that.")
+            if (unfinished(text)) { filingLabel = 'Waiting for the rest'; return fail('Go on.') }
+            if (duplicate('doc', text)) return already('doc', text, kind === 'reply' ? target : undefined)
+            pending = { kind, text, ...(kind === 'reply' ? { thread: target } : { anchor: target }) }
+            filingThread = pending.thread
+            filingLabel = kind === 'comment' ? `Proposed comment: "${filingQuote(text)}"` : `Proposed reply on ${target}: "${filingQuote(text)}"`
+            return { ok: true, speech: `${kind === 'comment' ? 'Comment' : 'Reply'}: "${filingQuote(text, 20)}" ${kind === 'comment' ? 'File it?' : 'Send it?'}` }
+          }
           const confirm = async () => {
             if (!proposal) return fail('Nothing to confirm.')
             pending = proposal
-            const sent = await send(() => deps.postResolve(proposal.thread, { decision: proposal.text, alex_words: proposal.text, how: proposal.how, via: 'voice' }), 'Resolved.')
+            let sent
+            if (proposal.kind === 'comment') sent = await file('doc', proposal.text, undefined, () => deps.postThread({ anchor: proposal.anchor, text: proposal.text, via: 'voice' }), 'Posted.')
+            else if (proposal.kind === 'reply') sent = await file('doc', proposal.text, proposal.thread, () => deps.postReply(proposal.thread, { text: proposal.text, via: 'voice' }), 'Sent.')
+            else sent = await send(() => deps.postResolve(proposal.thread, { decision: proposal.text, alex_words: proposal.text, how: proposal.how, via: 'voice' }), 'Resolved.')
             if (sent.ok) pending = null
             return sent
           }
@@ -84,7 +131,7 @@ export function createScopeVoiceSession(deps) {
           const answer = (text) => {
             if (!text) return fail("I didn't catch that.")
             if (!thread) return fail('Which one? Say next question.')
-            if (thread.kind === 'comment') return send(() => deps.postReply(thread.id, { text, via: 'voice' }), 'Sent.')
+            if (thread.kind === 'comment') return proposeFiling('reply', text, thread.id)
             return propose(text)
           }
           if (name === 'explain') {
@@ -113,19 +160,19 @@ export function createScopeVoiceSession(deps) {
             return { ok: true, speech: '', context: parts.join('\n\n').slice(0, 12000) }
           }
           if (name === 'note_lane') {
-            const text = textOf(args.text)
+            const text = words(args.text)
             if (!text) return fail("I didn't catch that.")
-            return send(() => deps.postLaneNote({ text, via: 'voice' }), 'Noted for the lane.')
+            return file('lane', text, undefined, () => deps.postLaneNote({ text, via: 'voice' }), 'Noted for the lane.')
           }
           if (name === 'set_speed') {
-            if (deps.getProvider?.() === 'gemini') return fail('I can only change speed on Grok.')
+            if (['gemini', 'live'].includes(deps.getProvider?.())) return fail('I can only change speed on GPT Realtime or Grok.')
             if (typeof args.speed === 'number' && Number.isFinite(args.speed)) return result('Okay.', { do: 'speed', value: Math.round(Math.max(0.7, Math.min(1.5, args.speed)) * 10) / 10 })
             if (['faster', 'slower', 'normal'].includes(args.change)) return result('Okay.', { do: 'speed', change: args.change })
             return fail('Say faster, slower, or a number.')
           }
           if (name === 'end_call') return result('Talk soon.', { do: 'end_call' })
           if (name === 'confirm') return confirm()
-          if (name === 'cancel') return result('Okay, left open.')
+          if (name === 'cancel') return result(proposal?.kind ? 'Okay, dropped.' : 'Okay, left open.')
           if (name === 'next_question' || name === 'previous_question') {
             const ordered = orderThreads(scope)
             const open = ordered.filter((item) => item.status === 'open')
@@ -196,12 +243,12 @@ export function createScopeVoiceSession(deps) {
             if (!text) return fail("I didn't catch that.")
             if (name === 'reply') {
               if (!thread) return fail('Which one? Say next question.')
-              return send(() => deps.postReply(thread.id, { text, via: 'voice' }), 'Sent.')
+              return proposeFiling('reply', text, thread.id)
             }
             const section = sections.find((item) => item.id === context.section) || sections.find((item) => item.id === 'title') || sections[0]
             const anchor = context.selection || (section && anchorInSection(section, section.heading))
             if (!anchor) return fail('Select some text first.')
-            return send(() => deps.postThread({ anchor, text, via: 'voice' }), 'Posted.')
+            return proposeFiling('comment', text, anchor)
           }
           return fail("I can't do that here.")
         } catch (error) {
@@ -212,7 +259,8 @@ export function createScopeVoiceSession(deps) {
       const quote = (text) => { const words = String(text || '').trim().split(/\s+/); return words.slice(0, 10).join(' ') + (words.length > 10 ? '…' : '') }
       let id, label
       const section = scope?.doc.sections.find(item => item.id === outcome.ui?.section)
-      if (!outcome.ok) label = `Not done: ${outcome.speech}`
+      if (filingLabel) { label = filingLabel; id = filingThread }
+      else if (!outcome.ok) label = `Not done: ${outcome.speech}`
       else if (name === 'set_speed') label = outcome.ui.value !== undefined ? `Speed ${outcome.ui.value.toFixed(1)}×` : ({ faster: 'Faster', slower: 'Slower', normal: 'Normal speed' })[outcome.ui.change]
       else if (outcome.ui?.do === 'focus_thread') { id = outcome.ui.thread; label = `${name === 'next_question' ? 'Next' : 'Previous'} question: ${id}` }
       else if (section) label = `Went to §${section.heading}`
@@ -226,6 +274,8 @@ export function createScopeVoiceSession(deps) {
         if (name === 'read_thread') label = `Read ${id} aloud`
         else if (name === 'cancel') label = 'Dropped the proposal'
         else if (name === 'answer' && !wrote || name === 'resolve' && textOf(args.decision)) label = `Proposed for ${id}: "${quote(args.text || args.decision)}"`
+        else if ((name === 'confirm' || name === 'resolve' && proposal) && proposal?.kind === 'comment') { const heading = scope.doc.sections.find(item => item.id === proposal.anchor.section); label = `Commented on §${heading?.heading ?? proposal.anchor.section} (${id})` }
+        else if ((name === 'confirm' || name === 'resolve' && proposal) && proposal?.kind === 'reply') label = `Replied on ${id}`
         else if (name === 'confirm' || name === 'resolve' && proposal) label = `Resolved ${id}: "${quote(proposal.text)}"`
         else if (name === 'take_recommendation') label = `Took the recommendation on ${id}`
         else if (name === 'reject') label = `Said No on ${id}${textOf(args.reason) ? ': "' + quote(args.reason) + '"' : ''}`

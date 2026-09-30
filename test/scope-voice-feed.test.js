@@ -110,7 +110,7 @@ test('every voice tool call becomes one feed line; speed is Grok-only and keeps 
 
     // 4. Gemini has no speed: the tool says so, no ui, and the line reads as not done.
     provider = 'gemini'
-    const gem = await expect('set_speed', { change: 'faster' }, 'Not done: I can only change speed on Grok.', { ok: false })
+    const gem = await expect('set_speed', { change: 'faster' }, 'Not done: I can only change speed on GPT Realtime or Grok.', { ok: false })
     assert.equal(gem.ui, undefined)
     provider = 'xai'
 
@@ -124,19 +124,24 @@ test('every voice tool call becomes one feed line; speed is Grok-only and keeps 
 
     // 6. A comment: his words are a reply; a bare resolve closes it at once.
     context.thread = 'T4'
-    await expect('answer', { text: 'Thanks' }, 'Replied on T4', { write: true, thread: 'T4' })
+    await expect('answer', { text: 'Thanks' }, 'Proposed reply on T4: "Thanks."', { thread: 'T4' })
+    await expect('confirm', {}, 'Replied on T4', { write: true, thread: 'T4' })
     await expect('resolve', {}, 'Resolved T4', { write: true, thread: 'T4' })
 
     // 7. A new comment names its section and its new thread; a reply names the thread.
     context.thread = null
     context.section = 'risks'
-    const commented = await say('comment', { text: 'Add a phone check' })
+    const proposed = await say('comment', { text: 'Add a phone check' })
+    assert.equal(proposed.line.label, 'Proposed comment: "Add a phone check."')
+    assert.equal(proposed.line.write, false)
+    const commented = await say('confirm')
     const created = (await deps.getScope()).scope.threads.at(-1)
     assert.equal(commented.line.label, `Commented on §Risks (${created.id})`)
     assert.equal(commented.line.write, true)
     assert.equal(commented.line.thread, created.id)
     context.thread = created.id
-    await expect('reply', { text: 'Both phones' }, `Replied on ${created.id}`, { write: true, thread: created.id })
+    await expect('reply', { text: 'Both phones' }, `Proposed reply on ${created.id}: "Both phones."`, { thread: created.id })
+    await expect('confirm', {}, `Replied on ${created.id}`, { write: true, thread: created.id })
 
     // 8. A failure is a line too, with the spoken reason, never a write.
     await expect('confirm', {}, 'Not done: Nothing to confirm.', { ok: false })

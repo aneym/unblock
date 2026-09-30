@@ -99,7 +99,8 @@ test('the scoping voice waits, steps to the next question, confirms his answer, 
     const went = await say('go_to_section', { name: 'plan' }, { read: true })
     assert.deepEqual(went.ui, { do: 'focus_section', section: 'plan' })
     assert.equal(went.speech, 'The plan')
-    assert.equal((await say('comment', { text: 'Keep the page light.' })).speech, 'Posted.')
+    assert.equal((await say('comment', { text: 'Keep the page light.' })).speech, 'Comment: "Keep the page light." File it?')
+    assert.equal((await say('confirm')).speech, 'Posted.')
     await until(() => h.paneLines().includes('Alex (by voice) on §The plan "The plan": Keep the page light. (new T6)'), 'voice comment in the pane')
     assert.deepEqual((await say('show_resolved', { on: true })).ui, { do: 'show_resolved', on: true })
     assert.deepEqual((await say('scroll', { direction: 'down' })).ui, { do: 'scroll', direction: 'down' })
@@ -122,9 +123,10 @@ test('the scoping voice waits, steps to the next question, confirms his answer, 
     assert.equal((await thread('T5')).status, 'parked')
     assert.equal((await say('reject')).ok, false)
 
-    // 7. A comment thread takes a spoken reply as a reply, sent without a confirm.
+    // 7. A comment thread takes a spoken reply as a reply, read back and sent on his yes (r18).
     context.thread = 'T4'
-    assert.equal((await say('answer', { text: 'Ship it this week.' })).speech, 'Sent.')
+    assert.equal((await say('answer', { text: 'Ship it this week.' })).speech, 'Reply: "Ship it this week." Send it?')
+    assert.equal((await say('confirm')).speech, 'Sent.')
     assert.deepEqual((await thread('T4')).messages.map((m) => [m.from, m.via ?? null]), [['alex', null], ['alex', 'voice']])
 
     assert.deepEqual((await say('end_call')).ui, { do: 'end_call' })

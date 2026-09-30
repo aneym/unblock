@@ -8,7 +8,7 @@
  * Speech rules the session enforces (the prompt asks the model to say speech as given):
  * - "Reads" are the only long turns: read_thread, next/previous_question (the question text),
  *   go_to_section / next/previous_section (the heading).
- * - Every other tool's speech is at most 12 words.
+ * - Other speech is short, except comment and reply read-backs (up to 20 words).
  * - Speech never carries thread ids, section ids, URLs or tool names. One exception: the confirm line reads his
  *   own words back (ids and URLs removed, cut to 8 words) even when they name a tool, so he hears what will be sent.
  */
@@ -59,12 +59,14 @@ export interface ScopeToolResult {
  * - confirm → 'Resolved T3: "<q of the decision>"'; take_recommendation → "Took the recommendation on T3";
  *   resolve at once on a comment → "Resolved T4".
  * - reject → "Said No on T3", plus ': "<q of the reason>"' when he gave one; park → "Parked T3".
- * - comment → "Commented on §<heading> (T7)" (the new thread); reply, or answer on a comment → "Replied on T3".
+ * - comment/reply proposals → 'Proposed comment: "<q>"' / 'Proposed reply on T3: "<q>"' (reply carries thread).
+ * - Their confirm → "Commented on §<heading> (T7)" (the new thread); reply, or answer on a comment → "Replied on T3".
  * - end_call → "Ended the call".
  * - set_speed → "Speed 1.3×" (a set value, as the ui carries it) / "Faster" / "Slower" / "Normal speed".
- * - Any ok:false result → "Not done: <its speech>".
+ * - Incomplete comment/reply → "Waiting for the rest"; duplicate → 'Already filed: "<q>"', no write.
+ * - Any other ok:false result → "Not done: <its speech>".
  * write = true only for a call that posted (confirm, take_recommendation, reject, park, an immediate resolve,
- * comment, reply, answer on a comment) and succeeded; thread = the thread it acted on (or moved to), when there is one.
+ * confirmed comment/reply) and succeeded; thread = the thread it acted on (or moved to), when there is one.
  */
 export interface ScopeFeedLine {
   tool: string
@@ -79,8 +81,10 @@ export interface ScopeVoiceDeps {
   postLaneNote(body: { text: string; via: 'voice' }): Promise<unknown>
   /** Optional: receives one feed line per tool call (see ScopeFeedLine). Never affects the tool result, even if it throws. */
   onFeed?(line: ScopeFeedLine): void
-  /** Optional: the provider this call runs on, once known. Speaking speed works only on 'xai'. */
-  getProvider?(): VoiceProvider | undefined
+  /** Optional: the provider this call runs on, once known. Speaking speed is unavailable on 'gemini' and 'live'. */
+  getProvider?(): VoiceProvider | 'live' | undefined
+  /** Optional clock for the 10-second filing dedupe; defaults to Date.now(). */
+  now?(): number
   /** Current scope (GET /api/scope/<slug>). Called before every tool. */
   getScope(): Promise<{ slug: string; scope: ScopeV2 }>
   /**
@@ -119,7 +123,7 @@ export interface ScopeVoiceSession {
  * - scroll { direction: 'up'|'down' }: speech "Okay."
  * - answer { text }: his words while a thread is focused ("do X instead" is his own answer). On an open question → a proposal: nothing is sent;
  *   speech "Resolve this as: <text>. Yes?" (text cut to 8 words with '…' in speech only). On a comment → a
- *   reply, sent at once, speech "Sent.". No focused thread → ok:false "Which one? Say next question."
+ *   reply proposal, read back as 'Reply: "<text>" Send it?'. No focused thread → ok:false "Which one? Say next question."
  * - take_recommendation {}: focused open question with a recommendation → postResolve at once with
  *   { decision: rec, alex_words: 'Take the recommendation', how: 'take' }; speech "Done. Took the recommendation."
  * - reject { reason?: STRING }: his No ("no", "I hate it", "try again", "give me options") on the focused open
@@ -127,20 +131,23 @@ export interface ScopeVoiceSession {
  *   "Sent. Waiting for a new option." Otherwise ok:false "Nothing to say no to here."
  * - park {}: "not now" on the focused open question → postPark at once; speech "Parked for later."
  * - confirm {}: sends the pending proposal (postResolve with decision = alex_words = his text, how 'own'); speech
- *   "Resolved." No pending → ok:false "Nothing to confirm."
- * - cancel {}: drops the pending proposal; speech "Okay, left open."
+ *   "Resolved." Comment proposals postThread ("Posted."); reply proposals postReply ("Sent."). No pending → ok:false "Nothing to confirm."
+ * - cancel {}: drops the pending proposal; speech "Okay, dropped." for comments/replies, "Okay, left open." for resolves
  * - resolve { decision?: STRING }: with a non-empty decision → a proposal on the focused open thread (question or
  *   comment), confirmed like answer's (a comment confirms with how 'resolve'). Without one:
  *   a pending proposal → confirm it; an open comment → resolve at once as 'Resolved', how 'resolve' (speech "Resolved.");
  *   a question → ok:false "Resolve it as what?".
  * - comment { text }: anchors to the selection, else the focused section (anchorInSection on its heading),
- *   else the title; postThread at once; speech "Posted."
- * - reply { text }: on the focused thread, postReply at once; speech "Sent."
+ *   else the title; propose without writing; speech 'Comment: "<text>" File it?'
+ * - reply { text }: on the focused thread, propose without writing; speech 'Reply: "<text>" Send it?'
  * - end_call {}: speech "Talk soon.", ui end_call.
  * - set_speed { speed?: NUMBER, change?: 'faster'|'slower'|'normal' }: "talk faster", "slow down", "normal speed",
- *   "go 1.3". Not a proposal: it never touches a pending one. getProvider() === 'gemini' → ok:false
- *   "I can only change speed on Grok." A finite speed → clamp to 0.7–1.5, round to 0.1, speech "Okay." ui { do:'speed', value };
+ *   "go 1.3". Not a proposal: it never touches a pending one. getProvider() is 'gemini' or 'live' → ok:false
+ *   "I can only change speed on GPT Realtime or Grok." A finite speed → clamp to 0.7–1.5, round to 0.1, speech "Okay." ui { do:'speed', value };
  *   else a valid change → speech "Okay." ui { do:'speed', change }; else ok:false "Say faster, slower, or a number."
+ * Comments, replies and lane notes keep his words with fillers/stutters removed, initial capital and final punctuation.
+ * Incomplete comments/replies fail with "Go on."; similar posts in the same doc/lane pool within 10 s are not filed twice.
+ * Comment/reply read-backs cut to 20 words; proposals retain full text. Lane notes remain immediate.
  * Any new tool call other than confirm and set_speed drops a pending proposal. Blank text → ok:false "I didn't catch that."
  * A post that rejects → ok:false "That didn't send: <message>."
  */
