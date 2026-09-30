@@ -481,7 +481,13 @@ export function validateAsk(raw) {
     })()
     : plainWords(str(raw.blocks, 'blocks', { max: 200 }), 'blocks')
 
+  const closes_on = raw.closes_on
+  if (closes_on !== undefined && (!Array.isArray(closes_on) || closes_on.length > 5 || closes_on.some((ref) =>
+    typeof ref !== 'string' || !(/^(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(pull|issues)\/\d+|scope:[a-z0-9][a-z0-9-]{0,63}#T\d{1,4})$/.test(ref))))) {
+    throw new ValidationError('must contain at most 5 PR, issue or scope thread references', 'closes_on')
+  }
   return {
+    closes_on: closes_on?.length ? closes_on : undefined,
     kind,
     purpose,
     only_you,
@@ -518,7 +524,7 @@ export function validateUpdate(ask, patch) {
   if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
   if (patch.purpose !== undefined) throw new ValidationError('purpose cannot change', 'purpose')
   if (APPROVAL_PURPOSES.includes(ask.purpose) && ['add_fields', 'remove_fields', 'replace_fields'].some((key) => patch[key] !== undefined)) throw new ValidationError('approval fields cannot change', 'fields')
-  const named = ['level', 'title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'permission', 'consent_blocked_by', 'summary', 'minutes', 'after', 'blocks', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+  const named = ['closes_on', 'level', 'title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'permission', 'consent_blocked_by', 'summary', 'minutes', 'after', 'blocks', 'add_fields', 'remove_fields', 'replace_fields'].filter(
     (key) => patch[key] !== undefined,
   )
   if (patch.level !== undefined && !LEVELS.includes(patch.level)) {
@@ -586,10 +592,11 @@ export function validateUpdate(ask, patch) {
     consent_blocked_by: patch.consent_blocked_by ?? ask.consent_blocked_by,
     steps: patch.steps ?? ask.steps,
     links: patch.links ?? ask.links,
+    closes_on: patch.closes_on === undefined ? ask.closes_on : patch.closes_on,
     tried: patch.tried ?? ask.tried,
     only_you: patch.only_you ?? ask.only_you,
   })
-  return { level: merged.level, title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, permission: merged.permission, consent_blocked_by: merged.consent_blocked_by,
+  return { closes_on: merged.closes_on, level: merged.level, title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, permission: merged.permission, consent_blocked_by: merged.consent_blocked_by,
     summary: merged.summary, minutes: merged.minutes, after: merged.after, blocks: merged.blocks }
 }
 
@@ -608,6 +615,7 @@ function normalizeTtl(value) {
 export function normalizeOrigin(raw = {}) {
   if (!isPlainObject(raw)) throw new ValidationError('origin must be an object')
   return {
+    pid: Number.isSafeInteger(raw.pid) && raw.pid > 0 ? raw.pid : undefined,
     agent: optionalStr(raw.agent, 'origin.agent', { max: 40 }) ?? 'unknown',
     session_id: optionalStr(raw.session_id, 'origin.session_id', { max: 200 }),
     pane_id: optionalStr(raw.pane_id, 'origin.pane_id', { max: 200 }),

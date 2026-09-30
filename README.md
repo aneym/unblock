@@ -9,6 +9,11 @@ the parked ones wake up.
 
 You never read a transcript to find out what an agent wanted.
 
+An ask closes by itself when its filer's process ends, its permission path is
+gone, or a `closes_on` PR, issue or scope thread is done. Lanes get a keep-or-close
+check at 30 minutes. Asks nobody keeps are set aside, not lost; find them with
+`unblock list --aside` and bring one back with `unblock keep <ticket>`.
+
 ## Why it exists
 
 Every human-in-the-loop tool for agents solves one third of this problem.

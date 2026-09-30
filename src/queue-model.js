@@ -104,7 +104,7 @@ export function projectRank(project, order = defaultProjectOrder()) {
 
 /** Open asks still waiting in today's queue, excluding the weekly list. */
 export function todayAsks(asks) {
-  return asks.filter((ask) => ask.status === 'open' && ask.weekly_at == null)
+  return asks.filter((ask) => ask.status === 'open' && ask.weekly_at == null && ask.set_aside_at == null)
 }
 
 /** Urgency, owner project order, dependent work, then oldest. */

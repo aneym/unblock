@@ -72,12 +72,24 @@ export async function guardedAnswerNotice(pane, ticket) {
 }
 
 /** Return a stale open ask to its filing lane through hook delivery. */
-export async function recheckNotice(ask) {
-  const text = `[unblock ${ask.ticket}] "${ask.title}" has waited a day for Alex. If his past answers settle it, close it with unblock_cancel and quote his answer and its date in the note; otherwise leave it open.`
+export async function recheckNotice(ask, afterMs = 30 * 60 * 1000) {
+  const age = afterMs < 3600000 ? `${Math.max(1, Math.round(afterMs / 60000))} min` : `${Math.round(afterMs / 3600000)} h`
+  const text = `[unblock ${ask.ticket}] "${ask.title}" has waited ${age} for Alex. If it is still needed, run: unblock keep ${ask.ticket}. If it is handled or moot, close it with unblock_cancel (or: unblock close ${ask.ticket} <reason>). If his past answers settle it, quote his answer and its date in the note.`
+  return postNotice(ask.origin.pane_id, 'unblock-recheck', text)
+}
+
+export async function originFinishedNotice(ask) {
+  const answers = ask.fields.filter((field) => Object.hasOwn(ask.answers, field.name)).map((field) =>
+    field.type === 'secret' ? `${field.label}: (secret; collect with unblock_check ${ask.ticket})` : `${field.label}: ${typeof ask.answers[field.name] === 'string' ? ask.answers[field.name] : JSON.stringify(ask.answers[field.name])}`)
+  const text = `[unblock ${ask.ticket}] Alex answered "${ask.title}" after the lane that filed it finished (origin finished; act or drop): ${answers.join('; ')}`.slice(0, 700)
+  return postNotice(ask.origin.pane_id, 'unblock-origin-finished', text)
+}
+
+function postNotice(pane, topic, text) {
   return new Promise((resolve) => {
     const child = spawn(process.env.UNBLOCK_LANE_POST_BIN || 'lane-post',
-      ['post', '--to', ask.origin.pane_id, '--from', 'unblock', '--kind', 'task',
-        '--topic', 'unblock-recheck', '--wake', 'auto', text],
+      ['post', '--to', pane, '--from', 'unblock', '--kind', 'task',
+        '--topic', topic, '--wake', 'auto', text],
       { stdio: 'ignore' })
     const timer = setTimeout(() => {
       child.kill('SIGKILL')

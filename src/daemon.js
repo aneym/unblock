@@ -1,12 +1,13 @@
+import { processStarts, sameProcess } from './origin-process.js'
 import http from 'node:http'
 import { execFile } from 'node:child_process'
-import { guardedAnswerNotice, recheckNotice } from './pane-notice.js'
+import { guardedAnswerNotice, recheckNotice, originFinishedNotice } from './pane-notice.js'
 import { createScopeRoutes } from './scope.js'
 import { ASSET_ID } from './scope-assets.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, extname, join, resolve, sep } from 'node:path'
+import { dirname, extname, join, resolve, sep, isAbsolute } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { applyConfig, daemonRoot } from './config.js'
@@ -332,9 +333,15 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   const configuredRepingMs = Number(process.env.UNBLOCK_REPING_AFTER_MS)
   const repingAfterMs = Number.isSafeInteger(configuredRepingMs) && configuredRepingMs > 0 ? configuredRepingMs : 15 * 60 * 1000
   const configuredRecheckMs = Number(process.env.UNBLOCK_RECHECK_AFTER_MS)
-  const recheckAfterMs = Number.isSafeInteger(configuredRecheckMs) && configuredRecheckMs > 0 ? configuredRecheckMs : 24 * 60 * 60 * 1000
+  const recheckAfterMs = Number.isSafeInteger(configuredRecheckMs) && configuredRecheckMs > 0 ? configuredRecheckMs : 30 * 60 * 1000
   const configuredWeeklyMs = Number(process.env.UNBLOCK_WEEKLY_AFTER_MS)
   const weeklyAfterMs = Number.isSafeInteger(configuredWeeklyMs) && configuredWeeklyMs > 0 ? configuredWeeklyMs : 72 * 60 * 60 * 1000
+  const interval = (name, fallback) => { const value = Number(process.env[name]); return Number.isSafeInteger(value) && value > 0 ? value : fallback }
+  const sweepMs = interval('UNBLOCK_SWEEP_MS', 60000)
+  const replyMs = interval('UNBLOCK_RECHECK_REPLY_MS', 600000)
+  const linkCheckMs = interval('UNBLOCK_LINK_CHECK_MS', 300000)
+  const linkReads = new Map()
+  const routeFailures = new Map()
   const refuseWorktreeOrigins = process.env.UNBLOCK_REFUSE_WORKTREE_ORIGINS === 'true'
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
@@ -413,7 +420,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   let isClosed = false
 
   const queueState = () => {
-    const asks = store.list({ profile: '*', status: ['open', 'answered'] })
+    const asks = store.list({ profile: '*', status: ['open', 'answered'] }).filter((ask) => ask.status === 'answered' || (ask.set_aside_at == null && ask.weekly_at == null))
     return {
       open: asks.length,
       gating: asks.filter((ask) => ask.gating).length,
@@ -514,6 +521,48 @@ function scrubFieldBounce(raw) {
   return out
 }
 
+  async function routeFinished(ask, starts = processStarts([ask.origin?.pid])) {
+    if (starts === null || ask.status !== 'answered' || !ask.origin?.pid || ask.routed_at || sameProcess(ask.origin.pid, ask.origin.pid_start, starts)) return ask
+    const attempts = routeFailures.get(ask.ticket) || 0
+    if (attempts >= 3) return ask
+    if (ask.origin.pane_id && await originFinishedNotice(ask) === 'sent') {
+      const routed = store.markRouted(ask.ticket, ask.origin.pane_id)
+      emitAsk(routed, routed.status)
+      emitQueue()
+      return routed
+    }
+    routeFailures.set(ask.ticket, attempts + 1)
+    if (attempts + 1 === 3) console.error(`unblock: answer routing failed for ${ask.ticket}`)
+    return ask
+  }
+
+  async function deadReference(ask) {
+    if (ask.purpose === 'permission' && ask.permission?.path && isAbsolute(ask.permission.path) && !existsSync(ask.permission.path)) return 'path_gone'
+    for (const ref of ask.closes_on || []) {
+      if (ref.startsWith('scope:')) {
+        const [, slug, id] = ref.match(/^scope:([^#]+)#(T\d+)$/)
+        try {
+          const doc = JSON.parse(readFileSync(join(process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails/scoping'), slug, 'scope.json'), 'utf8'))
+          if (doc.threads?.some((thread) => thread.id === id && thread.status === 'resolved')) return 'thread_resolved'
+        } catch {}
+      } else {
+        const previous = linkReads.get(ref)
+        if (previous && Date.now() - previous.at < linkCheckMs) {
+          if (previous.closed) return 'link_closed'
+          continue
+        }
+        const entry = { at: Date.now(), closed: false }
+        linkReads.set(ref, entry)
+        try {
+          const gh = process.env.UNBLOCK_GH || (existsSync(join(homedir(), '.local/bin/gh')) ? join(homedir(), '.local/bin/gh') : '/opt/homebrew/bin/gh')
+          const output = await new Promise((resolve, reject) => execFile(gh, [ref.includes('/pull/') ? 'pr' : 'issue', 'view', ref, '--json', 'state'], { timeout: 20000 }, (error, stdout) => error ? reject(error) : resolve(stdout)))
+          entry.closed = ['MERGED', 'CLOSED'].includes(JSON.parse(output).state)
+          if (entry.closed) return 'link_closed'
+        } catch { console.error(`unblock: link check failed for ${ask.ticket}`) }
+      }
+    }
+  }
+
 async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia) {
   return withTicket(ticket, async () => {
     const ask = store.get(ticket)
@@ -575,7 +624,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
     // The answer queued any secret it replaced, sent back or did not commit.
     await flushSecretDeletes()
-    emitAsk(result.ask, 'answered')
+    if (result.ask.status === 'answered') result.ask = await routeFinished(result.ask)
+    emitAsk(result.ask, result.ask.status)
     return result
   })
 }
@@ -762,6 +812,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         path.includes('-wt/') || path.includes('/factory-worktrees/') || path.includes('/.claude/worktrees/'))) {
         return sendJson(res, 403, { error: 'worktree origins cannot file asks while refuseWorktreeOrigins is enabled', code: 'WORKTREE_ORIGIN' })
       }
+      if (origin.pid) {
+        const start = processStarts([origin.pid])?.get(origin.pid)
+        if (start) origin.pid_start = start
+        else delete origin.pid
+      }
       const ask = store.create(validateAsk(body.ask), origin)
       emitQueue()
       return sendJson(res, 201, ask)
@@ -778,7 +833,24 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile) })
     }
 
-    let ticket = routeTicket(pathname, '/pay-claim')
+    let ticket = routeTicket(pathname, '/keep')
+    if (ticket && req.method === 'POST') {
+      const body = await readJson(req)
+      const ask = await withTicket(ticket, () => {
+        const existing = store.get(ticket)
+        if (!existing) return null
+        let origin
+        if (Number.isSafeInteger(body.pid) && body.pid > 0) {
+          const start = processStarts([body.pid])?.get(body.pid)
+          if (start) origin = { ...existing.origin, pid: body.pid, pid_start: start }
+        }
+        return store.keep(ticket, origin)
+      })
+      if (!ask) return sendJson(res, 404, { error: 'not found' })
+      emitAsk(ask, ask.status); emitQueue()
+      return sendJson(res, 200, { ask })
+    }
+    ticket = routeTicket(pathname, '/pay-claim')
     if (ticket && req.method === 'POST') return sendJson(res, 200, await withTicket(ticket, () => store.payClaim(ticket)))
 
     ticket = routeTicket(pathname, '/receipt')
@@ -1202,6 +1274,27 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   keepalive.unref()
   async function sweep() {
     let changed = false
+    const lifecycle = store.list({ profile: '*', status: ['open', 'answered'] })
+    const starts = processStarts(lifecycle.map((ask) => ask.origin?.pid))
+    for (const candidate of lifecycle) {
+      try {
+        await withTicket(candidate.ticket, async () => {
+          const ask = store.get(candidate.ticket)
+          if (ask?.status === 'answered') { await routeFinished(ask, starts); return }
+          if (ask?.status !== 'open') return
+          const reason = starts !== null && ask.origin?.pid && !sameProcess(ask.origin.pid, ask.origin.pid_start, starts) ? 'origin_finished' : await deadReference(ask)
+          if (reason) {
+            const closed = store.autoClose(ask.ticket, reason)
+            if (closed) { changed = true; emitAsk(closed, closed.status) }
+          } else if (!ask.set_aside_at && ask.rechecked_at != null && Date.now() - ask.rechecked_at >= replyMs && (ask.kept_at == null || ask.kept_at < ask.rechecked_at)) {
+            const aside = store.setAside(ask.ticket, 'no_reply')
+            changed = true; emitAsk(aside, aside.status)
+          }
+        })
+      } catch {
+        console.error(`unblock: lifecycle sweep failed for ${candidate.ticket}`)
+      }
+    }
     for (const ticket of store.sweepCandidates()) {
       const ask = await withTicket(ticket, () => store.sweepOne(ticket))
       if (ask) { changed = true; emitAsk(ask, ask.status) }
@@ -1225,8 +1318,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       await withTicket(ticket, async () => {
         const ask = store.get(ticket)
         if (ask?.status !== 'open' || ask.rechecked_at != null) return
-        if (!ask.origin?.pane_id || await recheckNotice(ask) === 'sent') store.markRechecked(ticket)
+        const sentAt = Date.now()
+        if (!ask.origin?.pane_id) store.markRecheckUnreachable(ticket)
+        else if (await recheckNotice(ask, recheckAfterMs) === 'sent') store.markRechecked(ticket, sentAt)
         else store.markRecheckFailed(ticket)
+        const updated = store.get(ticket)
+        if (updated.set_aside_at !== ask.set_aside_at || updated.rechecked_at !== ask.rechecked_at) { changed = true; emitAsk(updated, updated.status) }
       })
     }
     for (const ticket of store.weeklyCandidates(weeklyAfterMs)) {
@@ -1243,7 +1340,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     await flushSecretDeletes()
     if (changed) emitQueue()
   }
-  const sweeper = setInterval(() => { sweep().catch(() => {}) }, 60_000)
+  const sweeper = setInterval(() => { sweep().catch(() => {}) }, sweepMs)
   sweeper.unref()
   let livedocApprovals = null
   if (process.env.UNBLOCK_LIVEDOC_APPROVALS === '1' ||

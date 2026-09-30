@@ -24,7 +24,7 @@ try:
     asks = json.load(sys.stdin).get("asks", [])
 except Exception:
     sys.exit(0)
-opened = [a for a in asks if a.get("status") == "open"]
+opened = [a for a in asks if a.get("status") == "open" and not a.get("set_aside_at") and not a.get("weekly_at")]
 print(len(opened), sum(1 for a in opened if a.get("gating")))
 ' 2>/dev/null) || exit 0
 [ -n "$counts" ] || exit 0

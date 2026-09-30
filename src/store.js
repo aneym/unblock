@@ -249,6 +249,8 @@ export class Store {
     this.#addColumn('asks', 'recheck_failures', 'INTEGER NOT NULL DEFAULT 0')
     this.#addColumn('asks', 'recheck_unavailable_at', 'INTEGER')
     this.#addColumn('asks', 'weekly_at', 'INTEGER')
+    for (const name of ['kept_at', 'set_aside_at', 'routed_at']) this.#addColumn('asks', name, 'INTEGER')
+    for (const name of ['closes_on_json', 'close_reason', 'set_aside_reason']) this.#addColumn('asks', name, 'TEXT')
     this.#addColumn('asks', 'reping_unavailable_at', 'INTEGER')
   }
 
@@ -392,6 +394,7 @@ export class Store {
         JSON.stringify(body.blocks ?? null), body.permission ? JSON.stringify(body.permission) : null,
       )
 
+    this.#db.prepare('UPDATE asks SET closes_on_json = ? WHERE id = ?').run(body.closes_on ? JSON.stringify(body.closes_on) : null, id)
     return this.get(id)
   }
 
@@ -407,7 +410,7 @@ export class Store {
    * the record holds their work and the questions they answered must stay the
    * questions they answered.
    */
-  update(idOrTicket, { level, title, why, fields, steps, links, tried, only_you, plan, spend, message, permission, consent_blocked_by, summary, minutes, after, blocks }) {
+  update(idOrTicket, { closes_on, level, title, why, fields, steps, links, tried, only_you, plan, spend, message, permission, consent_blocked_by, summary, minutes, after, blocks }) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
     if (ask.status !== 'open') {
@@ -419,6 +422,7 @@ export class Store {
       throw err
     }
     const at = nowMs()
+    this.#db.prepare('UPDATE asks SET closes_on_json = ? WHERE id = ?').run(closes_on ? JSON.stringify(closes_on) : null, ask.id)
     this.#db
       .prepare('UPDATE asks SET level = ?, title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
       .run(level ?? null, title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you ?? null,
@@ -521,6 +525,12 @@ export class Store {
       rechecked_at: row.rechecked_at ?? undefined,
       recheck_unavailable_at: row.recheck_unavailable_at ?? undefined,
       weekly_at: row.weekly_at ?? undefined,
+      closes_on: row.closes_on_json ? JSON.parse(row.closes_on_json) : undefined,
+      close_reason: row.close_reason ?? undefined,
+      kept_at: row.kept_at ?? undefined,
+      set_aside_at: row.set_aside_at ?? undefined,
+      set_aside_reason: row.set_aside_reason ?? undefined,
+      routed_at: row.routed_at ?? undefined,
       reping_unavailable_at: row.reping_unavailable_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
       closed_at: row.closed_at ?? undefined,
@@ -829,20 +839,58 @@ export class Store {
 
   recheckCandidates(afterMs) {
     return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
-      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL`)
+      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL AND set_aside_at IS NULL`)
       .all(nowMs() - afterMs).map(({ ticket }) => ticket)
   }
 
   markRecheckFailed(ticket) {
     this.#db.prepare(`UPDATE asks SET recheck_failures = recheck_failures + 1,
-      recheck_unavailable_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE recheck_unavailable_at END
+      recheck_unavailable_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE recheck_unavailable_at END,
+      set_aside_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE set_aside_at END,
+      set_aside_reason = CASE WHEN recheck_failures + 1 >= 3 THEN 'origin_unreachable' ELSE set_aside_reason END
       WHERE ticket = ? AND status = 'open' AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL`)
-      .run(nowMs(), ticket)
+      .run(nowMs(), nowMs(), ticket)
   }
 
-  markRechecked(ticket) {
+  markRecheckUnreachable(ticket) {
+    this.#db.prepare("UPDATE asks SET recheck_unavailable_at = ?, set_aside_at = ?, set_aside_reason = 'origin_unreachable' WHERE ticket = ? AND status = 'open'").run(nowMs(), nowMs(), ticket)
+    return this.get(ticket)
+  }
+
+  setAside(ticket, reason) {
+    this.#db.prepare("UPDATE asks SET set_aside_at = ?, set_aside_reason = ? WHERE ticket = ? AND status = 'open' AND set_aside_at IS NULL").run(nowMs(), reason, ticket)
+    return this.get(ticket)
+  }
+
+  keep(ticket, origin) {
+    const ask = this.get(ticket)
+    if (!ask) return null
+    if (ask.status !== 'open') {
+      const error = new Error(`ask ${ticket} is ${ask.status}, not open`)
+      error.code = 'ASK_NOT_OPEN'; error.askStatus = ask.status; throw error
+    }
+    this.#db.prepare("UPDATE asks SET kept_at = ?, set_aside_at = NULL, set_aside_reason = NULL, origin_json = ? WHERE ticket = ? AND status = 'open'").run(nowMs(), JSON.stringify(origin ?? ask.origin), ticket)
+    return this.get(ticket)
+  }
+
+  markRouted(ticket, pane) {
+    this.#db.prepare("UPDATE asks SET routed_at = ?, status = 'orphaned', note = ? WHERE ticket = ? AND status = 'answered'").run(nowMs(), `origin finished; routed to ${pane}`, ticket)
+    return this.get(ticket)
+  }
+
+  autoClose(ticket, reason) {
+    const ask = this.get(ticket)
+    if (!ask || ask.status !== 'open') return null
+    return this.#transact(() => {
+      this.#db.prepare("UPDATE asks SET status = 'cancelled', closed_at = ?, close_reason = ?, note = ? WHERE ticket = ? AND status = 'open'").run(nowMs(), reason, `closed by itself: ${reason}`, ticket)
+      this.#queueDropped(secretRecords(ask))
+      return this.get(ticket)
+    })
+  }
+
+  markRechecked(ticket, at = nowMs()) {
     this.#db.prepare(`UPDATE asks SET rechecked_at = ? WHERE ticket = ? AND status = 'open' AND rechecked_at IS NULL`)
-      .run(nowMs(), ticket)
+      .run(at, ticket)
   }
 
   weeklyCandidates(afterMs) {

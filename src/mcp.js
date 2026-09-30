@@ -1,3 +1,4 @@
+import { filerPid } from './origin-process.js'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -118,6 +119,7 @@ async function daemonFetch(pathname, options = {}) {
 function origin() {
   return {
     agent: process.env.UNBLOCK_AGENT || 'claude',
+    pid: process.argv.includes('--http') ? undefined : filerPid(),
     pane_id: process.env.HERDR_PANE_ID,
     tab_id: process.env.HERDR_TAB_ID,
     workspace_id: process.env.HERDR_WORKSPACE_ID,
@@ -200,12 +202,14 @@ const askProperties = {
       required: ['url'],
     },
   },
+  closes_on: { type: 'array', maxItems: 5, items: { type: 'string' }, description: 'Close this ask by itself when any of these PRs or issues merges or closes, or when this scope thread is resolved.' },
   ttl_seconds: { type: 'number', exclusiveMinimum: 0 },
 }
 
 const askSchema = { type: 'object', properties: askProperties, required: ['title', 'why'] }
 
 const TOOLS = [
+  { name: 'unblock_keep', description: 'Keep an open ask in today’s queue and claim its liveness.', inputSchema: { type: 'object', properties: { ticket: { type: 'string' } }, required: ['ticket'] } },
   {
     name: 'unblock_file',
     description: 'Only for what only the human can do: their credential or sign-in, a click in their own account, spend, a message to a real person, or a product call. Clicks in a signed-in site are consent asks; signing in or out is never consent. Try the CLI, API, computer use and docs first and list those attempts in `tried`.',
@@ -245,6 +249,7 @@ const TOOLS = [
         why: askProperties.why,
         steps: askProperties.steps,
         links: askProperties.links,
+        closes_on: askProperties.closes_on,
         tried: askProperties.tried,
         only_you: askProperties.only_you,
         summary: askProperties.summary, minutes: askProperties.minutes, after: askProperties.after, blocks: askProperties.blocks,
@@ -396,6 +401,11 @@ export class McpConnection {
       return textResult(`Filed ${ask.ticket}. Keep working; call unblock_check later.`, { ticket: ask.ticket })
     }
 
+    if (name === 'unblock_keep') {
+      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/keep`, { method: 'POST', body: JSON.stringify({ pid: origin().pid }) })
+      return textResult(`Kept ${body.ask.ticket}.`, { ask: body.ask })
+    }
+
     if (name === 'unblock_cancel') {
       const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/cancel`, {
         method: 'POST',
@@ -417,6 +427,7 @@ export class McpConnection {
           why: args.why,
           steps: args.steps,
           links: args.links,
+          closes_on: args.closes_on,
           tried: args.tried,
           only_you: args.only_you,
           summary: args.summary, minutes: args.minutes, after: args.after, blocks: args.blocks,

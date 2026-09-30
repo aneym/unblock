@@ -7,6 +7,7 @@ import { dirname, extname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import { IMAGE_LINE } from '../src/scope-assets.js'
+import { filerPid } from '../src/origin-process.js'
 import { lintDoc } from '../src/scope-lint.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
@@ -131,13 +132,14 @@ function flags(args, allowed) {
 function count(n) { return `${n} ${n === 1 ? 'question' : 'questions'}` }
 
 async function list(args) {
-  const { rest, opts } = flags(args, { '--all': false, '--project': true })
+  const { rest, opts } = flags(args, { '--all': false, '--aside': false, '--project': true })
   if (rest.length) fail('usage: unblock list [--all] [--project P] [--json]')
   const { asks } = await request(`/api/asks?profile=*&includeClosed=${opts['--all'] ? 'true' : 'false'}`)
   const cutoff = Date.now() - 7 * 86400000
   const shown = asks.filter((ask) =>
     (ask.status === 'open' || (opts['--all'] && ['answered', 'cancelled'].includes(ask.status) &&
       (ask.closed_at ?? ask.answered_at ?? 0) >= cutoff)) &&
+    (opts['--aside'] ? ask.set_aside_at != null : ask.set_aside_at == null && ask.weekly_at == null) &&
     (!opts['--project'] || project(ask) === opts['--project']))
     // Open asks lead; closed ones under --all are context, not work.
     .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1))
@@ -158,6 +160,7 @@ async function list(args) {
       console.log(prefix + title(ask.title, Math.max(1, (process.stdout.columns || 100) - prefix.length)))
       console.log(`             ${[ask.status === 'open' ? null : ask.status, kindWord(ask),
         ask.kind === 'park' && ask.status === 'open' ? 'agent stopped' : null,
+        ask.set_aside_at ? `set aside: ${ask.set_aside_reason}` : null,
         ask.status === 'open' ? count(required(ask).length) : null, age(ask.created_at), ask.origin?.agent].filter(Boolean).join(' · ')}`)
       if (ask.minutes) console.log(`             ~${ask.minutes} min`)
       if (ask.blocks) console.log(`             unblocks: ${ask.blocks}`)
@@ -181,7 +184,7 @@ async function show(args) {
   if (json) return output(safe(ask))
   const health = await request('/api/health')
   console.log(ask.title)
-  console.log([ask.status, kindWord(ask), project(ask), age(ask.created_at), ask.origin?.agent,
+  console.log([ask.status, ask.set_aside_at ? `set aside: ${ask.set_aside_reason}` : null, kindWord(ask), project(ask), age(ask.created_at), ask.origin?.agent,
     ask.origin?.pane_id && `pane ${ask.origin.pane_id}`].filter(Boolean).join(' · '))
   const link = stable(health, ask.ticket)
   if (link) console.log(link)
@@ -306,6 +309,12 @@ async function pay(args) {
   output({ id: data.id, status: data.status }, `${data.id} · ${data.status}\nApprove the push in your Link app; then get the card with: link-cli spend-request retrieve ${data.id} --include card --output-file <path>`)
 }
 
+async function keep(args) {
+  const { rest } = flags(args, {})
+  if (rest.length !== 1) fail('usage: unblock keep <ticket>')
+  const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/keep`, { pid: filerPid() })
+  output({ ask: safe(result.ask) }, `kept ${rest[0]}`)
+}
 async function close(args) {
   const { rest } = flags(args, {})
   const [ticket, ...reason] = rest
@@ -333,6 +342,8 @@ async function file(args) {
     ask: body,
     origin: {
       agent: process.env.UNBLOCK_AGENT || 'cli',
+      pid: filerPid(),
+      session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
       pane_id: process.env.HERDR_PANE_ID,
       tab_id: process.env.HERDR_TAB_ID,
       workspace_id: process.env.HERDR_WORKSPACE_ID,
@@ -742,12 +753,13 @@ async function daemonCmd(args) {
   }
 }
 function help() {
-  console.log(`unblock [list] [--all] [--project P] [--json]   what is waiting, grouped by project
+  console.log(`unblock [list] [--aside] [--all] [--project P] [--json]   what is waiting, grouped by project
 unblock show <ticket> [--json]                   one ask in full (never secret values)
 unblock answer <ticket> <value>                  answer a one-question ask in one line
 unblock answer <ticket> name=value ...           answer by question name
 unblock receipt <ticket> [--before a.png] [--after b.png] [--url U]
 unblock pay <ticket> [--payment-method <id>]
+unblock keep <ticket>                            keep an ask in today’s queue
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
 unblock file [path|-]                            file an ask from JSON (same shape as the MCP tool)
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
@@ -781,6 +793,7 @@ try {
   else if (command === 'answer') await answer(input)
   else if (command === 'receipt') await receipt(input)
   else if (command === 'pay') await pay(input)
+  else if (command === 'keep') await keep(input)
   else if (command === 'close') await close(input)
   else if (command === 'file') await file(input)
   else if (command === 'update') await update(input)
