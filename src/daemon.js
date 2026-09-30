@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { execFile } from 'node:child_process'
-import { guardedAnswerNotice } from './pane-notice.js'
+import { guardedAnswerNotice, recheckNotice } from './pane-notice.js'
 import { createScopeRoutes } from './scope.js'
 import { ASSET_ID } from './scope-assets.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -331,6 +331,10 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   const config = applyConfig()
   const configuredRepingMs = Number(process.env.UNBLOCK_REPING_AFTER_MS)
   const repingAfterMs = Number.isSafeInteger(configuredRepingMs) && configuredRepingMs > 0 ? configuredRepingMs : 15 * 60 * 1000
+  const configuredRecheckMs = Number(process.env.UNBLOCK_RECHECK_AFTER_MS)
+  const recheckAfterMs = Number.isSafeInteger(configuredRecheckMs) && configuredRecheckMs > 0 ? configuredRecheckMs : 24 * 60 * 60 * 1000
+  const configuredWeeklyMs = Number(process.env.UNBLOCK_WEEKLY_AFTER_MS)
+  const weeklyAfterMs = Number.isSafeInteger(configuredWeeklyMs) && configuredWeeklyMs > 0 ? configuredWeeklyMs : 72 * 60 * 60 * 1000
   const refuseWorktreeOrigins = process.env.UNBLOCK_REFUSE_WORKTREE_ORIGINS === 'true'
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
@@ -1214,6 +1218,23 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
           store.markRepingUnavailable(ticket)
           console.error(`unblock: re-ping skipped for ${ticket}; origin pane no longer exists`)
         }
+      })
+    }
+    for (const ticket of store.recheckCandidates(recheckAfterMs)) {
+      await withTicket(ticket, async () => {
+        const ask = store.get(ticket)
+        if (ask?.status !== 'open' || ask.rechecked_at != null) return
+        if (!ask.origin?.pane_id || await recheckNotice(ask) === 'sent') store.markRechecked(ticket)
+      })
+    }
+    for (const ticket of store.weeklyCandidates(weeklyAfterMs)) {
+      await withTicket(ticket, () => {
+        const ask = store.get(ticket)
+        if (ask?.status !== 'open' || ask.weekly_at != null) return
+        store.markWeekly(ticket)
+        const updated = store.get(ticket)
+        emitAsk(updated, updated.status)
+        changed = true
       })
     }
     for (const ticket of store.sweepCleanup()) await withTicket(ticket, () => store.prune(ticket))

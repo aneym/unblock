@@ -35,6 +35,8 @@ database, and answer UI. Agent integrations are clients of that service:
 
 The installed Studio daemon polls live-doc approvals every 60 seconds, logs them in the scoping INDEX, and moves approved tabs to In flight (`UNBLOCK_LIVEDOC_APPROVALS=0` disables it; `UNBLOCK_LIVEDOC_POLL_MS` sets the interval).
 
+Day-old open asks go back to the filing lane once via `lane-post`; three-day-old asks move to the weekly decide-or-drop list and stop counting toward today. Configure the thresholds with `UNBLOCK_RECHECK_AFTER_MS` and `UNBLOCK_WEEKLY_AFTER_MS`, and the delivery executable with `UNBLOCK_LANE_POST_BIN`.
+
 ## How it works
 
 Two calls, and only one of them stops the agent.

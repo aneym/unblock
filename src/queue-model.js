@@ -198,7 +198,9 @@ export function selectDeck({
   doneTickets = new Set(),
   doneProjects = [],
 } = {}) {
-  const live = sortAsks(asks.filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket)))
+  const open = asks.filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))
+  const weekly = sortAsks(open.filter((ask) => ask.weekly_at != null))
+  const live = sortAsks(open.filter((ask) => ask.weekly_at == null))
   const projects = projectCounts(live)
 
   // A filter naming a project with nothing open is dropped — otherwise a stale
@@ -228,5 +230,5 @@ export function selectDeck({
     .filter((item) => item !== undefined)
 
   const items = [...(pinnedItem ? [pinnedItem] : []), ...fresh, ...later]
-  return { items, projects, activeProject, current: items[0], remaining: items.length }
+  return { items, projects, activeProject, current: items[0], remaining: items.length, weekly }
 }

@@ -245,6 +245,8 @@ export class Store {
     this.#addColumn('links', 'minted_by', "TEXT NOT NULL DEFAULT 'local'")
     this.#addColumn('asks', 'draft_rev', 'INTEGER NOT NULL DEFAULT 0')
     this.#addColumn('asks', 'repinged_at', 'INTEGER')
+    this.#addColumn('asks', 'rechecked_at', 'INTEGER')
+    this.#addColumn('asks', 'weekly_at', 'INTEGER')
     this.#addColumn('asks', 'reping_unavailable_at', 'INTEGER')
   }
 
@@ -514,6 +516,8 @@ export class Store {
       updated_at: row.updated_at ?? undefined,
       answered_at: row.answered_at ?? undefined,
       repinged_at: row.repinged_at ?? undefined,
+      rechecked_at: row.rechecked_at ?? undefined,
+      weekly_at: row.weekly_at ?? undefined,
       reping_unavailable_at: row.reping_unavailable_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
       closed_at: row.closed_at ?? undefined,
@@ -818,6 +822,28 @@ export class Store {
       this.#queueDropped(secretRecords(ask))
       return this.get(ask.id)
     })
+  }
+
+  recheckCandidates(afterMs) {
+    return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
+      AND created_at <= ? AND rechecked_at IS NULL`)
+      .all(nowMs() - afterMs).map(({ ticket }) => ticket)
+  }
+
+  markRechecked(ticket) {
+    this.#db.prepare(`UPDATE asks SET rechecked_at = ? WHERE ticket = ? AND status = 'open' AND rechecked_at IS NULL`)
+      .run(nowMs(), ticket)
+  }
+
+  weeklyCandidates(afterMs) {
+    return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
+      AND created_at <= ? AND weekly_at IS NULL`)
+      .all(nowMs() - afterMs).map(({ ticket }) => ticket)
+  }
+
+  markWeekly(ticket) {
+    this.#db.prepare(`UPDATE asks SET weekly_at = ? WHERE ticket = ? AND status = 'open' AND weekly_at IS NULL`)
+      .run(nowMs(), ticket)
   }
 
   /** Only unanswered-by-agent notices qualify for a re-ping. */

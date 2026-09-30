@@ -4,6 +4,11 @@
  * precise Ask and Field types, and the TUI passes its own shape.
  */
 
+export interface Ask {
+  rechecked_at?: number
+  weekly_at?: number
+}
+
 export interface DeckItemOf<A> {
   key: string
   project: string
@@ -17,6 +22,7 @@ export interface SelectionOf<A> {
   activeProject: string | null
   current?: DeckItemOf<A>
   remaining: number
+  weekly: A[]
 }
 
 export const MAX_GROUP_ASKS: number

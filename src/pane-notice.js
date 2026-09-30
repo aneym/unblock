@@ -70,3 +70,26 @@ export async function guardedAnswerNotice(pane, ticket) {
     }
   } finally { unlock() }
 }
+
+/** Return a stale open ask to its filing lane through hook delivery. */
+export async function recheckNotice(ask) {
+  const text = `[unblock ${ask.ticket}] "${ask.title}" has waited a day for Alex. If his past answers settle it, close it with unblock_cancel and quote his answer and its date in the note; otherwise leave it open.`
+  return new Promise((resolve) => {
+    const child = spawn(process.env.UNBLOCK_LANE_POST_BIN || 'lane-post',
+      ['post', '--to', ask.origin.pane_id, '--from', 'unblock', '--kind', 'task',
+        '--topic', 'unblock-recheck', '--wake', 'auto', text],
+      { stdio: 'ignore' })
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolve('failed')
+    }, 5000)
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve('failed')
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve(code === 0 ? 'sent' : 'failed')
+    })
+  })
+}
