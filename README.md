@@ -71,6 +71,8 @@ the agent ran or attempted and why that could not clear it. A manual step needs 
 the exact screen, not a home page. Titles and labels are checked for repo jargon. A second open
 ask with the same project and title is refused with the existing ticket.
 
+Each ask carries a `level`: P1 means a real person or money is waiting, or something is down; P2 holds up a lane or a build; P3 is a scope round or something shipped to review; P4 means decide when it suits you. If omitted, message and spend asks default to P1; blocker, consent, permission, or asks with dependent work default to P2; the rest default to P4. The queue sorts by level, then project order (Recruiter, Closer, Rails, Poker), then dependent work and age. Set `UNBLOCK_PROJECT_ORDER` to override the order, for example `Poker=poker;Recruiter=recruiter,chord`.
+
 ## CLI
 
 ```

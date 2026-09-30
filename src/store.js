@@ -230,6 +230,7 @@ export class Store {
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
+    this.#addColumn('asks', 'level', 'TEXT')
     this.#addColumn('asks', 'tried_json', "TEXT NOT NULL DEFAULT '[]'")
     this.#addColumn('asks', 'only_you', 'TEXT')
     // Set when an agent revises a live ask in place. A client that is already
@@ -357,9 +358,9 @@ export class Store {
 
     this.#db
       .prepare(
-        `INSERT INTO asks (id, ticket, kind, purpose, project, status, title, why, fields_json, steps_json,
+        `INSERT INTO asks (id, ticket, kind, purpose, project, level, status, title, why, fields_json, steps_json,
                            links_json, tried_json, only_you, origin_json, agent_key, created_at, expires_at, plan_json, spend_json, message_json, consent_blocked_by, revision, summary, minutes, after, blocks_json, permission_json)
-         VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -367,6 +368,7 @@ export class Store {
         body.kind,
         body.purpose ?? 'blocker',
         body.project ?? null,
+        body.level ?? null,
         body.title,
         body.why,
         JSON.stringify(body.fields),
@@ -401,7 +403,7 @@ export class Store {
    * the record holds their work and the questions they answered must stay the
    * questions they answered.
    */
-  update(idOrTicket, { title, why, fields, steps, links, tried, only_you, plan, spend, message, permission, consent_blocked_by, summary, minutes, after, blocks }) {
+  update(idOrTicket, { level, title, why, fields, steps, links, tried, only_you, plan, spend, message, permission, consent_blocked_by, summary, minutes, after, blocks }) {
     const ask = this.get(idOrTicket)
     if (!ask) return null
     if (ask.status !== 'open') {
@@ -414,8 +416,8 @@ export class Store {
     }
     const at = nowMs()
     this.#db
-      .prepare('UPDATE asks SET title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
-      .run(title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you ?? null,
+      .prepare('UPDATE asks SET level = ?, title = ?, why = ?, fields_json = ?, steps_json = ?, links_json = ?, tried_json = ?, only_you = ?, plan_json = ?, spend_json = ?, message_json = ?, consent_blocked_by = ?, summary = ?, minutes = ?, after = ?, blocks_json = ?, permission_json = ?, revision = revision + 1, updated_at = ? WHERE id = ?')
+      .run(level ?? null, title, why, JSON.stringify(fields), JSON.stringify(steps), JSON.stringify(links), JSON.stringify(tried), only_you ?? null,
         plan ? JSON.stringify(plan) : null, spend ? JSON.stringify(spend) : null, message ? JSON.stringify(message) : null,
         consent_blocked_by ?? null, summary ?? null, minutes ?? null, after ?? null, JSON.stringify(blocks ?? null),
         permission ? JSON.stringify(permission) : null, at, ask.id)
@@ -471,6 +473,7 @@ export class Store {
       kind: row.kind,
       purpose: row.purpose ?? 'blocker',
       project: row.project ?? undefined,
+      level: row.level ?? undefined,
       status: row.status,
       gating: row.kind === 'park' && row.status === 'open',
       title: row.title,

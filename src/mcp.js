@@ -138,6 +138,11 @@ const askProperties = {
   // it. One short name per workstream, reused across asks. Defaults to
   // $UNBLOCK_PROJECT when unset.
   project: { type: 'string', maxLength: 64 },
+  level: { type: 'string', enum: ['P1', 'P2', 'P3', 'P4'], description:
+    'P1 a real person or money is waiting, or something is down;\n' +
+    'P2 holds up a lane or a build;\n' +
+    'P3 a scope round, or something shipped to review;\n' +
+    'P4 decide when it suits you.' },
   title: { type: 'string', maxLength: 90 },
   only_you: { type: 'string', enum: ONLY_YOU_REASONS, description: 'What only the human can do: credential, their own account click, spend, message to a real person, or product judgment.' },
   tried: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string', minLength: 20, maxLength: 400 }, description: 'What you already tried using CLI, API, computer use or docs and why that did not clear the blocker.' },
@@ -235,6 +240,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         ticket: { type: 'string' },
+        level: askProperties.level,
         title: askProperties.title,
         why: askProperties.why,
         steps: askProperties.steps,

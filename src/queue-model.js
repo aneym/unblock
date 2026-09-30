@@ -65,9 +65,48 @@ export function unansweredFields(ask) {
   return (ask.fields || []).filter((field) => !(field.name in answered))
 }
 
-/** Parked first, then most dependent work, then oldest. */
-export function sortAsks(asks) {
-  return [...asks].sort((a, b) => Number(Boolean(b.gating)) - Number(Boolean(a.gating)) ||
+export const LEVELS = ['P1', 'P2', 'P3', 'P4']
+
+/** Legacy asks inherit urgency from their purpose and dependent work. */
+export function levelOf(ask) {
+  if (LEVELS.includes(ask.level)) return ask.level
+  if (['message', 'spend'].includes(ask.purpose)) return 'P1'
+  if (['blocker', 'consent', 'permission'].includes(ask.purpose) || ask.gating ||
+      (typeof ask.blocks === 'string' && ask.blocks.length > 0) ||
+      (Array.isArray(ask.blocks) && ask.blocks.length > 0)) return 'P2'
+  return 'P4'
+}
+
+export const DEFAULT_PROJECT_ORDER = 'Recruiter=recruiter,chord,recruiting;Closer=closer;Rails=rails,unblock,factory,admin;Poker=poker'
+
+export function parseProjectOrder(text) {
+  return text.split(';').flatMap((entry) => {
+    const [rawName, rawAliases = ''] = entry.split('=')
+    const name = rawName.trim()
+    if (!name) return []
+    const aliases = [name.toLowerCase(), ...rawAliases.split(',').map((alias) => alias.trim().toLowerCase()).filter(Boolean)]
+    return [{ name, aliases: [...new Set(aliases)] }]
+  })
+}
+
+function defaultProjectOrder() {
+  const configured = typeof process !== 'undefined' ? process.env?.UNBLOCK_PROJECT_ORDER : undefined
+  return parseProjectOrder(configured?.trim() ? configured : DEFAULT_PROJECT_ORDER)
+}
+
+export function projectRank(project, order = defaultProjectOrder()) {
+  if (typeof project !== 'string' || !project.trim()) return order.length
+  const lower = project.toLowerCase()
+  const tokens = [lower, ...lower.split(/[^a-z0-9]+/).filter(Boolean)]
+  const rank = order.findIndex((entry) => entry.aliases.some((alias) => tokens.includes(alias)))
+  return rank < 0 ? order.length : rank
+}
+
+/** Urgency, owner project order, dependent work, then oldest. */
+export function sortAsks(asks, order = defaultProjectOrder()) {
+  return [...asks].sort((a, b) => LEVELS.indexOf(levelOf(a)) - LEVELS.indexOf(levelOf(b)) ||
+    projectRank(a.project, order) - projectRank(b.project, order) ||
+    Number(Boolean(b.gating)) - Number(Boolean(a.gating)) ||
     (Array.isArray(b.blocks) ? b.blocks.length : Number(Boolean(b.blocks))) -
     (Array.isArray(a.blocks) ? a.blocks.length : Number(Boolean(a.blocks))) || at(a.created_at) - at(b.created_at))
 }

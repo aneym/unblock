@@ -28,7 +28,14 @@ export function isImageUrl(url: string): boolean
 export function reviewLinks<L = unknown, A = unknown>(ask: A): { images: L[]; pages: L[] }
 export function isMissing(value: unknown): boolean
 export function unansweredFields<F = unknown, A = unknown>(ask: A): F[]
-export function sortAsks<A>(asks: A[]): A[]
+export type Level = 'P1' | 'P2' | 'P3' | 'P4'
+export interface ProjectOrderEntry { name: string; aliases: string[] }
+export const LEVELS: Level[]
+export const DEFAULT_PROJECT_ORDER: string
+export function levelOf<A>(ask: A): Level
+export function parseProjectOrder(text: string): ProjectOrderEntry[]
+export function projectRank(project?: string, order?: ProjectOrderEntry[]): number
+export function sortAsks<A>(asks: A[], order?: ProjectOrderEntry[]): A[]
 export function isShort<A>(ask: A): boolean
 export function buildDeck<A>(asks: A[]): DeckItemOf<A>[]
 export function projectCounts<A>(asks: A[]): [string, number][]

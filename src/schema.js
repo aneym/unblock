@@ -1,3 +1,6 @@
+import { LEVELS, levelOf } from './queue-model.js'
+export { LEVELS }
+
 /**
  * The ask schema. This is the contract every client shares, and it is
  * deliberately strict: an agent may only park after it has said exactly what
@@ -351,6 +354,10 @@ export function validateAsk(raw) {
     throw new ValidationError(`must be one of ${ASK_PURPOSES.join(', ')}`, 'purpose')
   }
 
+  if (raw.level !== undefined && !LEVELS.includes(raw.level)) {
+    throw new ValidationError(`level must be one of ${LEVELS.join(', ')}`, 'level')
+  }
+
   const title = plainWords(str(raw.title, 'title', { max: MAX_TITLE }), 'title')
   const why = str(raw.why, 'why', { max: 1200 })
   // An MCP server started before this gate still lists the old tool schema,
@@ -480,6 +487,7 @@ export function validateAsk(raw) {
     only_you,
     tried,
     project,
+    level: raw.level === undefined ? levelOf({ purpose, blocks }) : raw.level,
     title,
     why,
     fields,
@@ -510,9 +518,12 @@ export function validateUpdate(ask, patch) {
   if (!isPlainObject(patch)) throw new ValidationError('update must be an object')
   if (patch.purpose !== undefined) throw new ValidationError('purpose cannot change', 'purpose')
   if (APPROVAL_PURPOSES.includes(ask.purpose) && ['add_fields', 'remove_fields', 'replace_fields'].some((key) => patch[key] !== undefined)) throw new ValidationError('approval fields cannot change', 'fields')
-  const named = ['title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'permission', 'consent_blocked_by', 'summary', 'minutes', 'after', 'blocks', 'add_fields', 'remove_fields', 'replace_fields'].filter(
+  const named = ['level', 'title', 'why', 'steps', 'links', 'tried', 'only_you', 'plan', 'spend', 'message', 'permission', 'consent_blocked_by', 'summary', 'minutes', 'after', 'blocks', 'add_fields', 'remove_fields', 'replace_fields'].filter(
     (key) => patch[key] !== undefined,
   )
+  if (patch.level !== undefined && !LEVELS.includes(patch.level)) {
+    throw new ValidationError(`level must be one of ${LEVELS.join(', ')}`, 'level')
+  }
   if (named.length === 0) {
     throw new ValidationError(
       'nothing to update — pass a changed ask property or fields',
@@ -566,6 +577,7 @@ export function validateUpdate(ask, patch) {
     kind: ask.kind,
     purpose: ask.purpose,
     project: ask.project,
+    level: patch.level ?? ask.level,
     title: patch.title ?? ask.title,
     why: patch.why ?? ask.why,
     fields: APPROVAL_PURPOSES.includes(ask.purpose) ? undefined : fields,
@@ -577,7 +589,7 @@ export function validateUpdate(ask, patch) {
     tried: patch.tried ?? ask.tried,
     only_you: patch.only_you ?? ask.only_you,
   })
-  return { title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, permission: merged.permission, consent_blocked_by: merged.consent_blocked_by,
+  return { level: merged.level, title: merged.title, why: merged.why, fields: merged.fields, steps: merged.steps, links: merged.links, tried: merged.tried, only_you: merged.only_you, plan: merged.plan, spend: merged.spend, message: merged.message, permission: merged.permission, consent_blocked_by: merged.consent_blocked_by,
     summary: merged.summary, minutes: merged.minutes, after: merged.after, blocks: merged.blocks }
 }
 
