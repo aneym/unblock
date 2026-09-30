@@ -8,7 +8,7 @@ const LIMIT = 8 * 1024 * 1024
 const SCOPE_LIMIT = 200 * 1024 * 1024
 export const assetLimit = (contentType) => ['video/mp4', 'video/webm'].includes(contentType) ? 64 * 1024 * 1024 : LIMIT
 const TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'text/html': 'html', 'application/json': 'mock', 'video/mp4': 'mp4', 'video/webm': 'webm' }
-const HTML_CSP = "sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline'; img-src data:; media-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com"
+const HTML_CSP = "sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline'; img-src data:; media-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; form-action 'none'"
 const CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com"
 function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 function utf8(bytes) {
@@ -137,6 +137,10 @@ export function serveAsset(req, res, asset) {
   const range = typeof req.headers.range === 'string' ? req.headers.range.match(/^bytes=(\d*)-(\d*)$/) : null
   let status = 200, bytes = asset.bytes
   if (range && (range[1] || range[2])) {
+    if (range[1] && BigInt(range[1]) >= BigInt(total)) {
+      res.writeHead(416, { ...headers, 'Content-Range': `bytes */${total}`, 'Content-Length': 0 })
+      return res.end()
+    }
     const start = range[1] ? Number(range[1]) : Math.max(0, total - Number(range[2]))
     const end = range[1] ? range[2] ? Math.min(Number(range[2]), total - 1) : total - 1 : total - 1
     if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && (end >= start || start >= total)) {
