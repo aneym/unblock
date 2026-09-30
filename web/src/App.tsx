@@ -235,7 +235,7 @@ export default function App() {
     void api<VoiceProviders>('/api/voice/providers').then((result) => {
       setProviders(result)
       let stored: string | null = null
-      try { stored = localStorage.getItem('unblock.voiceProvider') } catch { /* storage may be unavailable */ }
+      try { stored = localStorage.getItem('unblock.voiceProvider.v2') } catch { /* storage may be unavailable */ }
       const picked = result.providers.find((item) => item.id === stored && item.configured)
       setProvider(picked?.id || result.default)
     }).catch(() => undefined)
@@ -459,11 +459,10 @@ export default function App() {
         }}>Open it</button>
       </div>}
       {VIEWER && !BASE && <VoiceBar state={voiceState} transcript={transcript} provider={provider}
-        bothConfigured={providers?.providers.filter((item) => item.configured).length === 2}
+        choices={providers?.providers.filter((item) => item.configured).map(({ id, label }) => ({ id, label })) || []}
         spend={spend} minutesLeft={minutesLeft} blockedLink={blockedLink}
-        onSwitch={() => {
-          const next = provider === 'xai' ? 'gemini' : 'xai'
-          try { localStorage.setItem('unblock.voiceProvider', next) } catch { /* storage may be unavailable */ }
+        onSwitch={(next) => {
+          try { localStorage.setItem('unblock.voiceProvider.v2', next) } catch { /* storage may be unavailable */ }
           setProvider(next)
           startCall(next)
         }}

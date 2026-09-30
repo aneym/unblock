@@ -31,7 +31,7 @@ export interface VoiceDeck<A> {
 export function voiceDeck<A>(asks: A[]): VoiceDeck<A>
 
 /** The voice providers the panel can talk to. */
-export type VoiceProvider = 'gemini' | 'xai'
+export type VoiceProvider = 'openai' | 'xai' | 'gemini'
 
 /**
  * One thing the page does for the voice, so the human drives the app by

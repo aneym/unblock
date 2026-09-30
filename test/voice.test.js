@@ -142,7 +142,7 @@ test('file_issue includes the shown ask and reports no provider or a filing fail
   assert.equal((await broken.handle('file_issue', { title: 'Show dates', details: '', about: 'other' })).speech, "That didn't file. Try again.")
 })
 
-test('set_speed returns steps and rounded, clamped multipliers only on Grok', async () => {
+test('set_speed returns steps and rounded, clamped multipliers only on GPT or Grok', async () => {
   for (const provider of [undefined, 'xai']) {
     const voice = createVoiceSession({ provider, getAsks: async () => [], postAnswer: async () => ({}) })
     for (const [args, ui, speech] of [
@@ -157,7 +157,7 @@ test('set_speed returns steps and rounded, clamped multipliers only on Grok', as
   }
   const gemini = createVoiceSession({ provider: 'gemini', getAsks: async () => [], postAnswer: async () => ({}) })
   assert.deepEqual(await gemini.handle('set_speed', { change: 'faster' }), {
-    ok: false, speech: 'I can only change my speed on Grok. Tap Switch to Grok to use it.',
+    ok: false, speech: 'I can only change my speed on GPT or Grok.',
   })
 })
 

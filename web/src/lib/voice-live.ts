@@ -4,6 +4,7 @@ import { api, ApiError } from './api'
 import { createPlayer, startMic, voiceAudioError } from './voice-audio'
 import { connectGemini } from './voice-gemini'
 import { connectXai } from './voice-xai'
+import { connectOpenAi } from './voice-openai'
 
 export type VoiceState =
   | { name: 'connecting' | 'listening' | 'speaking' | 'ended' | 'unconfigured' }
@@ -65,6 +66,11 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   let pendingTools = Promise.resolve()
   let session: VoiceSessionToken | undefined
   let startedAt = 0
+  let fetchStartedAt = 0
+  let firstAudioMs: number | null = null
+  let toolCalls = 0
+  let toolOk = 0
+  const metrics = () => ({ first_audio_ms: firstAudioMs, tool_calls: toolCalls, tool_ok: toolOk, profile: options.profile ? 'scope' : 'queue' })
   let endTimer: number | undefined
   let goodbyeTimer: number | undefined
   let endingTurn: number | undefined
@@ -102,7 +108,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
     void audio.close()
     if (session) void fetch('/api/voice/end', {
       method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
-      body: JSON.stringify({ session_id: session.session_id, seconds: Math.max(0, Math.ceil((Date.now() - startedAt) / 1000)) }),
+      body: JSON.stringify({ session_id: session.session_id, seconds: Math.max(0, Math.ceil((Date.now() - startedAt) / 1000)), metrics: metrics() }),
     }).catch(() => undefined)
   }
   const fail = (message: string) => {
@@ -124,6 +130,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
     onOpen: () => { if (!stopped) onState({ name: 'listening' }) },
     onAudio: (data) => {
       if (stopped) return
+      if (firstAudioMs === null) firstAudioMs = Math.max(0, Date.now() - fetchStartedAt)
       if (awaitingGoodbyeAudio) awaitingGoodbyeAudio = false
       audioEpoch++
       player.enqueue(data)
@@ -164,6 +171,8 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
           if (stopped) return
           if (call.id && cancelledCalls.has(call.id)) continue
           const result = await rules!.handle(call.name, call.args)
+          toolCalls++
+          if (result.ok) toolOk++
           if (stopped) return
           if (result.ui) {
             if (result.ui.do === 'end_call' && !endingRequested) {
@@ -185,7 +194,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
           }
           if (result.changed) onChanged()
           if (call.id && cancelledCalls.has(call.id)) continue
-          live?.sendToolResults([{ id: call.id, name: call.name, ok: result.ok, speech: result.speech, ...(result.context !== undefined ? { context: result.context } : {}) }])
+          live?.sendToolResults([{ id: call.id, name: call.name, ok: result.ok, speech: result.speech, ...(typeof result.context === 'string' ? { context: result.context.slice(0, 12000) } : {}) }])
         }
         toolResponsesPending--
         if (!toolResponsesPending && toolTurn && (endingTurn === undefined || toolTurn >= endingTurn)) afterPlayback(toolTurn, true)
@@ -204,6 +213,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   void (async () => {
     try {
       // Fetch directly to retain the spend cap in a 402 response.
+      fetchStartedAt = Date.now()
       const response = await fetch('/api/voice/session', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider: options.provider, speed, ...options.profile?.session }), cache: 'no-store',
@@ -229,16 +239,16 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       if (stopped) {
         void fetch('/api/voice/end', {
           method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
-          body: JSON.stringify({ session_id: token.session_id, seconds: 0 }),
+          body: JSON.stringify({ session_id: token.session_id, seconds: 0, metrics: metrics() }),
         }).catch(() => undefined)
         return
       }
       onSession({ provider: token.provider, spend: token.spend, maxMinutes: token.max_minutes })
       endTimer = window.setTimeout(end, token.max_minutes * 60_000)
       const profile = options.profile || { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }
-      live = token.provider === 'xai' ? await connectXai(token, callbacks, profile, { speed }) : await connectGemini(token, callbacks, profile)
+      live = token.provider === 'openai' ? await connectOpenAi(token, callbacks, profile, { speed }) : token.provider === 'xai' ? await connectXai(token, callbacks, profile, { speed }) : await connectGemini(token, callbacks, profile)
       if (stopped) { live.close(); return }
-      if (token.provider === 'xai') { live.setSpeed?.(speed); tellSpeed() }
+      if (token.provider !== 'gemini') { live.setSpeed?.(speed); tellSpeed() }
       await audio.resume()
       if (stopped) return
       mic = await startMic(audio, live.sampleRate, (data) => { if (!stopped) live?.sendAudio(data) }, () => stopped)

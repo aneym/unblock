@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export const USD_PER_MINUTE = {
+  'gpt-realtime-2.1': 0.10,
+  'gpt-realtime-2.1-mini': 0.04,
   'gemini-3.8-live': 0.02,
   'gemini-3.8-live-extended-thinking': 0.06,
   'grok-voice-think-fast-2.0': 0.08,
@@ -39,6 +41,7 @@ export function createSpendLedger({ file, capUsd = 20, maxMinutes = 15, now = Da
   }
   return {
     status,
+    get(session_id) { return load().find((session) => session.session_id === session_id) },
     reserve({ provider, model }) {
       const sessions = load()
       const current = period(now())

@@ -43,8 +43,8 @@ function ScopeVoice({ audio, deps, onUi, onActive }: { audio: AudioContext; deps
       if (cancelled) return
       setProviders(result)
       let stored: string | null = null
-      try { stored = localStorage.getItem('unblock.voiceProvider') } catch {}
-      const picked = result.providers.find((item) => item.id === stored && item.configured)?.id || result.providers.find((item) => item.id === 'xai' && item.configured)?.id || result.default
+      try { stored = localStorage.getItem('unblock.voiceProvider.v2') } catch {}
+      const picked = result.providers.find((item) => item.id === stored && item.configured)?.id || result.default
       setProvider(picked); start(audio, picked)
     }).catch(() => { if (!cancelled) start(audio) })
     return () => { cancelled = true; attempt.current++; call.current?.stop(); void audio.close() }
@@ -56,7 +56,7 @@ function ScopeVoice({ audio, deps, onUi, onActive }: { audio: AudioContext; deps
     return () => window.clearInterval(timer)
   }, [timing, state?.name])
   return <VoiceBar state={state} transcript={transcript} provider={provider} spend={spend} minutesLeft={minutesLeft} blockedLink={null}
-    bothConfigured={providers?.providers.filter((item) => item.configured).length === 2}
-    onSwitch={() => { const next = provider === 'xai' ? 'gemini' : 'xai'; try { localStorage.setItem('unblock.voiceProvider', next) } catch {} setProvider(next); retry(next) }}
+    choices={providers?.providers.filter((item) => item.configured).map(({ id, label }) => ({ id, label })) || []}
+    onSwitch={(next) => { try { localStorage.setItem('unblock.voiceProvider.v2', next) } catch {} setProvider(next); retry(next) }}
     onEnd={() => { attempt.current++; call.current?.stop(); call.current = null; setState({ name: 'ended' }); onActive(false) }} onRetry={() => retry()} />
 }

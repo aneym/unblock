@@ -15,7 +15,7 @@ import {
 } from './passkey.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { defaultReadKey, mintVoiceToken, mintXaiToken } from './voice-token.js'
+import { defaultReadKey, mintVoiceToken, mintXaiToken, mintOpenAiToken } from './voice-token.js'
 import { createSpendLedger, rateFor } from './voice-spend.js'
 import { CLOSED_TO_ANSWERS, finished, PASSKEY_VERDICTS, Store } from './store.js'
 
@@ -1075,6 +1075,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         } catch { return sendJson(res, 502, { error: 'Could not file the issue' }) }
       }
       const settings = {
+        openai: { id: 'openai', label: 'GPT Realtime', model: process.env.UNBLOCK_OPENAI_MODEL || 'gpt-realtime-2.1', keyRef: process.env.UNBLOCK_OPENAI_KEY_REF || 'openai-rails-voice-prod', envName: 'OPENAI_API_KEY', voice: process.env.UNBLOCK_OPENAI_VOICE || 'marin' },
         gemini: { id: 'gemini', label: 'Gemini', model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live', keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key', envName: 'GEMINI_API_KEY', voice: process.env.UNBLOCK_VOICE_NAME || 'Kore' },
         xai: { id: 'xai', label: 'Grok', model: process.env.UNBLOCK_XAI_MODEL || 'grok-voice-think-fast-2.0', keyRef: process.env.UNBLOCK_XAI_KEY_REF || 'xai-api-key', envName: 'XAI_API_KEY', voice: process.env.UNBLOCK_XAI_VOICE || 'eve' },
       }
@@ -1089,25 +1090,36 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         voiceKeyCache.set(id, { ref: setting.keyRef, env: process.env[setting.envName], at: Date.now(), configured: result })
         return result
       }
+      const providerOrder = ['openai', 'xai', 'gemini']
+      const preferred = providerOrder.includes(process.env.UNBLOCK_VOICE_PROVIDER) ? process.env.UNBLOCK_VOICE_PROVIDER : 'openai'
+      const availableProviders = async () => Promise.all(providerOrder.map(configured))
+      const defaultProvider = (available) => available[providerOrder.indexOf(preferred)] ? preferred : providerOrder.find((id, index) => available[index]) || preferred
       if (pathname === '/api/voice/providers' && req.method === 'GET') {
-        const available = await Promise.all(['gemini', 'xai'].map(configured))
-        const preferred = process.env.UNBLOCK_VOICE_PROVIDER === 'xai' ? 'xai' : 'gemini'
-        const fallback = preferred === 'gemini' ? 'xai' : 'gemini'
-        const selected = available[preferred === 'gemini' ? 0 : 1] ? preferred : available[fallback === 'gemini' ? 0 : 1] ? fallback : preferred
-        return sendJson(res, 200, { default: selected, providers: ['gemini', 'xai'].map((id, index) => ({ id, label: settings[id].label, model: settings[id].model, configured: available[index], usd_per_minute: rateFor(settings[id].model) })), spend: ledger.status() })
+        const available = await availableProviders()
+        return sendJson(res, 200, { default: defaultProvider(available), providers: providerOrder.map((id, index) => ({ id, label: settings[id].label, model: settings[id].model, configured: available[index], usd_per_minute: rateFor(settings[id].model) })), spend: ledger.status() })
       }
       if (pathname === '/api/voice/end' && req.method === 'POST') {
         const body = await readJson(req)
         const seconds = Number(body.seconds)
         const ok = ledger.settle(body.session_id, Number.isFinite(seconds) ? Math.max(0, seconds) : 0)
+        if (ok) {
+          try {
+            const session = ledger.get(body.session_id)
+            const metrics = body.metrics || {}
+            const number = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+            const line = { at: new Date().toISOString(), session_id: session.session_id, provider: session.provider, model: session.model, seconds: number(body.seconds), usd: session.charged_usd, usd_per_minute: session.rate,
+              first_audio_ms: number(metrics.first_audio_ms), tool_calls: number(metrics.tool_calls), tool_ok: number(metrics.tool_ok), profile: typeof metrics.profile === 'string' ? metrics.profile.slice(0, 40) : null }
+            mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
+            appendFileSync(join(stateDir(), 'voice-sessions.jsonl'), JSON.stringify(line) + '\n', { mode: 0o600 })
+          } catch { /* Metrics never prevent settlement. */ }
+        }
         return sendJson(res, 200, { ok, spend: ledger.status() })
       }
       if (pathname === '/api/voice/session' && req.method === 'POST') {
         const body = await readJson(req)
-        const preferred = body.provider === 'xai' || body.provider === 'gemini' ? body.provider : process.env.UNBLOCK_VOICE_PROVIDER === 'xai' ? 'xai' : 'gemini'
-        const fallback = preferred === 'gemini' ? 'xai' : 'gemini'
-        const provider = await configured(preferred) ? preferred : await configured(fallback) ? fallback : null
-        if (!provider) return sendJson(res, 503, { error: 'Voice is not configured', code: 'VOICE_NOT_CONFIGURED' })
+        const available = await availableProviders()
+        const provider = providerOrder.includes(body.provider) && available[providerOrder.indexOf(body.provider)] ? body.provider : defaultProvider(available)
+        if (!available.some(Boolean)) return sendJson(res, 503, { error: 'Voice is not configured', code: 'VOICE_NOT_CONFIGURED' })
         let reservation
         try {
           reservation = ledger.reserve({ provider, model: settings[provider].model })
@@ -1118,7 +1130,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         try {
           const { keyRef, model, voice } = settings[provider]
           const scopeVoice = body.profile === 'scope' && provider === 'gemini' ? await import('./scope-voice.js') : null
-          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice, speed: body.speed, ...(scopeVoice ? { prompt: scopeVoice.SCOPE_VOICE_PROMPT, tools: scopeVoice.SCOPE_VOICE_TOOLS } : {}) }) : await mintXaiToken({ keyRef, model, voice })
+          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice, speed: body.speed, ...(scopeVoice ? { prompt: scopeVoice.SCOPE_VOICE_PROMPT, tools: scopeVoice.SCOPE_VOICE_TOOLS } : {}) }) : provider === 'openai' ? await mintOpenAiToken({ keyRef, model, voice }) : await mintXaiToken({ keyRef, model, voice })
           return sendJson(res, 200, { ...token, ...reservation, spend: ledger.status() })
         } catch {
           ledger.settle(reservation.session_id, 0)

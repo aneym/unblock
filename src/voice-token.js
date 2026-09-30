@@ -78,3 +78,26 @@ export async function mintXaiToken({ keyRef = 'xai-api-key', readKey = defaultRe
     throw new Error('Voice token service unavailable')
   }
 }
+
+export async function mintOpenAiToken({ keyRef = 'openai-rails-voice-prod', readKey = defaultReadKey, fetch = globalThis.fetch, model = 'gpt-realtime-2.1', voice = 'marin' } = {}) {
+  let key
+  try { key = await readKey(keyRef, 'OPENAI_API_KEY') } catch { throw new Error('Voice token service unavailable') }
+  if (!key) {
+    const error = new Error('Voice is not configured')
+    error.code = 'VOICE_NOT_CONFIGURED'
+    throw error
+  }
+  try {
+    const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expires_after: { anchor: 'created_at', seconds: 120 }, session: { type: 'realtime', model, audio: { output: { voice } } } }),
+    })
+    if (!response.ok) throw new Error('Voice token service unavailable')
+    const data = await response.json()
+    if (typeof data.value !== 'string' || !data.value) throw new Error('Voice token service unavailable')
+    return { provider: 'openai', token: data.value, model, voice, expires_at: new Date(Number(data.expires_at) * 1000).toISOString() }
+  } catch {
+    throw new Error('Voice token service unavailable')
+  }
+}

@@ -11,9 +11,9 @@ export function TalkButton({ active, onClick }: { active: boolean; onClick(): vo
   </button>
 }
 
-export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConfigured, onSwitch, spend, minutesLeft, blockedLink }: {
+export function VoiceBar({ state, transcript, onEnd, onRetry, provider, choices, onSwitch, spend, minutesLeft, blockedLink }: {
   state: VoiceState | null; transcript: TranscriptLine[]; onEnd(): void; onRetry(): void
-  provider?: VoiceProvider; bothConfigured: boolean; onSwitch(): void; spend?: VoiceSpend
+  provider?: VoiceProvider; choices: { id: VoiceProvider; label: string }[]; onSwitch(id: VoiceProvider): void; spend?: VoiceSpend
   minutesLeft: boolean; blockedLink: { url: string; label: string } | null
 }) {
   const [speed, setSpeed] = useState(1.5)
@@ -54,11 +54,10 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, bothConf
         : current.name === 'ended' ? ''
           : { connecting: 'Connecting…', listening: 'Listening', speaking: 'Speaking' }[current.name]
   const latest = transcript.at(-1)
-  const other = provider === 'xai' ? 'Gemini' : 'Grok'
-  const switchButton = bothConfigured && provider && <button className="voice-switch" type="button" onClick={onSwitch}
-    title={`Switch to ${other}`}>Switch to {other}</button>
-  const meta = <>{provider && (provider === 'xai' ? 'Grok' : 'Gemini')}
-    {provider === 'xai' && <> · <span className="voice-speed">
+  const switchButton = choices.length > 1 && provider ? choices.filter((choice) => choice.id !== provider).map((choice) => <button key={choice.id} className="voice-switch" type="button" onClick={() => onSwitch(choice.id)}
+    title={`Switch to ${choice.label}`}>Switch to {choice.label}</button>) : null
+  const meta = <>{provider && (choices.find((choice) => choice.id === provider)?.label || { openai: 'GPT Realtime', xai: 'Grok', gemini: 'Gemini' }[provider])}
+    {provider && provider !== 'gemini' && <> · <span className="voice-speed">
       <button type="button" data-voice-speed="down" aria-label="Slower" disabled={speed <= 0.7} onClick={() => stepSpeed(-0.1)}>−</button>
       <span className="voice-speed-value">{speed.toFixed(1)}×</span>
       <button type="button" data-voice-speed="up" aria-label="Faster" disabled={speed >= 1.5} onClick={() => stepSpeed(0.1)}>+</button>

@@ -125,7 +125,7 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
     ['UNBLOCK_VOICE_KEY_REF', typeof file.voice_key_ref === 'string' && file.voice_key_ref.trim() ? file.voice_key_ref.trim() : null],
     ['UNBLOCK_VOICE_MODEL', typeof file.voice_model === 'string' && file.voice_model.trim() ? file.voice_model.trim() : null],
     ['UNBLOCK_VOICE_NAME', typeof file.voice_name === 'string' && file.voice_name.trim() ? file.voice_name.trim() : null],
-    ['UNBLOCK_VOICE_PROVIDER', ['gemini', 'xai'].includes(file.voice_provider) ? file.voice_provider : null],
+    ['UNBLOCK_VOICE_PROVIDER', ['openai', 'xai', 'gemini'].includes(file.voice_provider) ? file.voice_provider : null],
     ['UNBLOCK_ADMIN_RELAY_KEY_REF', typeof file.admin_relay_key_ref === 'string' && file.admin_relay_key_ref.trim() ? file.admin_relay_key_ref.trim() : null],
     ['UNBLOCK_XAI_KEY_REF', typeof file.xai_key_ref === 'string' && file.xai_key_ref.trim() ? file.xai_key_ref.trim() : null],
     ['UNBLOCK_XAI_MODEL', typeof file.xai_model === 'string' && file.xai_model.trim() ? file.xai_model.trim() : null],
