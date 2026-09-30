@@ -103,6 +103,7 @@ export interface ScopeApproval {
 
 export interface ScopeV2 {
   version: 2
+  app?: 'recruiter' | 'closer' | 'rails-admin'
   slug: string
   title: string
   pane: string
@@ -118,6 +119,8 @@ export interface ScopeV2 {
 export const SECTION_ID: RegExp
 /** /^T\d{1,4}$/ */
 export const THREAD_ID: RegExp
+export const APPS: ['recruiter', 'closer', 'rails-admin']
+export function appOf(scope: { app?: unknown; slug?: string }): NonNullable<ScopeV2['app']>
 
 /**
  * Convert a v1 scope.json to v2 (pure, deterministic for a given `now`).

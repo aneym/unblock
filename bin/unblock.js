@@ -12,7 +12,7 @@ import { lintDoc } from '../src/scope-lint.js'
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
-import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID } from '../src/scope-doc.js'
+import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS } from '../src/scope-doc.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const [command = 'list', ...input] = process.argv.slice(2)
@@ -472,7 +472,7 @@ async function uploadDocImages(slug, doc, source) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
@@ -529,7 +529,13 @@ async function scope(args) {
     const health = await request('/api/health')
     const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
     const listed = scopes.map((item) => ({ ...item, url: `${base}/s/${item.slug}` }))
-    return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
+    return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
+  }
+  if (verb === 'app') {
+    if (!APPS.includes(extra[0])) fail('app must be recruiter, closer or rails-admin')
+    if (!name || extra.length !== 1 || Object.keys(opts).length) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/app`, { app: extra[0] }, { method: 'PUT' })
+    return output(data, `app ${data.app}`)
   }
   if (verb === 'patch') {
     if (!name || extra.length !== 1 || !opts['--from'] || opts['--since'] || opts['--open']) fail(usage)
@@ -741,6 +747,7 @@ unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "te
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
 unblock scope resolve <slug> T# [--decision "text"]
+unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]

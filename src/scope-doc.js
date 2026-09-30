@@ -2,6 +2,13 @@ import { locateAnchor, makeAnchor, normalizeAnchor, plainText } from './scope-an
 
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
 export const THREAD_ID = /^T\d{1,4}$/
+export const APPS = ['recruiter', 'closer', 'rails-admin']
+export function appOf(scope) {
+  if (APPS.includes(scope.app)) return scope.app
+  if (scope.slug?.startsWith('recruiter')) return 'recruiter'
+  if (scope.slug?.startsWith('closer')) return 'closer'
+  return 'rails-admin'
+}
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const slugify = (text) => {
@@ -121,6 +128,7 @@ export function validateScope(scope) {
   const check = (ok, message) => { if (!ok) problems.push(message) }
   if (!object(scope)) return ['invalid scope']
   check(scope.version === 2, 'invalid version')
+  if (scope.app !== undefined) check(APPS.includes(scope.app), 'invalid app')
   check(typeof scope.slug === 'string' && SLUG.test(scope.slug), 'invalid slug')
   check(typeof scope.title === 'string', 'invalid title')
   check(typeof scope.pane === 'string', 'invalid pane')

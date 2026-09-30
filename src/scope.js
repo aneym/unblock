@@ -8,7 +8,7 @@ import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
-import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID } from './scope-doc.js'
+import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -58,7 +58,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!data?.scope || data.error) return []
       const scope = data.scope
       const threads = Array.isArray(scope.threads) ? scope.threads : []
-      return [{ slug: dir.name, title: scope.title ?? '', updated_at: scope.updated_at ?? '',
+      return [{ slug: dir.name, app: appOf(scope), title: scope.title ?? '', updated_at: scope.updated_at ?? '',
         pane: scope.pane ?? '', revision: scope.revision, open: threads.filter((t) => t.status === 'open').length }]
     }).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
   }
@@ -296,7 +296,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       schedule(slug)
       return sendJson(res, 200, { note })
     }
-    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, notes: store.scopeNotes(slug) })
+    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: store.scopeNotes(slug) })
     if (req.method === 'GET' && parts.length === 2 && action === 'events') return watch(slug, req, res)
     if (req.method === 'GET' && parts.length === 2 && action === 'notes') {
       const raw = url.searchParams.get('since') ?? '0'
@@ -324,12 +324,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       return sendJson(res, 404, { error: 'not found' })
     }
+    const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
-    if (!approvalWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!appWrite && !approvalWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
     if (approvalWrite && !relay) {
@@ -337,7 +338,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       requireHumanPath(req)
     }
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
-    if (docWrite && human) {
+    if ((docWrite || appWrite) && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
@@ -346,6 +347,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
     const body = await readJson(req)
+    if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
     if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
       || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
@@ -356,7 +358,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -414,11 +416,22 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, appWrite, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
+    if (appWrite) {
+      scope.app = body.app
+      const problems = validateScope(scope)
+      if (problems.length) bad(problems[0])
+      writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+      renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
+      return { app: scope.app }
+    }
     if (approvalWrite) return approveScope(slug, scope, body, human)
     const storedSections = scope.doc.sections
     if (sectionWrite) {
