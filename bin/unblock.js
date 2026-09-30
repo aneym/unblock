@@ -619,7 +619,7 @@ async function scope(args) {
     if (opts['--since'] !== undefined) query.set('since', opts['--since'])
     if (opts['--from']) query.set('from', opts['--from'])
     const data = await request(`/api/scope/${encodeURIComponent(name)}/notes?${query}`)
-    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''} ${note.thread ?? ''} ${note.event ?? ''} ${note.text}`).join('\n'))
+    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''} ${note.thread ?? ''} ${note.event ?? ''} ${note.text}${(note.images ?? []).map(path => `\n  ${path}`).join('')}`).join('\n'))
   }
   fail(usage)
 }

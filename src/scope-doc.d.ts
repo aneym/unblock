@@ -23,7 +23,10 @@ export interface DocSection {
   body_md: string
 }
 
+export interface CommentImage { id: string; width: number; height: number }
+
 export interface ThreadMessage {
+  images?: CommentImage[]
   from: 'agent' | 'alex'
   text: string
   /** ISO time. */
@@ -39,6 +42,7 @@ export interface ThreadMessage {
 }
 
 export interface Resolution {
+  images?: CommentImage[]
   /** What was decided, in plain words. */
   decision: string
   /** His own words when he resolved it ("Take the recommendation", or what he said); null when the lane resolved it. */

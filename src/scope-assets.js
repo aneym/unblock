@@ -58,6 +58,68 @@ function dimensions(bytes, ext) {
   bad('asset bytes do not match content type')
 }
 
+export function stripImageMetadata(bytes, ext) {
+  const fail = () => bad('could not read that image')
+  if (ext === 'gif') return Buffer.from(bytes)
+  if (ext === 'png') {
+    if (bytes.length < 8 || !bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) fail()
+    const chunks = [bytes.subarray(0, 8)]
+    let pos = 8
+    while (pos + 12 <= bytes.length) {
+      const length = bytes.readUInt32BE(pos), end = pos + 12 + length
+      if (end > bytes.length) fail()
+      const type = bytes.toString('ascii', pos + 4, pos + 8)
+      if (!['tEXt', 'zTXt', 'iTXt', 'eXIf'].includes(type)) chunks.push(bytes.subarray(pos, end))
+      if (type === 'IEND') return Buffer.concat(chunks)
+      pos = end
+    }
+    fail()
+  }
+  if (ext === 'jpg') {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) fail()
+    const chunks = [bytes.subarray(0, 2)]
+    let pos = 2
+    while (pos < bytes.length) {
+      const start = pos
+      if (bytes[pos++] !== 0xff) fail()
+      while (bytes[pos] === 0xff) pos++
+      const marker = bytes[pos++]
+      if (marker === undefined || marker === 0 || marker === 0xd9) fail()
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { chunks.push(bytes.subarray(start, pos)); continue }
+      if (pos + 2 > bytes.length) fail()
+      const length = bytes.readUInt16BE(pos)
+      if (length < 2 || pos + length > bytes.length) fail()
+      if (marker === 0xda) { chunks.push(bytes.subarray(start)); return Buffer.concat(chunks) }
+      if (![0xe1, 0xed].includes(marker)) chunks.push(bytes.subarray(start, pos + length))
+      pos += length
+    }
+    fail()
+  }
+  if (ext === 'webp') {
+    if (bytes.length < 12 || bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP') fail()
+    const end = bytes.readUInt32LE(4) + 8
+    if (end > bytes.length || end < 12) fail()
+    const chunks = []
+    let pos = 12
+    while (pos < end) {
+      if (pos + 8 > end) fail()
+      const length = bytes.readUInt32LE(pos + 4), next = pos + 8 + length + length % 2
+      if (next > end) fail()
+      const type = bytes.toString('ascii', pos, pos + 4)
+      if (!['EXIF', 'XMP '].includes(type)) {
+        const chunk = Buffer.from(bytes.subarray(pos, next))
+        if (type === 'VP8X') { if (length < 10) fail(); chunk[8] &= ~0x0c }
+        chunks.push(chunk)
+      }
+      pos = next
+    }
+    const header = Buffer.from(bytes.subarray(0, 12))
+    header.writeUInt32LE(4 + chunks.reduce((sum, chunk) => sum + chunk.length, 0), 4)
+    return Buffer.concat([header, ...chunks])
+  }
+  fail()
+}
+
 export function readAsset(dir, id) {
   if (!ASSET_ID.test(id)) return null
   try {
@@ -87,9 +149,14 @@ export function readAssetBody(req, limit = LIMIT) {
   })
 }
 
-export function storeAsset(dir, bytes, contentType) {
+export function storeAsset(dir, bytes, contentType, { human = false } = {}) {
   const ext = TYPES[contentType]
-  if (!ext) bad('unsupported asset content type', 415)
+  if (!ext && !human) bad('unsupported asset content type', 415)
+  if (human) {
+    if (!['png', 'jpg', 'webp', 'gif'].includes(ext)) bad('images only: PNG, JPEG, WebP or GIF', 415)
+    if (bytes.length > LIMIT) bad('asset exceeds 8 MiB', 413)
+    bytes = stripImageMetadata(bytes, ext)
+  }
   let type = 'image', width = null, height = null
   if (ext === 'mock') {
     let record

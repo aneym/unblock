@@ -379,3 +379,5 @@ Zero npm dependencies. The queue is one SQLite file at
 ## License
 
 MIT
+
+Alex’s scoping comments can carry pictures; the lane gets a local path per image.

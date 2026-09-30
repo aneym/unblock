@@ -226,7 +226,7 @@ export class Store {
         PRIMARY KEY (note_id, pane)
       );
     `)
-    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT']]) this.#addColumn('scope_notes', name, type)
+    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT'], ['images', 'TEXT']]) this.#addColumn('scope_notes', name, type)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
@@ -269,18 +269,18 @@ export class Store {
   #scopeNote(row) {
     return row && {
       id: row.id, slug: row.slug, from: row.author, kind: row.kind,
-      qid: row.qid, text: row.text, at: row.created_at,
+      qid: row.qid, text: row.text, images: row.images ? JSON.parse(row.images) : [], at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
       anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: ['voice', 'admin'].includes(row.via) ? row.via : null,
       thread: row.thread ?? null, event: row.event ?? null, words: row.words ?? null, client_id: row.client_id ?? null,
     }
   }
 
-  addScopeNote({ slug, author, kind, qid, text, who, anchor = null, reply_to = null, via = null, thread = null, event = null, words = null, client_id = null, targets = [] }) {
+  addScopeNote({ slug, author, kind, qid, text, who, anchor = null, reply_to = null, via = null, thread = null, event = null, words = null, client_id = null, images = [], targets = [] }) {
     const at = new Date().toISOString()
     const result = this.#db.prepare(`INSERT INTO scope_notes
-      (slug, author, kind, qid, text, who, created_at, delivery, anchor, reply_to, via, thread, event, words, client_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via, thread, event, words, client_id)
+      (slug, author, kind, qid, text, who, created_at, delivery, anchor, reply_to, via, thread, event, words, client_id, images)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via, thread, event, words, client_id, JSON.stringify(images))
     const insertTarget = this.#db.prepare('INSERT INTO scope_note_targets (note_id, pane) VALUES (?, ?)')
     for (const pane of new Set(targets)) insertTarget.run(result.lastInsertRowid, pane)
     return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))

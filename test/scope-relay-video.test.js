@@ -40,8 +40,8 @@ test('the Admin relay reads video assets (mp4, webm) in full and in byte ranges;
       assert.equal(part.status, 206, `${type} range`)
       assert.equal(part.buf.length, 11)
     }
-    // Still refused: an upload, a non-asset path under the scope, another slug's style of path.
-    assert.equal((await raw('/api/scope/demo/assets', { method: 'POST', headers: { ...relay, 'Content-Type': 'video/mp4' }, body: mp4(64) })).status, 403)
+    // Still refused: a video upload (r40, 2026-09-30: the relay uploads Alex's raster pictures only, so 415), a non-asset path under the scope, another slug's style of path.
+    assert.equal((await raw('/api/scope/demo/assets', { method: 'POST', headers: { ...relay, 'Content-Type': 'video/mp4' }, body: mp4(64) })).status, 415)
     assert.equal((await raw('/api/scope/demo/assets/0123456789abcdef.mov', { headers: relay })).status, 403)
     assert.equal((await raw('/api/scope/demo/assets/0123456789abcdef.webm/x', { headers: relay })).status, 403)
   } finally { await h.close(); delete process.env.UNBLOCK_ADMIN_RELAY_TOKEN }

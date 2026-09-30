@@ -52,7 +52,8 @@ test('lanes put screens and mocks in the doc; the daemon serves them sandboxed; 
     assert.equal(again.json.id, shot.json.id)
 
     // 2. Only lanes upload, only real images or HTML, within size.
-    assert.equal((await upload(png(10, 10, 1), 'image/png', human)).status, 403)
+    // r40 (2026-09-30): Alex may now upload raster pictures for his comments (test/scope-images.test.js); never SVG or HTML.
+    assert.equal((await upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'image/svg+xml', human)).status, 415)
     assert.ok([400, 415].includes((await upload(Buffer.from('%PDF-1.7'), 'application/pdf')).status))
     assert.equal((await upload(Buffer.from('not a png at all'), 'image/png')).status, 400)
     assert.equal((await upload(Buffer.alloc(9 * 1024 * 1024, 1), 'image/png')).status, 413)

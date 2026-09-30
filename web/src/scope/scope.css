@@ -406,3 +406,28 @@ dialog.approve .btn:disabled { opacity: .5; cursor: default; }
 }
 
 .composer-note { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
+
+.card.drop-target { background: var(--accent-soft); border: 1px solid var(--accent); }
+.thumbs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+.thumbs .thumb { display: block; padding: 0; margin: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: 8px; background: var(--surface); aspect-ratio: 1; }
+.thumbs img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.thumbs:not(.draft):has(> :only-child) { display: block; }
+.thumbs:not(.draft) > :only-child { width: 100%; max-height: 240px; aspect-ratio: auto; }
+.thumbs:not(.draft) > :only-child img { max-height: 240px; object-fit: contain; }
+.thumbs.draft { display: flex; flex-wrap: wrap; }
+.thumbs.draft .thumb { position: relative; width: 64px; height: 64px; flex: 0 0 64px; }
+.thumbs.draft .thumb button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; padding: 0; border: 1px solid var(--hairline); border-radius: 50%; background: var(--raised); color: var(--ink); }
+.thumbs .uploading { display: grid; place-items: center; font-size: 10px; color: var(--muted); }
+.btn.icon { display: inline-flex; align-items: center; justify-content: center; padding: 6px; }
+dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: var(--ink); max-width: 98vw; max-height: 98vh; }
+.lightbox::backdrop { background: rgb(0 0 0 / .75); }
+.lightbox img { display: block; max-width: 92vw; max-height: 88vh; object-fit: contain; }
+.lightbox button { position: absolute; border: 1px solid var(--hairline); border-radius: 8px; background: var(--raised); color: var(--ink); padding: 8px; }
+.lightbox [data-action="close-lightbox"] { top: 0; right: 0; }
+.lightbox [data-action="prev-image"] { left: 0; top: 50%; }
+.lightbox [data-action="next-image"] { right: 0; top: 50%; }
+@media (max-width: 899px) {
+  .thumbs.draft .thumb { width: 56px; height: 56px; flex-basis: 56px; }
+  dialog.lightbox { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; box-sizing: border-box; }
+  dialog.lightbox[open] { display: flex; align-items: center; justify-content: center; }
+}

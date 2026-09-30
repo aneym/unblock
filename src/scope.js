@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promptPane } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
-import { readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
+import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 
@@ -134,7 +134,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const laneNotes = notes.filter(note => note.event === 'lane_note')
         const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
         const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
-        const joined = comments.map((note) => {
+        const imagePaths = note => (note.images ?? []).map(path => ` [image: ${path}]`).join('')
+        const parts = comments.map((note) => {
           const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
           const heading = headingFor(note.anchor?.section ?? 'title')
           const quote = quoteSnippet(note.anchor?.quote ?? '')
@@ -150,9 +151,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             return `${alex} resolved ${note.thread} (§${heading} "${quote}") as: ${text.replace(/\.$/, '')}.${words} Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
           }
           return `${alex}${note.event === 'reopen' ? ' reopened' : ' on'} ${note.thread} (§${heading} "${quote}"): ${text}`
-        }).join(' | ')
+        })
+        const joined = parts.map((part, index) => part + imagePaths(comments[index])).join(' | ')
         let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
-        if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
+        if (`[scoping ${slug}] ${parts.join(' | ')} (reply: unblock scope reply ${slug} <T#> "<one line>")`.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}${comments.map(imagePaths).join('')}`
         let retry = approvalUnavailable, held = false
         async function send(key, targetPane, text, mark) {
           const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (process.env.UNBLOCK_SUPERVISED === '1' && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
@@ -347,11 +349,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         return asset ? serveAsset(req, res, asset) : sendJson(res, 404, { error: 'no such asset' })
       }
       if (req.method === 'POST' && parts.length === 2) {
-        if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'only lanes upload assets' })
+        const human = proxyIdentity(req) || relayIdentity(req)
         const contentType = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
-        const bytes = await readAssetBody(req, assetLimit(contentType))
+        if (human && !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(contentType)) bad('images only: PNG, JPEG, WebP or GIF', 415)
+        const bytes = await readAssetBody(req, human ? 8 * 1024 * 1024 : assetLimit(contentType))
         const previous = writes.get(slug) ?? Promise.resolve()
-        const pending = previous.catch(() => {}).then(() => storeAsset(dir, bytes, contentType))
+        const pending = previous.catch(() => {}).then(() => storeAsset(dir, bytes, contentType, { human: !!human }))
         writes.set(slug, pending)
         try {
           const { status, asset } = await pending
@@ -405,7 +408,6 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!human) return sendJson(res, 403, { error: 'only Alex approves' })
       requireHumanPath(req)
     }
-    if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if ((docWrite || appWrite) && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
@@ -416,6 +418,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     if (verb === 'react' && human) return sendJson(res, 403, { error: 'lanes react through the CLI' })
     const body = await readJson(req)
+    if (body?.images !== undefined && !human) return sendJson(res, 400, { error: 'invalid images' })
+    if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
     if (verb === 'react' && body.emoji !== '👀' && body.emoji !== null) return sendJson(res, 400, { error: 'invalid emoji' })
@@ -511,11 +515,22 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         ? { ...section, body_md: body.body_md, ...(body.heading !== undefined ? { heading: body.heading } : {}) }
         : section), ...(body.keep !== undefined ? { keep: body.keep } : {}) }
     }
+    let images = []
+    if (body.images !== undefined) {
+      if (!human || (!newThread && !['reply', 'reject', 'resolve'].includes(verb)) || !Array.isArray(body.images) || body.images.length > 6) bad('invalid images')
+      images = body.images.map(id => {
+        if (typeof id !== 'string' || !ASSET_ID.test(id) || !/\.(png|jpg|webp|gif)$/.test(id)) bad('invalid images')
+        const asset = readAsset(join(dir, 'assets'), id)
+        if (asset?.metadata.type !== 'image') bad('invalid images')
+        return { id, width: asset.metadata.width, height: asset.metadata.height }
+      })
+    }
     if (body.client_id !== undefined) {
       const duplicate = scope.threads.find((thread) => thread.messages.some((message) => message.client_id === body.client_id)
         || thread.resolution?.client_id === body.client_id || thread.parked_client_id === body.client_id)
       if (duplicate) return { thread: duplicate, duplicate: true }
     }
+    const pictures = images.length ? { images } : {}
     const client = body.client_id === undefined ? {} : { client_id: body.client_id }
     const via = body.via === undefined ? {} : { via: body.via }
     const at = new Date().toISOString()
@@ -523,7 +538,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const sanitized = typeof value === 'string' ? human ? value.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '') : compact(value) : ''
       const cleaned = preserve ? sanitized : sanitized.trim()
       if (cleaned.length > limit) bad(`your answer is too long (${cleaned.length} of ${limit} characters)`)
-      if (!cleaned.trim()) bad('invalid text')
+      if (!cleaned.trim() && !(images.length && (newThread || verb === 'reply'))) bad('invalid text')
       return cleaned
     }
     const setOptions = (thread) => {
@@ -560,7 +575,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       const kind = human ? 'comment' : body.kind ?? 'question'
       if (!['question', 'comment'].includes(kind) || (kind === 'comment' && (body.recommendation !== undefined || body.why !== undefined))) bad('invalid kind')
-      thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client }], created_at: at }
+      thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
       if (!human && body.recommendation !== undefined) thread.recommendation = text(body.recommendation, 600)
       if (!human && body.why !== undefined) thread.why = text(body.why, 600)
       if (body.options !== undefined) {
@@ -593,7 +608,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (body.options !== undefined) setOptions(thread)
       } else if (verb === 'reply') {
         if (body.options !== undefined && (human || body.recommendation === undefined)) bad('options require an agent recommendation')
-        const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client }
+        const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client, ...pictures }
         if (!human && body.recommendation !== undefined) {
           if (thread.kind !== 'question') bad('only questions have recommendations')
           thread.recommendation = text(body.recommendation, 600)
@@ -613,7 +628,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (thread.status !== 'open' || thread.kind !== 'question' || !thread.recommendation) bad('only open questions with recommendations can be rejected')
         const reason = body.text == null || (typeof body.text === 'string' && !body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()) ? '' : text(body.text)
         thread.rejected_at = at
-        thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client })
+        thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client, ...pictures })
         noteData = { event: 'reject', text: reason }
       } else if (verb === 'park') {
         if (thread.status !== 'open') bad('only open threads can be parked')
@@ -626,7 +641,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const decision = text(body.decision, 4000, true)
         const words = body.alex_words == null ? decision : text(body.alex_words, 4000, true)
         thread.status = 'resolved'
-        thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client }
+        thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client, ...pictures }
         noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
       } else if (thread.status === 'open') {
         if ((thread.author ?? thread.messages[0]?.from) === 'alex') {
@@ -686,7 +701,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     if (noteData) {
-      const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), ...noteData })
+      const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...noteData })
       emit(slug, 'note', note)
     }
     const state = readScope(slug)

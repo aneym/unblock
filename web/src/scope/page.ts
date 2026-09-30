@@ -1,5 +1,5 @@
 import './scope.css'
-import { orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval } from '../../../src/scope-doc.js'
+import { orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval, type CommentImage } from '../../../src/scope-doc.js'
 import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
@@ -24,7 +24,7 @@ let selectionRange: Range | null = null, selectionScrolling = false
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
-function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+function disablePending() { document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => { if (uploading.get(box.dataset.draft!)) { const button = box.closest('.reply')?.querySelector<HTMLButtonElement>('.btn.primary'); if (button) button.disabled = true; box.closest('.reply')?.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = true) } }); document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
 type AskChoice = { action: 'take' | 'option' | 'no' | 'else'; label: string; option?: number }
 const askDecisions = new Map<string, { choice: AskChoice; note: string; timer: number }>(), askSuggestions = new Map<string, AskChoice | null>(), picking = new Set<string>()
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
@@ -36,7 +36,76 @@ const drafts = new Map<string, string>(), errors = new Map<string, string>(), no
 function draftStorageKey(key: string) { return `scope:draft:${slug}:${key}` }
 function getDraft(key: string) { return drafts.get(key) ?? storage.get(draftStorageKey(key)) ?? '' }
 function setDraft(key: string, value: string) { drafts.set(key, value); storage.set(draftStorageKey(key), value) }
-function deleteDraft(key: string) { drafts.delete(key); storage.remove(draftStorageKey(key)); document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(input => { if (input.dataset.draft === key) input.value = '' }) }
+function deleteDraft(key: string) { drafts.delete(key); storage.remove(draftStorageKey(key)); saveImages(key, []); updateImageBox(key); document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(input => { if (input.dataset.draft === key) input.value = '' }) }
+const draftImages = new Map<string, CommentImage[]>()
+const uploading = new Map<string, number>()
+function imageStorageKey(key: string) { return `scope:draft-images:${slug}:${key}` }
+function getImages(key: string): CommentImage[] {
+  if (!draftImages.has(key)) {
+    try { const value = JSON.parse(storage.get(imageStorageKey(key)) || '[]'); draftImages.set(key, Array.isArray(value) ? value.filter(image => /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/.test(image?.id) && image.width > 0 && image.height > 0).slice(0, 6) : []) } catch { draftImages.set(key, []) }
+  }
+  return draftImages.get(key)!
+}
+function saveImages(key: string, images: CommentImage[]) { draftImages.set(key, images); if (images.length) storage.set(imageStorageKey(key), JSON.stringify(images)); else storage.remove(imageStorageKey(key)) }
+function imageStrip(images: CommentImage[] | undefined, draft = false, key = '') {
+  if (!images?.length && !(draft && uploading.get(key))) return draft ? '<div class="thumbs draft"></div>' : ''
+  return `<div class="thumbs${draft ? ' draft' : ''}">${(images || []).map((image, i) => draft
+    ? `<figure class="thumb"><img src="${endpoint}/assets/${image.id}" alt="Picture ${i + 1}" width="${image.width}" height="${image.height}"><button type="button" data-action="remove-image" data-image="${i}" aria-label="Remove picture">×</button></figure>`
+    : `<button type="button" class="thumb" data-action="view-image"><img src="${endpoint}/assets/${image.id}" loading="lazy" alt="Picture ${i + 1} of ${images!.length}" width="${image.width}" height="${image.height}"></button>`).join('')}${draft ? Array.from({ length: uploading.get(key) || 0 }, () => '<figure class="thumb uploading">Uploading…</figure>').join('') : ''}</div>`
+}
+const attachControl = '<button type="button" class="btn icon" data-action="attach" aria-label="Add image"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 5 5 3-3 4 4"/></svg></button><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden data-images>'
+function updateImageBox(key: string) {
+  document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => {
+    if (box.dataset.draft !== key) return
+    const reply = box.closest<HTMLElement>('.reply')!
+    const strip = reply.querySelector('.thumbs.draft'), holder = document.createElement('div')
+    holder.innerHTML = imageStrip(getImages(key), true, key)
+    if (strip) strip.replaceWith(holder.firstElementChild!); else box.after(holder.firstElementChild!)
+    reply.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = !!uploading.get(key) || pending.has(key) || sending.has(key))
+    const error = reply.querySelector('.error'); if (error) error.textContent = errors.get(key) || ''
+    const send = reply.querySelector<HTMLButtonElement>('.btn.primary'); if (send) { send.disabled = !!uploading.get(key) || pending.has(key) || sending.has(key); if (send.dataset.action === 'reply' && getImages(key).length) send.hidden = false }
+  })
+}
+async function addImages(box: HTMLTextAreaElement, files: File[]) {
+  const key = box.dataset.draft!
+  for (const file of files) {
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) { errors.set(key, 'PNG, JPEG, WebP or GIF only.'); updateImageBox(key); continue }
+    if (file.size > 8 * 1024 * 1024) { errors.set(key, 'That picture is over 8 MB.'); updateImageBox(key); continue }
+    if (getImages(key).length + (uploading.get(key) || 0) >= 6) { errors.set(key, 'Up to 6 pictures per message.'); updateImageBox(key); continue }
+    uploading.set(key, (uploading.get(key) || 0) + 1); errors.delete(key); updateImageBox(key)
+    try {
+      let bytes: Blob = file
+      if (file.type === 'image/jpeg') {
+        const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+        const scale = Math.min(1, 2560 / Math.max(bitmap.width, bitmap.height)), canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+        canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close()
+        bytes = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not read that image')), 'image/jpeg', 0.9))
+      }
+      const response = await fetch(`${endpoint}/assets`, { method: 'POST', headers: { 'Content-Type': file.type }, body: bytes })
+      if (response.status === 404 || response.status === 405) throw new Error('Pictures need the newer Admin.')
+      const image = await response.json(); if (!response.ok) throw new Error(image.error || `HTTP ${response.status}`)
+      saveImages(key, [...getImages(key), { id: image.id, width: image.width, height: image.height }])
+    } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not upload picture') }
+    finally { uploading.set(key, Math.max(0, (uploading.get(key) || 1) - 1)); updateImageBox(key) }
+  }
+}
+function imageBox(target: EventTarget | null) { return target instanceof Element ? (target.closest('textarea[data-draft]') || target.closest('.card')?.querySelector('textarea[data-draft]')) as HTMLTextAreaElement | null : null }
+document.addEventListener('paste', e => { const box = imageBox(e.target), files = [...(e.clipboardData?.files || [])]; if (box && files.some(file => file.type.startsWith('image/'))) { e.preventDefault(); void addImages(box, files) } })
+document.addEventListener('dragover', e => { const box = imageBox(e.target); if (box && e.dataTransfer?.types.includes('Files')) { e.preventDefault(); box.closest('.card')?.classList.add('drop-target') } })
+document.addEventListener('dragleave', e => { const card = (e.target as Element)?.closest('.card'); if (card && !card.contains(e.relatedTarget as Node)) card.classList.remove('drop-target') })
+document.addEventListener('drop', e => { const box = imageBox(e.target); if (box && e.dataTransfer?.files.length) { e.preventDefault(); box.closest('.card')?.classList.remove('drop-target'); void addImages(box, [...e.dataTransfer.files]) } })
+document.addEventListener('change', e => { const input = e.target; if (input instanceof HTMLInputElement && input.matches('[data-images]')) { const box = imageBox(input); if (box) void addImages(box, [...(input.files || [])]); input.value = '' } })
+const lightbox = document.createElement('dialog'); lightbox.className = 'lightbox'
+lightbox.innerHTML = '<button type="button" data-action="close-lightbox" aria-label="Close">×</button><button type="button" data-action="prev-image" aria-label="Previous picture">←</button><img alt=""><button type="button" data-action="next-image" aria-label="Next picture">→</button>'
+document.body.append(lightbox)
+let lightboxItems: HTMLButtonElement[] = [], lightboxIndex = 0, lightboxOpener: HTMLButtonElement | null = null
+function showLightboxImage() { const image = lightboxItems[lightboxIndex].querySelector('img')!; $<HTMLImageElement>('img', lightbox).src = image.src; $<HTMLImageElement>('img', lightbox).alt = image.alt; lightbox.querySelectorAll<HTMLButtonElement>('[data-action="prev-image"],[data-action="next-image"]').forEach(button => button.hidden = lightboxItems.length < 2) }
+function closeLightbox() { lightbox.close(); lightboxOpener?.focus({ preventScroll: true }) }
+function moveLightbox(delta: number) { lightboxIndex = (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length; showLightboxImage() }
+lightbox.addEventListener('click', e => { if (e.target === lightbox || (e.target as Element).closest('[data-action="close-lightbox"]')) closeLightbox(); else if ((e.target as Element).closest('[data-action="prev-image"]')) moveLightbox(-1); else if ((e.target as Element).closest('[data-action="next-image"]')) moveLightbox(1) })
+lightbox.addEventListener('cancel', e => { e.preventDefault(); closeLightbox() })
+document.addEventListener('keydown', e => { if (!lightbox.open) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); e.stopImmediatePropagation(); if (e.key === 'Escape') closeLightbox(); else moveLightbox(e.key === 'ArrowLeft' ? -1 : 1) } })
 function composerKey() {
   if (composing?.general) return 'general'
   const key = `composer:${composing?.section}:${composing?.quote}`
@@ -49,23 +118,26 @@ let changedComposer: Anchor | null = null
 // Keep live controls connected: replace their siblings, never move the kept node.
 function replaceAround(root: HTMLElement, nodes: Node[], kept?: HTMLElement | null) {
   if (!kept || kept.parentElement !== root || !nodes.includes(kept)) { root.replaceChildren(...nodes); return }
-  for (const node of [...root.childNodes]) if (node !== kept) node.remove()
-  const index = nodes.indexOf(kept)
-  for (const node of nodes.slice(0, index)) root.insertBefore(node, kept)
-  for (const node of nodes.slice(index + 1)) root.append(node)
+  for (const node of [...root.childNodes]) if (!nodes.includes(node)) node.remove()
+  let cursor = root.firstChild
+  for (const node of nodes) {
+    if (node === cursor) cursor = cursor.nextSibling
+    else root.insertBefore(node, cursor)
+  }
 }
 function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
   const reply = kept.querySelector<HTMLElement>('.reply'), textarea = reply?.querySelector<HTMLTextAreaElement>('textarea')
   let nextReply = fresh.querySelector<HTMLElement>('.reply')
-  if (kept.dataset.t && reply && textarea && (document.activeElement === textarea || textarea.value.trim()) && (!fresh.classList.contains('open') || !nextReply)) {
+  if (kept.dataset.t && reply && textarea && (document.activeElement === textarea || textarea.value.trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t)) && (!fresh.classList.contains('open') || !nextReply)) {
     nextReply = document.createElement('div'); nextReply.className = 'reply'; nextReply.dataset.retainedReply = 'true'
-    nextReply.innerHTML = `<p class="composer-note">${fresh.classList.contains('parked') ? 'Parked' : 'Resolved'} while you were typing. Sending reopens it.</p><textarea></textarea><p class="error" role="alert">${esc(errors.get(kept.dataset.t))}</p><div class="actions"><button class="btn primary" data-action="reply">${fresh.classList.contains('comment') ? 'Reply' : 'Send'}</button></div>`
+    nextReply.innerHTML = `<p class="composer-note">${fresh.classList.contains('parked') ? 'Parked' : 'Resolved'} while you were typing. Sending reopens it.</p><textarea></textarea>${imageStrip(getImages(kept.dataset.t), true, kept.dataset.t)}<p class="error" role="alert">${esc(errors.get(kept.dataset.t))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="reply">${fresh.classList.contains('comment') ? 'Reply' : 'Send'}</button></div>`
     fresh.append(nextReply)
   }
   const nextTextarea = nextReply?.querySelector('textarea'), note = reply?.querySelector<HTMLElement>('.composer-note')
   if (reply && nextReply && textarea && nextTextarea) {
     const nextNote = nextReply.querySelector('.composer-note')
-    const nodes = [...nextReply.childNodes].flatMap(node => node === nextTextarea ? note && !nextNote && !reply.hasAttribute('data-retained-reply') ? [note, textarea] : [textarea] : [node])
+    const strip = reply.querySelector('.thumbs.draft')
+    const nodes = [...nextReply.childNodes].flatMap(node => node === nextTextarea ? note && !nextNote && !reply.hasAttribute('data-retained-reply') ? [note, textarea] : [textarea] : node instanceof Element && node.matches('.thumbs.draft') && strip ? [strip] : [node])
     reply.className = nextReply.className
     reply.toggleAttribute('data-retained-reply', nextReply.hasAttribute('data-retained-reply'))
     replaceAround(reply, nodes, textarea)
@@ -203,10 +275,10 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
   }
   return result
 }
-async function postThread(body: { anchor: Anchor; text: string; via?: 'voice' }) { return write('', body) }
-async function postReply(id: string, body: { text: string; via?: 'voice' }) { return write(`/${id}/reply`, body, id) }
-async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice' }) { return write(`/${id}/resolve`, body, id) }
-async function postReject(id: string, body: { text: string; via?: 'voice' }) { return write(`/${id}/reject`, body, id) }
+async function postThread(body: { anchor: Anchor; text: string; via?: 'voice'; images?: string[] }) { return write('', body) }
+async function postReply(id: string, body: { text: string; via?: 'voice'; images?: string[] }) { return write(`/${id}/reply`, body, id) }
+async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice'; images?: string[] }) { return write(`/${id}/resolve`, body, id) }
+async function postReject(id: string, body: { text: string; via?: 'voice'; images?: string[] }) { return write(`/${id}/reject`, body, id) }
 async function postPark(id: string, body: { via?: 'voice' } = {}) { return write(`/${id}/park`, body, id) }
 function hasClientId(clientId: string) { return scope?.threads.some(t => t.messages.some(m => (m as any).client_id === clientId) || (t.resolution as any)?.client_id === clientId || (t as any).parked_client_id === clientId) || false }
 function sendingLine(item: Sending) { return `<div class="waiting sending" data-client="${esc(item.clientId)}" role="status">${Date.now() - item.at >= 120_000 ? 'Still sending. Admin will keep trying.' : 'Sending…'}${item.text ? ` &quot;${esc(item.text)}&quot;` : ''}</div>` }
@@ -262,26 +334,26 @@ function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span></div><div class="q">${esc(t.messages[0]?.text)}</div>${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div></div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span></div><div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
   let body = ''
-  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea><p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions"><button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
+  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') {
     const decision = askDecisions.get(t.id), suggested = askSuggestions.has(t.id) ? ' suggest' : ''
     const choices = decision ? `<p class="decided">${esc(decision.choice.action === 'take' ? 'Took it' : decision.choice.action === 'option' ? `Chose: ${decision.choice.label}` : decision.choice.action === 'no' ? 'Said no' : 'Something else')}${decision.note ? ` · ${esc(decision.note)}` : ''} <button data-action="undo">Undo</button></p>` : `<div class="choices"><button class="btn${suggested}" data-action="take">Take it</button><button class="btn${suggested}" data-action="no">No</button><button class="btn${suggested}" data-action="else">Something else</button></div>${suggested ? '<p class="pick-hint">Pick one; your note goes with it.</p>' : ''}`
-    body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
+    body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}</div>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length && !askDecisions.has(t.id) ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<button${askSuggestions.get(t.id)?.option === i + 1 ? ' class="suggest"' : ''} data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
-  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div></div>`).join('')}</div>` : ''}
+  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
   ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
@@ -601,14 +673,13 @@ function openGeneralComment() {
 }
 window.addEventListener('scope:comment-open', openGeneralComment)
 function cancelComposer() {
-  if (composing && !composing.general) deleteDraft(composerKey())
   composing = null; closeSheet(); renderCards()
 }
 function renderComposer() {
   const key = composerKey()
   let node = document.querySelector<HTMLElement>('.card.composer')
   if (node?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft !== key) { node?.remove(); node = null }
-  const fresh = document.createElement('div'); fresh.className = 'card composer comment on'; fresh.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  const fresh = document.createElement('div'); fresh.className = 'card composer comment on'; fresh.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea>${imageStrip(getImages(key), true, key)}<p class="error">${esc(errors.get(key))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
   if (node) refreshCard(node, fresh)
   else {
     node = fresh
@@ -621,12 +692,15 @@ function renderComposer() {
   if (message) { if (!note) { note = document.createElement('p'); note.className = 'composer-note'; node.querySelector('textarea')!.before(note) }; note.textContent = message } else note?.remove()
   if (phone()) document.body.classList.add('sheet-open')
 }
-async function action(name: string, target: HTMLElement) {
+async function action(name: string, target: HTMLElement, imageSnapshot?: string[]) {
   if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { openSelectionComment(); return }
-  const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
+  const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = target.closest('.composer') ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
   if (name === 'undo' && t) { const decision = askDecisions.get(t.id); if (decision) clearTimeout(decision.timer); askDecisions.delete(t.id); renderCards(); return }
-  if (pending.has(key) || sending.has(key) || askDecisions.has(key) || picking.has(key) && ['take', 'no', 'else', 'option'].includes(name)) return
+  if (name === 'attach') { target.closest('.reply')?.querySelector<HTMLInputElement>('[data-images]')?.click(); return }
+  if (name === 'remove-image') { saveImages(key, getImages(key).filter((_, i) => i !== Number(target.dataset.image))); updateImageBox(key); return }
+  if (pending.has(key) || sending.has(key) || uploading.get(key) || askDecisions.has(key) || picking.has(key) && ['take', 'no', 'else', 'option'].includes(name)) return
+  const images = imageSnapshot ?? getImages(key).map(image => image.id), pictures = images.length ? { images } : {}
   const text = getDraft(key).trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
   if (t && name === 'else' && t.recommendation && !text) { modes.set(t.id, 'else'); renderCards(); const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`); if (input) input.placeholder = 'Your answer'; focusBox(t.id); return }
@@ -636,19 +710,19 @@ async function action(name: string, target: HTMLElement) {
     renderCards(); if (name !== 'menu') focusBox(t.id); return
   }
   const mode = t && modes.get(t.id)
-  if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
+  if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text && !(images.length && (name === 'post' || name === 'reply' || mode === 'reply'))) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
   pending.add(key); disablePending()
   try {
-    if (name === 'post' && composing && text) { const anchor = composing; const result = await postThread({ anchor, text }); composing = null; selection = null; deleteDraft(key); errors.delete(key); if (result.thread) focus(result.thread.id); else closeSheet(); return }
+    if (name === 'post' && composing && (text || images.length)) { const anchor = composing; const result = await postThread({ anchor, text, ...pictures }); composing = null; selection = null; deleteDraft(key); errors.delete(key); if (result.thread) focus(result.thread.id); else closeSheet(); return }
     if (!t) return
-    if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text })
-    else if (name === 'send' && mode === 'no') await postReject(t.id, { text })
-    else if (name === 'send' && mode === 'else') await postResolve(t.id, { decision: text, alex_words: text, how: 'own' })
-    else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: text || 'Take the recommendation', how: 'take' })
-    else if (name === 'no' && t.recommendation) await postReject(t.id, { text })
-    else if (name === 'else' && t.recommendation && text) await postResolve(t.id, { decision: text, alex_words: text, how: 'own' })
-    else if (name === 'option' && t.options?.[Number(target.dataset.option)] != null) { const option = t.options[Number(target.dataset.option)]; await postResolve(t.id, { decision: option, alex_words: text || option, how: 'own' }) }
-    else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve' })
+    if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text, ...pictures })
+    else if (name === 'send' && mode === 'no') await postReject(t.id, { text, ...pictures })
+    else if (name === 'send' && mode === 'else') await postResolve(t.id, { decision: text, alex_words: text, how: 'own', ...pictures })
+    else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: text || 'Take the recommendation', how: 'take', ...pictures })
+    else if (name === 'no' && t.recommendation) await postReject(t.id, { text, ...pictures })
+    else if (name === 'else' && t.recommendation && text) await postResolve(t.id, { decision: text, alex_words: text, how: 'own', ...pictures })
+    else if (name === 'option' && t.options?.[Number(target.dataset.option)] != null) { const option = t.options[Number(target.dataset.option)]; await postResolve(t.id, { decision: option, alex_words: text || option, how: 'own', ...pictures }) }
+    else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve', ...pictures })
     else if (name === 'park') await postPark(t.id)
     if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id); askSuggestions.delete(t.id)
     if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
@@ -657,8 +731,8 @@ async function action(name: string, target: HTMLElement) {
   finally { pending.delete(key); renderCards() }
 }
 async function pickAsk(t: Thread) {
-  if (pending.has(t.id) || sending.has(t.id) || picking.has(t.id) || askDecisions.has(t.id)) return
-  const note = getDraft(t.id).trim()
+  if (pending.has(t.id) || sending.has(t.id) || picking.has(t.id) || askDecisions.has(t.id) || uploading.get(t.id)) return
+  const note = getDraft(t.id).trim(), images = getImages(t.id).map(image => image.id)
   focus(t.id, false, false)
   picking.add(t.id)
   let result: { choice: AskChoice | null; sure: boolean } = { choice: { action: 'take', label: t.recommendation! }, sure: true }
@@ -673,7 +747,7 @@ async function pickAsk(t: Thread) {
       if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open') { renderCards(); return }
       const target = document.createElement('button'); target.dataset.t = t.id; if (choice.option != null) target.dataset.option = String(choice.option)
       setDraft(t.id, note)
-      void action(choice.action, target)
+      void action(choice.action, target, images)
     }, 10_000)
     askDecisions.set(t.id, { choice, note, timer }); renderCards()
   } finally { picking.delete(t.id) }
@@ -736,6 +810,8 @@ document.addEventListener('keydown', e => {
 })
 document.addEventListener('click', e => {
   const target = e.target as HTMLElement
+  const thumbnail = target.closest<HTMLButtonElement>('button.thumb[data-action="view-image"]'); if (thumbnail) { lightboxOpener = thumbnail; lightboxItems = [...thumbnail.closest('.thumbs')!.querySelectorAll<HTMLButtonElement>('button.thumb')]; lightboxIndex = lightboxItems.indexOf(thumbnail); showLightboxImage(); lightbox.showModal(); return }
+  if (lightbox.contains(target)) return
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
   if (!zoom.hidden) return
   const demo = target.closest<HTMLButtonElement>('button.demo-try')
@@ -762,7 +838,7 @@ document.addEventListener('click', e => {
   const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || mark.classList.contains('recent') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
-document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
+document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
 let selectionTimer = 0
 for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(selectionTimer); selectionTimer = window.setTimeout(readSelection, 80) })
 $('#prev').onclick = $('#chipPrev').onclick = () => step(-1)
