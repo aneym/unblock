@@ -12,7 +12,7 @@ export function appendApprovalIndex(root, { slug, revision, mode, comment, at_et
   const index = join(root, 'INDEX.md')
   const previous = existsSync(index) ? readFileSync(index, 'utf8') : ''
   const text = compact(comment)
-  const log = `- ${at_et} · ${slug} r${revision} · ${mode === 'approve' ? 'approved' : mode === 'approve_with_changes' ? 'approved with changes' : 'not yet'} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
+  const log = `- ${at_et} · ${slug} r${revision} · ${mode === 'approve' ? 'approved' : mode === 'approve_to_try' ? 'approved to try' : mode === 'approve_with_changes' ? 'approved with changes' : 'not yet'} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
   const heading = /^## Approvals[ \t]*$/m.exec(previous)
   let updated
   if (heading) {
@@ -77,7 +77,7 @@ export function createLivedocApprovals({
         // A stale state file can repeat a line once after a daemon restart.
         seen = [...seen, key].slice(-500)
         saveState()
-        if (['approve', 'approve_with_changes'].includes(approval.mode) && typeof doc.pane === 'string' && doc.pane.trim()) {
+        if (['approve', 'approve_to_try', 'approve_with_changes'].includes(approval.mode) && typeof doc.pane === 'string' && doc.pane.trim()) {
           await moveTabToInflight({ pane: doc.pane, revision: approval.revision, herdr, herdrLane })
         }
       }

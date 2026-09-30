@@ -13,8 +13,8 @@ import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nex
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
-const APPROVAL_MODES = ['approve', 'approve_with_changes', 'not_yet']
-const approved = (approval) => ['approve', 'approve_with_changes'].includes(approval?.mode)
+const APPROVAL_MODES = ['approve', 'approve_to_try', 'approve_with_changes', 'not_yet']
+const approved = (approval) => ['approve', 'approve_to_try', 'approve_with_changes'].includes(approval?.mode)
 const eastern = (at) => `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(at))} ET`
 const compact = (text) => text.replace(/\s+/g, ' ').trim()
 const delay = (value, fallback) => Number(value) > 0 ? Number(value) : fallback
@@ -41,6 +41,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const parsed = JSON.parse(readFileSync(file, 'utf8'))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid scope')
       const scope = parsed.version === 2 ? parsed : migrateV1(parsed, parsed.updated_at)
+      if (scope.approve_default !== undefined && !['try', 'ship'].includes(scope.approve_default)) delete scope.approve_default
       cache.set(slug, scope)
       return { slug, scope, error: null, mtime_ms: meta.mtime_ms }
     } catch (error) {
@@ -133,7 +134,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         }
         const laneNotes = notes.filter(note => note.event === 'lane_note')
         const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
-        const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
+        const shipNotes = notes.filter(note => note.event === 'ship')
+        const comments = notes.filter(note => !['lane_note', 'ship'].includes(note.event) && !APPROVAL_MODES.includes(note.event))
         const imagePaths = note => (note.images ?? []).map(path => ` [image: ${path}]`).join('')
         const parts = comments.map((note) => {
           const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
@@ -214,8 +216,16 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             : ` Alex's note: "${text}"`
           const line = note.event === 'not_yet'
             ? `[scoping ${slug}] NOT YET from ${alex} (r${revision})${text.length > 600 ? `.${noteLine}` : `: "${text}"`} Keep scoping; answer it on the doc.`
+            : note.event === 'approve_to_try'
+              ? `[scoping ${slug}] APPROVED TO TRY by ${alex} (r${revision}, ${atEt}).${noteLine} Build it on the project branch, start a try copy, label the PR try-build and don't queue it: it ships only when Alex presses Ship it.${closedLine}`
             : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
           await send(`approval:${note.id}`, pane, line, (status) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          })
+          if (held || retry) break
+        }
+        if (!held && !retry) for (const note of shipNotes) {
+          await send(`approval:ship:${note.id}`, pane, note.text, (status) => {
             if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
           })
           if (held || retry) break
@@ -397,13 +407,18 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
+    const shipWrite = req.method === 'POST' && parts.length === 2 && action === 'ship'
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react'].includes(verb)
-    if (!appWrite && !approvalWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!appWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
+    if (shipWrite) {
+      if (!proxyIdentity(req) || relay) return sendJson(res, 403, { error: 'only Alex ships' })
+      requireHumanPath(req)
+    }
     if (approvalWrite && !relay) {
       if (!human) return sendJson(res, 403, { error: 'only Alex approves' })
       requireHumanPath(req)
@@ -425,6 +440,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (verb === 'react' && body.emoji !== '👀' && body.emoji !== null) return sendJson(res, 400, { error: 'invalid emoji' })
     if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
       || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
+    if (shipWrite && (Object.keys(body).some((key) => !['pr', 'head', 'build', 'client_id'].includes(key))
+      || !Number.isSafeInteger(body.pr) || body.pr <= 0 || !Number.isSafeInteger(body.build) || body.build <= 0
+      || typeof body.head !== 'string' || !/^[0-9a-f]{40}$/.test(body.head))) return sendJson(res, 400, { error: 'invalid ship' })
     if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
       || typeof body.body_md !== 'string' || (body.heading !== undefined && typeof body.heading !== 'string'))) return sendJson(res, 400, { error: 'invalid section patch' })
     if (body.via !== undefined && !(relay ? ['admin', 'voice'] : ['voice']).includes(body.via)) return sendJson(res, 400, { error: 'invalid via' })
@@ -432,7 +450,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay && body.via === undefined) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -447,7 +465,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function approveScope(slug, scope, body, human) {
     const comment = (body.comment ?? '').replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
-    if (comment.length > 4000 || (body.mode !== 'approve' && !comment)) bad('invalid comment')
+    if (comment.length > 4000 || (!['approve', 'approve_to_try'].includes(body.mode) && !comment)) bad('invalid comment')
     if (body.client_id && body.client_id === scope.approval?.client_id) return { approval: scope.approval, duplicate: true }
     if (approved(scope.approval)) bad('already approved', 409)
     const at = new Date().toISOString(), at_et = eastern(at), closed = []
@@ -477,6 +495,31 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     return { approval: scope.approval, closed, revision: scope.revision }
   }
 
+  function shipScope(slug, scope, body, human) {
+    if (scope.approval?.mode !== 'approve_to_try') bad('scope is not approved to try', 409)
+    const duplicate = body.client_id && scope.ships?.find((ship) => ship.client_id === body.client_id)
+    if (duplicate) return { ok: true, ship: duplicate, duplicate: true }
+    const at = new Date().toISOString(), at_et = eastern(at)
+    const ship = { pr: body.pr, head: body.head, build: body.build, by: 'alex', who: human.login, at, at_et,
+      ...(body.client_id !== undefined ? { client_id: body.client_id } : {}) }
+    scope.ships = [...(scope.ships ?? []), ship]
+    scope.updated_at = at
+    const problems = validateScope(scope)
+    if (problems.length) bad(problems[0])
+    const dir = join(root, slug)
+    writeFileSync(join(dir, `SHIP-${ship.pr}.md`), `# Scope ship approval\n\nPR: ${ship.pr}\nHead: ${ship.head}\nBuild: ${ship.build}\nWhen: ${at_et}\nWho: ${human.login}\nVia: page\n`)
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    const text = `[${slug}] SHIP IT from Alex (${at_et}): build ${ship.build}, PR #${ship.pr} at ${ship.head.slice(0, 7)}. Record it with python3 scripts/queue_pr.py ship ${ship.pr} --by aneym --via button --head ${ship.head} --evidence "unblock scope ${slug} SHIP-${ship.pr}.md", then queue it.`
+    const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'ship', text, who: human.login })
+    emit(slug, 'note', note)
+    const entry = listeners.get(slug)
+    if (entry) entry.meta = metadata(slug)
+    emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
+    schedule(slug)
+    return { ok: true, ship }
+  }
+
   function tagTargets(scope, text) {
     const targets = new Set()
     const workspace = scope.pane.split(':')[0]
@@ -491,7 +534,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, appWrite, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, appWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -508,6 +551,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       return { app: scope.app }
     }
     if (approvalWrite) return approveScope(slug, scope, body, human)
+    if (shipWrite) return shipScope(slug, scope, body, human)
     const storedSections = scope.doc.sections
     if (sectionWrite) {
       if (!storedSections.some((section) => section.id === threadId)) bad('no such section', 404)

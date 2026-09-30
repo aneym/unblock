@@ -156,12 +156,23 @@ export function validateScope(scope) {
         && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }
+  if (scope.approve_default !== undefined) check(['try', 'ship'].includes(scope.approve_default), 'invalid approve_default')
+  if (scope.ships !== undefined) {
+    check(Array.isArray(scope.ships), 'invalid ships')
+    for (const ship of Array.isArray(scope.ships) ? scope.ships : []) {
+      check(object(ship) && Object.keys(ship).every((key) => ['pr', 'head', 'build', 'by', 'who', 'at', 'at_et', 'client_id'].includes(key))
+        && Number.isSafeInteger(ship.pr) && ship.pr > 0 && Number.isSafeInteger(ship.build) && ship.build > 0
+        && typeof ship.head === 'string' && /^[0-9a-f]{40}$/.test(ship.head) && ship.by === 'alex'
+        && typeof ship.who === 'string' && typeof ship.at === 'string' && Number.isFinite(Date.parse(ship.at)) && typeof ship.at_et === 'string'
+        && (ship.client_id === undefined || (typeof ship.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(ship.client_id))), 'invalid ship')
+    }
+  }
   if (scope.approval !== undefined) {
     const a = scope.approval
-    check(object(a) && ['approve', 'approve_with_changes', 'not_yet'].includes(a.mode) && a.by === 'alex'
+    check(object(a) && ['approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(a.mode) && a.by === 'alex'
       && typeof a.who === 'string' && typeof a.at === 'string' && Number.isFinite(Date.parse(a.at)) && typeof a.at_et === 'string'
       && Number.isInteger(a.revision) && a.revision >= 1 && typeof a.comment === 'string' && a.comment.length <= 4000
-      && !/[\x00-\x09\x0b-\x1f\x7f]/.test(a.comment) && (a.mode === 'approve' || !!a.comment.trim())
+      && !/[\x00-\x09\x0b-\x1f\x7f]/.test(a.comment) && (['approve', 'approve_to_try'].includes(a.mode) || !!a.comment.trim())
       && (a.via === undefined || ['voice', 'admin'].includes(a.via))
       && (a.client_id === undefined || (typeof a.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(a.client_id))), 'invalid approval')
   }

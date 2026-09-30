@@ -189,17 +189,17 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
 const endpoint = `${apiBase}/${encodeURIComponent(slug)}`
 type QueuedApproval = { clientId: string; comment: string; mode: string; failed: boolean; timer?: number }
 let queuedApproval: QueuedApproval | null = null
-function isApproved() { return scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
+function isApproved() { return scope?.approval?.mode === 'approve_to_try' || scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
 function approvalBanner() {
   if (queuedApproval) return `<div class="approval" data-cm-skip role="status"><strong>${queuedApproval.failed ? "Couldn't approve. Try again." : 'Sending…'}</strong>${queuedApproval.comment ? `<div class="approval-note">${esc(queuedApproval.comment)}</div>` : ''}</div>`
   const a = scope?.approval
   if (!a) return ''
-  const label = a.mode === 'approve' ? 'Approved, building' : a.mode === 'approve_with_changes' ? 'Approved with changes, building after the lane folds your note in' : 'Not yet'
+  const label = a.mode === 'approve_to_try' ? 'Approved to try' : a.mode === 'approve' ? 'Approved, building' : a.mode === 'approve_with_changes' ? 'Approved with changes, building after the lane folds your note in' : 'Not yet'
   return `<div class="approval" data-cm-skip><strong>${label}</strong> · ${esc(a.at_et)}${a.comment ? `<div class="approval-note">${esc(a.comment)}</div>` : ''}</div>`
 }
 const approveDialog = document.createElement('dialog')
 approveDialog.className = 'approve'
-approveDialog.innerHTML = `<h2>Approve this scope</h2><p class="approve-count"></p><fieldset><legend>What happens next?</legend><label><input type="radio" name="approve-mode" value="approve" checked>Approve</label><label><input type="radio" name="approve-mode" value="approve_with_changes">Approve with changes: the lane folds your note in first</label><label><input type="radio" name="approve-mode" value="not_yet">Not yet: just send the note</label></fieldset><label class="approve-note-label" for="approve-note">Final note</label><textarea id="approve-note" placeholder="Anything the builder should know?" maxlength="4000" rows="5"></textarea><p class="error" role="alert"></p><div class="actions"><button type="button" class="btn" data-action="approve-cancel">Cancel</button><button type="button" class="btn primary" data-action="approve-submit">Approve and build</button></div>`
+approveDialog.innerHTML = `<h2>Approve this scope</h2><p class="approve-count"></p><fieldset><legend>What happens next?</legend><label><input type="radio" name="approve-mode" value="approve_to_try">Approve to try</label><label><input type="radio" name="approve-mode" value="approve" checked>Approve and ship</label><label><input type="radio" name="approve-mode" value="approve_with_changes">Approve with changes: the lane folds your note in first</label><label><input type="radio" name="approve-mode" value="not_yet">Not yet: just send the note</label></fieldset><label class="approve-note-label" for="approve-note">Final note</label><textarea id="approve-note" placeholder="Anything the builder should know?" maxlength="4000" rows="5"></textarea><p class="error" role="alert"></p><div class="actions"><button type="button" class="btn" data-action="approve-cancel">Cancel</button><button type="button" class="btn primary" data-action="approve-submit">Approve and build</button></div>`
 document.body.append(approveDialog)
 let approving = false
 const approveMode = () => $<HTMLInputElement>('input[name="approve-mode"]:checked', approveDialog).value
@@ -207,12 +207,12 @@ function updateApproveDialog() {
   const mode = approveMode(), count = scope?.threads.filter(t => t.status === 'open').length || 0
   $('.approve-count', approveDialog).textContent = mode === 'not_yet' ? 'Threads stay open.' : count === 0 ? 'No open threads.' : `${count} open thread${count === 1 ? ' closes' : 's close'} with the lane's recommendation.`
   const button = $<HTMLButtonElement>('[data-action="approve-submit"]', approveDialog)
-  button.textContent = mode === 'approve' ? 'Approve and build' : mode === 'approve_with_changes' ? 'Approve with changes' : 'Send, not yet'
-  button.disabled = approving || mode !== 'approve' && !$<HTMLTextAreaElement>('textarea', approveDialog).value.trim()
+  button.textContent = mode === 'approve_to_try' ? 'Approve to try' : mode === 'approve' ? 'Approve and ship' : mode === 'approve_with_changes' ? 'Approve with changes' : 'Send, not yet'
+  button.disabled = approving || !['approve', 'approve_to_try'].includes(mode) && !$<HTMLTextAreaElement>('textarea', approveDialog).value.trim()
 }
 function openApproveDialog() {
   if (!scope || isApproved() || queuedApproval && !queuedApproval.failed || approveDialog.open) return
-  $<HTMLInputElement>(`input[value="${queuedApproval?.failed ? queuedApproval.mode : 'approve'}"]`, approveDialog).checked = true
+  $<HTMLInputElement>(`input[value="${queuedApproval?.failed ? queuedApproval.mode : (scope as ScopeV2 & { approve_default?: string }).approve_default === 'try' ? 'approve_to_try' : 'approve'}"]`, approveDialog).checked = true
   $<HTMLTextAreaElement>('textarea', approveDialog).value = queuedApproval?.failed ? queuedApproval.comment : ''
   $('.error', approveDialog).textContent = ''
   updateApproveDialog(); approveDialog.showModal(); $<HTMLTextAreaElement>('textarea', approveDialog).focus()
@@ -313,7 +313,7 @@ setInterval(() => {
 type CommentState = 'Sent' | 'Seen 👀' | 'Answered' | 'Retrying' | 'Not sent' | 'No lane pane'
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
-  const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
+  const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
   const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
   if (!note) {
     const state = (thread as Thread & { delivery?: string })?.delivery
