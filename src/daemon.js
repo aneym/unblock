@@ -708,6 +708,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         // Clients use this to build ONE stable answer URL instead of minting a
         // throwaway token for every ask.
         public_origin: process.env.UNBLOCK_PUBLIC_ORIGIN ?? null,
+        scope_link_template: process.env.UNBLOCK_SCOPE_LINK_TEMPLATE || null,
         // Which viewer identity, if any, the daemon trusts, and whether the
         // settings came from the config file — so a wrong deployment is
         // visible from one curl instead of a 403 hunt.

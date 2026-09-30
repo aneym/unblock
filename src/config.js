@@ -13,6 +13,7 @@
  *   ~/.config/unblock/config.json
  *   {
  *     "public_origin": "https://studio.tailf266ac.ts.net:8797",
+ *     "scope_link_template": "https://app.rails.so/workspace/rails-admin?route=scoping/{slug}",
  *     "trusted_proxy": "tailscale",
  *     "allowed_users": ["a.neyman17@gmail.com"],
  *     "root": "/path/to/the/canonical/checkout"
@@ -77,6 +78,18 @@ export function normalizePublicOrigin(value) {
   return url.origin
 }
 
+export function normalizeScopeLinkTemplate(value) {
+  if (typeof value !== 'string' || !value.includes('{slug}')) return null
+  const raw = value.trim()
+  if (/\s/.test(raw)) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' && url.hostname ? raw : null
+  } catch {
+    return null
+  }
+}
+
 export function normalizeTrustedProxy(value) {
   return value === 'tailscale' ? 'tailscale' : null
 }
@@ -116,6 +129,7 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
   const applied = []
   const settings = [
     ['UNBLOCK_PUBLIC_ORIGIN', normalizePublicOrigin(file.public_origin)],
+    ['UNBLOCK_SCOPE_LINK_TEMPLATE', normalizeScopeLinkTemplate(file.scope_link_template)],
     ['UNBLOCK_TRUSTED_PROXY', normalizeTrustedProxy(file.trusted_proxy)],
     ['UNBLOCK_ALLOWED_USERS', normalizeAllowedUsers(file.allowed_users)],
     ['UNBLOCK_PORT', normalizePort(file.port)],

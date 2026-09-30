@@ -280,6 +280,7 @@ A scoping page is one document with threads anchored to quotes. Open threads
 are questions or comments; resolved threads hold decisions. The page lives at
 `<public_origin>/s/<slug>`, with state under `UNBLOCK_SCOPING_DIR`
 (default: `~/.agent-rails/scoping`). Only the daemon writes `scope.json`.
+Set `scope_link_template` (env `UNBLOCK_SCOPE_LINK_TEMPLATE`) to an https URL containing `{slug}`; CLI `url` is the canonical link and `studio_url` is the Studio page, with both using the Studio page when no template is set.
 
 Lanes use the CLI instead of editing that file. A No keeps a question open; a
 new option uses `scope reply <slug> T# --rec "option" [--why "reason"] "reply"`.

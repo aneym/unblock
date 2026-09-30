@@ -471,6 +471,14 @@ async function uploadDocImages(slug, doc, source) {
   }
 }
 
+async function scopeLinks(health, slug) {
+  const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
+  const encoded = encodeURIComponent(slug)
+  const studio_url = `${base}/s/${encoded}`
+  const url = health.scope_link_template ? health.scope_link_template.replaceAll('{slug}', encoded) : studio_url
+  return { url, studio_url }
+}
+
 async function scope(args) {
   const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
@@ -534,8 +542,7 @@ async function scope(args) {
   if (verb === 'list' && !name && !extra.length && !Object.keys(opts).length) {
     const { scopes } = await request('/api/scope')
     const health = await request('/api/health')
-    const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
-    const listed = scopes.map((item) => ({ ...item, url: `${base}/s/${item.slug}` }))
+    const listed = await Promise.all(scopes.map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
     return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
   }
   if (verb === 'app') {
@@ -561,9 +568,8 @@ async function scope(args) {
   if (!name || extra.length) fail(usage)
   if (verb === 'url' && !Object.keys(opts).length) {
     const health = await request('/api/health')
-    const base = health.public_origin?.replace(/\/$/, '') || `http://127.0.0.1:${new URL(await daemon()).port}`
-    const url = `${base}/s/${encodeURIComponent(name)}`
-    return output({ url }, url)
+    const links = await scopeLinks(health, name)
+    return output(links, links.url)
   }
   if (opts['--keep'] && !['doc', 'lint'].includes(verb)) fail(usage)
   if (verb === 'doc' || verb === 'lint') {
