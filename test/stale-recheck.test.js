@@ -18,7 +18,7 @@ process.env.UNBLOCK_RECHECK_AFTER_MS = '40'
 process.env.UNBLOCK_WEEKLY_AFTER_MS = '400'
 const postLog = join(stateDir, 'lane-posts')
 const lanePost = join(stateDir, 'lane-post-stub')
-writeFileSync(lanePost, `#!/bin/sh\nfor a in "$@"; do printf '%s\\x1f' "$a" >> '${postLog}'; done\nprintf '\\n' >> '${postLog}'\n`)
+writeFileSync(lanePost, `#!/bin/sh\nfor a in "$@"; do printf '%s\\037' "$a" >> '${postLog}'; done\nprintf '\\n' >> '${postLog}'\n`)
 chmodSync(lanePost, 0o700)
 process.env.UNBLOCK_LANE_POST_BIN = lanePost
 // Typing into a pane is the wrong channel for this; a herdr call would land here.
@@ -42,9 +42,10 @@ async function json(base, pathname, options = {}) {
 
 const decision = (title) => ({
   kind: 'file', purpose: 'decision', title, why: `The lane needs a call on ${title}.`,
-  only_you: 'taste', tried: ['The spec and past steers do not settle this.'],
-  fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true }],
+  only_you: 'judgment', tried: ['The spec and past steers do not settle this.'],
+  fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true, recommend: { value: 'Keep it short', why: 'Matches the other tabs.' } }],
 })
+const created = (res) => { assert.equal(res.response.status, 201, JSON.stringify(res.body)); return res.body }
 const posts = () => (existsSync(postLog) ? readFileSync(postLog, 'utf8').trim().split('\n').filter(Boolean).map((l) => l.split('\x1f').filter(Boolean)) : [])
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -52,12 +53,12 @@ test('a day-old ask goes back to its lane once; a three-day-old ask moves to the
   const daemon = await startDaemon({ port: 0 })
   const base = `http://127.0.0.1:${daemon.port}`
   try {
-    const stale = (await json(base, '/api/asks', {
+    const stale = created(await json(base, '/api/asks', {
       method: 'POST', body: JSON.stringify({ ask: decision('Name the new tab'), origin: { session_id: 's-a', pane_id: 'w5H:pAA' } }),
-    })).body
-    const answered = (await json(base, '/api/asks', {
+    }))
+    const answered = created(await json(base, '/api/asks', {
       method: 'POST', body: JSON.stringify({ ask: decision('Pick the chip color'), origin: { session_id: 's-b', pane_id: 'w5H:pBB' } }),
-    })).body
+    }))
     await json(base, `/api/asks/${answered.ticket}/answer`, { method: 'POST', body: JSON.stringify({ values: { answer: 'blue' } }) })
 
     // Fresh asks are not rechecked.
@@ -93,9 +94,9 @@ test('a day-old ask goes back to its lane once; a three-day-old ask moves to the
     assert.equal(weekly.status, 'open', 'decide or drop is still Alex\'s call')
     assert.equal(posts().length, 1, 'moving to the weekly list sends nothing new')
 
-    const fresh = (await json(base, '/api/asks', {
+    const fresh = created(await json(base, '/api/asks', {
       method: 'POST', body: JSON.stringify({ ask: decision('Order the nav'), origin: { session_id: 's-c', pane_id: 'w5H:pCC' } }),
-    })).body
+    }))
     const asks = (await json(base, '/api/asks')).body.asks
     const deck = qm.selectDeck({ asks })
     const today = deck.items.flatMap((item) => item.asks.map((ask) => ask.ticket))
