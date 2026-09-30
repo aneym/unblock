@@ -2,6 +2,7 @@ import http from 'node:http'
 import { execFile } from 'node:child_process'
 import { guardedAnswerNotice } from './pane-notice.js'
 import { createScopeRoutes } from './scope.js'
+import { ASSET_ID } from './scope-assets.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, lstatSync, fstatSync, openSync, closeSync, readSync, writeSync, renameSync, unlinkSync, chmodSync, constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -676,7 +677,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (relay) {
       const slug = '[a-z0-9][a-z0-9-]{0,63}'
       const allowed = req.method === 'GET'
-        ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}(?:/assets/[0-9a-f]{16}\\.(?:png|jpg|webp|gif|svg|html|mock))?$`).test(pathname)
+        ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}(?:/assets/${ASSET_ID.source.slice(1, -1)})?$`).test(pathname)
         : req.method === 'POST' && new RegExp(`^/api/scope/${slug}/(?:approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park))?)$`).test(pathname)
       if (!allowed) return sendJson(res, 403, { code: 'RELAY_SCOPE_ONLY' })
     }
