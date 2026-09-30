@@ -102,7 +102,7 @@ function trackQueuedApproval(clientId: string, mode: string, comment: string) {
   render()
 }
 function settleQueuedApproval() {
-  if (!queuedApproval || scope?.approval?.client_id !== queuedApproval.clientId) return
+  if (!queuedApproval || !isApproved() && scope?.approval?.client_id !== queuedApproval.clientId) return
   if (queuedApproval.timer) clearTimeout(queuedApproval.timer)
   queuedApproval = null
 }
@@ -555,10 +555,10 @@ const feedRows: (ScopeFeedLine & { at: Date })[] = []
 let feedExpanded = false, feedClosed = false
 const feed = document.createElement('div')
 feed.className = 'voice-feed'; feed.setAttribute('aria-live', 'polite'); feed.setAttribute('aria-label', 'Voice activity'); feed.hidden = true
-if (!embed) document.body.append(feed)
+if (boot.voice !== false) document.body.append(feed)
 function positionFeed() {
   const capsule = document.querySelector<HTMLElement>('.voice-capsule')
-  const bottom = capsule ? innerHeight - capsule.getBoundingClientRect().top + 8 : phone() ? 84 : 24
+  const bottom = capsule ? innerHeight - capsule.getBoundingClientRect().top + 8 : embed ? innerHeight - $('#talk').getBoundingClientRect().top + 12 : phone() ? 84 : 24
   feed.style.bottom = `${bottom}px`
 }
 const capsuleObserver = new ResizeObserver(positionFeed)
@@ -581,7 +581,8 @@ function renderFeed() {
 }
 function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }); if (feedRows.length > 50) feedRows.shift(); renderFeed() }
 $('#talk').hidden = boot.voice === false
-$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, body), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
+if (embed && boot.voice !== false) document.body.append($('#talk'))
+$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
 function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   scope = payload.scope

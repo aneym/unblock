@@ -284,6 +284,13 @@ button:disabled { opacity:.5; cursor:default; }
 .fig.mermaid svg .node text { text-anchor:middle; }
 body.embed .bar, body.embed #title > .eyebrow, body.embed #title > h1 { display: none; }
 body.embed .side-head { top: 0; }
+body.embed > .talk { position: fixed; z-index: 20; right: 16px; bottom: max(16px, calc(env(safe-area-inset-bottom) + 16px)); background: var(--page); box-shadow: var(--shadow-2); }
+body.embed > .talk.active { display: none; }
+@media (max-width: 899px) {
+  body.embed > .talk { bottom: calc(56px + env(safe-area-inset-bottom) + 12px); width: 34px; height: 34px; padding: 0; justify-content: center; }
+  body.embed > .talk span { display: none; }
+  body.embed.sheet-open > .talk { display: none; }
+}
 html:has(body.embed) { scroll-padding-top: 24px; }
 
 .voice-feed { position: fixed; z-index: 20; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(16px) saturate(1.4); box-shadow: var(--shadow-2); padding: 5px; font-size: 13px; }

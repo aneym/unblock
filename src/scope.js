@@ -301,10 +301,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       return sendJson(res, 200, { brief, said })
     }
     if (req.method === 'POST' && parts.length === 2 && action === 'lane-note') {
-      requireHumanPath(req)
+      const relay = relayIdentity(req)
+      if (!relay) requireHumanPath(req)
       const body = await readJson(req)
       if (!body || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 1000 || (body.via !== undefined && body.via !== 'voice')) return sendJson(res, 400, { error: 'invalid lane note' })
-      const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'lane_note', text: body.text, who: proxyIdentity(req).login, via: 'voice' })
+      if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
+      const duplicate = body.client_id && store.scopeNoteByClientId(slug, body.client_id)
+      if (duplicate) return sendJson(res, 200, { note: duplicate, duplicate: true })
+      const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'lane_note', text: body.text, who: (relay || proxyIdentity(req)).login, via: 'voice', client_id: body.client_id })
       emit(slug, 'note', note)
       schedule(slug)
       return sendJson(res, 200, { note })
