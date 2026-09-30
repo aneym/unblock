@@ -294,6 +294,8 @@ unblock scope resolve demo T4
 unblock scope threads demo --open
 ```
 
+`scope resolve` on Alex's comment only records your answer; his comment stays open until Alex resolves it.
+
 `unblock scope app <slug> recruiter|closer|rails-admin` files a scope under its app in Rails Admin.
 
 Approve scope on the page with an optional final note; the lane receives APPROVED and the note, then moves to build (with changes: fold the note into the doc first).

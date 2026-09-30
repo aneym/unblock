@@ -517,7 +517,7 @@ async function scope(args) {
     if (sub === 'resolve') {
       if (!threadId || words.length) fail(usage)
       const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}) })
-      return output(data, `resolved ${data.thread.id}`)
+      return output(data, data.kept_open ? `answered ${data.thread.id} (Alex's comment stays open until Alex resolves it)` : `resolved ${data.thread.id}`)
     }
     if (!words.length || words[0] === '--to') fail(usage)
     let data

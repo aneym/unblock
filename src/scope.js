@@ -597,12 +597,21 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client }
         noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
       } else if (thread.status === 'open') {
-        thread.status = 'resolved'
-        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
+        if ((thread.author ?? thread.messages[0]?.from) === 'alex') {
+          if (thread.messages.at(-1)?.from !== 'agent') {
+            if (typeof body.decision !== 'string' || !body.decision.trim()) bad(`reply to Alex's comment first: unblock scope reply ${slug} ${thread.id}`)
+            thread.messages.push({ from: 'agent', text: text(body.decision, 600), at, ...client })
+          }
+          delete thread.resolution
+          result = { kept_open: true }
+        } else {
+          thread.status = 'resolved'
+          thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
+        }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
       }
-      result = { thread }
+      result = { ...result, thread }
     }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])

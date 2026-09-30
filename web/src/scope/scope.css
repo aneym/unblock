@@ -139,7 +139,14 @@ mark.hl.on { background: var(--hl-q-on); box-shadow: 0 1.5px 0 var(--ask); }
 mark.hl.comment.on { background: var(--hl-c-on); box-shadow: 0 1.5px 0 var(--ac); }
 mark.hl.resolved { background: none; box-shadow: none; cursor: text; }
 body.show-resolved mark.hl.resolved { background: var(--hl-r); cursor: pointer; }
-body.show-resolved mark.hl.resolved.on { box-shadow: 0 1.5px 0 var(--tx2); }
+body.show-resolved mark.hl.resolved.on, mark.hl.resolved.recent.on { box-shadow: 0 1.5px 0 var(--tx2); }
+mark.hl.resolved.recent { background: var(--hl-r); cursor: pointer; }
+mark.hl.unread { position: relative; }
+mark.hl.unread::after { content: ""; position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
+.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ac); flex: none; }
+.open-chip #resolvedChip[hidden] { display: none; }
+.open-chip #resolvedChip { font-size: 13px; padding: 0 8px; }
+.open-chip #resolvedChip[aria-pressed="true"] { background: var(--ac-soft); color: var(--ac); }
 mark.hl.flash { animation: flash .9s ease-out; }
 @keyframes flash { 0%, 30% { background: color-mix(in srgb, var(--warning) 55%, transparent); } }
 .sel { background: color-mix(in srgb, var(--accent) 28%, transparent); border-radius: 2px; }

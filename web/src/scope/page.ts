@@ -65,6 +65,15 @@ const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t
 const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
 const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
+function recent(t: Thread) { const at = Date.parse(t.resolution?.at || ''); return t.status === 'resolved' && at <= Date.now() && at > Date.now() - 86_400_000 }
+function unread(t: Thread) {
+  const last = t.messages.at(-1), alex = t.messages.filter(m => m.from === 'alex').at(-1)
+  return t.status === 'open' && !!alex && last?.from === 'agent' && Date.parse(last.at) > Date.parse(alex.at) && Date.parse(last.at) > Date.parse(storage.get(`scope:seen:${slug}:${t.id}`) || '1970-01-01')
+}
+function markSeen(id: string) { const t = scope?.threads.find(t => t.id === id); if (t && unread(t)) storage.set(`scope:seen:${slug}:${id}`, t.messages.at(-1)!.at) }
+function syncThreadClasses() {
+  for (const t of ordered()) for (const mark of marks(t.id)) { mark.classList.toggle('recent', recent(t)); mark.classList.toggle('unread', unread(t)) }
+}
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`); return result
@@ -236,6 +245,10 @@ function inflight() {
 }
 function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
+  if (t.status === 'resolved') {
+    const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span></div><div class="q">${esc(t.messages[0]?.text)}</div>${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div></div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>`
+  }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
@@ -245,15 +258,15 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div></div>`).join('')}</div>` : ''}
-  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved:'}</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
-  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
+  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${unread(t) ? ' unread' : ''}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
 }
 function highlight() {
   missing.clear()
@@ -354,7 +367,9 @@ function render() {
 }
 function renderCards() {
   syncFigureFocus()
-  const visible = ordered().filter(t => t.status === 'open' || showResolved)
+  if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
+  syncThreadClasses()
+  const visible = ordered().filter(t => t.status === 'open' || recent(t) || showResolved)
   const active = document.activeElement as HTMLElement | null
   const kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
@@ -377,6 +392,9 @@ function renderCards() {
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', showResolved)
   const toggle = $<HTMLInputElement>('#showResolved'); toggle.checked = showResolved; toggle.toggleAttribute('checked', showResolved)
+  const resolvedCount = ordered().filter(t => t.status !== 'open').length, resolvedLabel = `Resolved (${resolvedCount})`
+  $('#resolvedLabel').textContent = resolvedLabel
+  const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
   if (!composing && phone() && document.body.classList.contains('sheet-open')) renderSheet()
   updateCount(); layout(); disablePending()
 }
@@ -481,6 +499,8 @@ function threadOnScreen(id: string) {
 }
 function focus(id: string | null, scroll = false, openSheet = true) {
   focused = id
+  if (id) markSeen(id)
+  renderCards()
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
   syncFigureFocus()
@@ -693,7 +713,7 @@ document.addEventListener('click', e => {
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
-  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || mark.classList.contains('recent') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
@@ -704,6 +724,8 @@ $('#next').onclick = $('#chipNext').onclick = () => step(1)
 $('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
 $('#scrim').onclick = closeSheet
 $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
+$('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); renderCards() }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
 addEventListener('resize', () => { layout(); showSelection() }); document.fonts.ready.then(layout)
 let docWidth = doc.getBoundingClientRect().width, layoutFrame = 0
