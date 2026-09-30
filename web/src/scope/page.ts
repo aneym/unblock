@@ -15,7 +15,7 @@ const embed = boot.embed === true || new URLSearchParams(location.search).get('e
 document.body.classList.toggle('embed', embed)
 const doc = $('#doc'), cards = $('#cards'), detached = $('#detached'), sheet = $('#sheet')
 const phone = () => matchMedia('(max-width:899px)').matches
-const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} } }
+const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} }, remove(key: string) { try { localStorage.removeItem(key) } catch {} } }
 const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
 let showResolved = storage.get('scope:showResolved') === 'true'
@@ -26,6 +26,35 @@ const pending = new Set<string>()
 function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
+function draftStorageKey(key: string) { return `scope:draft:${slug}:${key}` }
+function getDraft(key: string) { return drafts.get(key) ?? storage.get(draftStorageKey(key)) ?? '' }
+function setDraft(key: string, value: string) { drafts.set(key, value); storage.set(draftStorageKey(key), value) }
+function deleteDraft(key: string) { drafts.delete(key); storage.remove(draftStorageKey(key)); document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(input => { if (input.dataset.draft === key) input.value = '' }) }
+function composerKey() {
+  if (composing?.general) return 'general'
+  const key = `composer:${composing?.section}:${composing?.quote}`
+  if (draftStorageKey(key).length < 200) return key
+  let hash = 2166136261
+  for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+  return `composer:${(hash >>> 0).toString(16)}`
+}
+let changedComposer: Anchor | null = null
+// Keep live controls connected: replace their siblings, never move the kept node.
+function replaceAround(root: HTMLElement, nodes: Node[], kept?: HTMLElement | null) {
+  if (!kept || kept.parentElement !== root || !nodes.includes(kept)) { root.replaceChildren(...nodes); return }
+  for (const node of [...root.childNodes]) if (node !== kept) node.remove()
+  const index = nodes.indexOf(kept)
+  for (const node of nodes.slice(0, index)) root.insertBefore(node, kept)
+  for (const node of nodes.slice(index + 1)) root.append(node)
+}
+function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
+  const reply = kept.querySelector<HTMLElement>('.reply'), nextReply = fresh.querySelector('.reply')
+  kept.className = fresh.className
+  kept.toggleAttribute('data-sending', fresh.hasAttribute('data-sending'))
+  const nodes = [...fresh.childNodes].map(node => node === nextReply && reply ? reply : node)
+  replaceAround(kept, nodes, reply)
+  return kept
+}
 const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
 const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
 const ordered = () => scope ? orderThreads(scope) : []
@@ -134,7 +163,7 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
   if (res.status === 202 || result.queued === true) {
     const key = id || client_id
     if (!hasClientId(client_id)) sending.set(key, { clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
-    if (id) drafts.delete(id)
+    if (id) deleteDraft(id)
     renderCards()
   } else if (typeof result.thread?.anchor?.section === 'string' && result.thread.created_at) upsert(result.thread)
   else {
@@ -205,7 +234,7 @@ function cardHtml(t: Thread) {
   const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
   let body = ''
-  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(drafts.get(t.id))}</textarea><p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions"><button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
+  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea><p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions"><button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
@@ -256,8 +285,16 @@ function render() {
   const line = inflight(), signatures = new Map(scope.doc.sections.map(s => [s.id, signature(s, line)]))
   const unchanged = (id: string) => signatures.get(id) === sectionSignatures.get(id)
   const candidates = [...doc.querySelectorAll<HTMLElement>('h1,h2,p,li,figure,pre,table')].filter(n => n.closest('section[data-section]') && n.getClientRects().length && n.getBoundingClientRect().top >= 0)
-  const reading = candidates.find(n => unchanged(n.closest('section')!.id)) || candidates[0]
-  const readingTop = reading?.getBoundingClientRect().top, readingSection = reading?.closest('section')?.id
+  const reading = activeKey && !composing ? candidates.find(n => unchanged(n.closest('section')!.id)) || candidates[0] : candidates[0]
+  const readingSection = reading?.closest('section')?.id
+  const readingIndex = reading ? [...reading.closest('section')!.querySelectorAll('h1,h2,p,li,figure,pre,table')].indexOf(reading) : -1
+  const composerAnchor = composing && !composing.general ? composing : null
+  const composerRange = composerAnchor && rangeFromAnchor(composerAnchor)?.range
+  const readingTop = composerRange ? composerRange.getBoundingClientRect().top : reading?.getBoundingClientRect().top
+  if (composerAnchor && sectionContents.has(composerAnchor.section)) {
+    const section = scope.doc.sections.find(s => s.id === composerAnchor.section)
+    if (section && contentSignature(section) !== sectionContents.get(section.id)) changedComposer = composerAnchor
+  }
   const sel = getSelection(), selected = sel?.rangeCount && !sel.isCollapsed ? anchorFromRange(sel.getRangeAt(0)) : null
   const keepSelection = selected && unchanged(selected.section) ? selected : null
   const backward = !!sel?.rangeCount && sel.anchorNode === sel.getRangeAt(0).endContainer && sel.anchorOffset === sel?.getRangeAt(0)?.endOffset
@@ -297,8 +334,9 @@ function render() {
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
   document.title = scope.title; highlight(); syncFigureFocus(); renderCards(); renderFeed()
   const restoreReading = () => {
-    const anchor = reading?.isConnected ? reading : readingSection ? document.getElementById(readingSection)?.querySelector('h1,h2') : null
-    if (anchor && readingTop != null) scrollTo({ top: scrollY + anchor.getBoundingClientRect().top - readingTop, behavior: 'instant' })
+    const section = readingSection ? document.getElementById(readingSection) : null
+    const anchor = composerAnchor && rangeFromAnchor(composerAnchor)?.range || (reading?.isConnected ? reading : section?.querySelectorAll('h1,h2,p,li,figure,pre,table')[readingIndex] || section?.querySelector('h1,h2'))
+    if (anchor && readingTop != null) { const difference = anchor.getBoundingClientRect().top - readingTop; if (Math.abs(difference) > 1) scrollBy({ top: difference, behavior: 'instant' }) }
   }
   restoreReading()
   for (const node of redrawn) void renderMermaid(node, () => { layout(); restoreReading() })
@@ -306,15 +344,23 @@ function render() {
     const range = rangeFromAnchor(keepSelection)?.range
     if (range && sel) sel.setBaseAndExtent(backward ? range.endContainer : range.startContainer, backward ? range.endOffset : range.startOffset, backward ? range.startContainer : range.endContainer, backward ? range.startOffset : range.endOffset)
   }
-  if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); target?.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
+  if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); if (target && document.activeElement !== target) target.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
 }
 function renderCards() {
   syncFigureFocus()
   const visible = ordered().filter(t => t.status === 'open' || showResolved)
-  cards.replaceChildren(...visible.filter(t => !missing.has(t.id)).map(card))
-  detached.replaceChildren()
+  const active = document.activeElement as HTMLElement | null
+  const kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
+  const makeCard = (t: Thread) => kept?.dataset.t === t.id ? refreshCard(kept, card(t)) : card(t)
+  const mainNodes: Node[] = visible.filter(t => !missing.has(t.id)).map(makeCard)
+  if (composer?.parentElement === cards) mainNodes.push(composer)
+  if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t) mainNodes.push(kept)
+  replaceAround(cards, mainNodes, kept?.parentElement === cards ? kept : composer)
   const gone = visible.filter(t => missing.has(t.id))
-  if (gone.length) { detached.append('Detached · the text it was on changed', ...gone.map(card)) }
+  const detachedNodes: Node[] = gone.length ? [document.createTextNode('Detached · the text it was on changed'), ...gone.map(makeCard)] : []
+  if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept)) detachedNodes.push(kept)
+  replaceAround(detached, detachedNodes, kept)
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">You commented</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
@@ -426,7 +472,12 @@ function renderSheet() {
   const t = scope?.threads.find(t => t.id === focused); if (!t) { closeSheet(); return }
   const i = open().findIndex(x => x.id === t.id)
   sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
-  sheet.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? 'General comment' : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+  const fresh = document.createElement('div')
+  fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? 'General comment' : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+  const active = document.activeElement as HTMLElement | null, kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const next = fresh.querySelector<HTMLElement>('.card')!
+  if (kept?.parentElement === sheet && kept.dataset.t === t.id) { refreshCard(kept, next); replaceAround(sheet, [...fresh.childNodes].map(n => n instanceof HTMLElement && n.matches('.card') ? kept : n), kept) }
+  else sheet.replaceChildren(...fresh.childNodes)
 }
 function closeSheet() { document.body.classList.remove('sheet-open') }
 function showSelection() {
@@ -451,27 +502,35 @@ function openGeneralComment() {
 }
 window.addEventListener('scope:comment-open', openGeneralComment)
 function cancelComposer() {
-  if (!composing?.general) drafts.delete('composer')
+  if (composing && !composing.general) deleteDraft(composerKey())
   composing = null; closeSheet(); renderCards()
 }
 function renderComposer() {
-  const key = composing?.general ? 'general' : 'composer'
-  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${key}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(drafts.get(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
-  if (phone()) { sheet.replaceChildren(node); document.body.classList.add('sheet-open') }
-  else if (composing?.general) cards.prepend(node)
-  else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
+  const key = composerKey()
+  let node = document.querySelector<HTMLElement>('.card.composer')
+  if (node?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft !== key) { node?.remove(); node = null }
+  if (!node) {
+    node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+    if (phone()) sheet.replaceChildren(node)
+    else if (composing?.general || !scope?.doc.sections.some(s => s.id === composing?.section)) cards.prepend(node)
+    else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
+  }
+  const message = !composing?.general && !scope?.doc.sections.some(s => s.id === composing?.section) ? 'This section was removed. Your draft is kept.' : changedComposer === composing ? 'This section changed since you started.' : ''
+  let note = node.querySelector<HTMLElement>('.composer-note')
+  if (message) { if (!note) { note = document.createElement('p'); note.className = 'composer-note'; node.querySelector('textarea')!.before(note) }; note.textContent = message } else note?.remove()
+  if (phone()) document.body.classList.add('sheet-open')
 }
 async function action(name: string, target: HTMLElement) {
   if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { composing = selection; renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
   if (pending.has(key) || sending.has(key)) return
-  const text = (drafts.get(key) || '').trim()
+  const text = getDraft(key).trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
   if (t && name === 'option') {
     const option = t.options?.[Number(target.dataset.option)]
     if (option == null || t.kind !== 'question' || t.status !== 'open') return
-    menus.delete(t.id); modes.set(t.id, 'else'); drafts.set(t.id, option); focus(t.id, false, false); renderCards()
+    menus.delete(t.id); modes.set(t.id, 'else'); setDraft(t.id, option); focus(t.id, false, false); renderCards()
     const input = $<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`, phone() ? sheet : cards)
     input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); return
   }
@@ -484,7 +543,7 @@ async function action(name: string, target: HTMLElement) {
   if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
   pending.add(key); disablePending()
   try {
-    if (name === 'post' && composing && text) { const anchor = composing; const result = await postThread({ anchor, text }); composing = null; selection = null; drafts.delete(key); errors.delete(key); if (result.thread) focus(result.thread.id); else closeSheet(); return }
+    if (name === 'post' && composing && text) { const anchor = composing; const result = await postThread({ anchor, text }); composing = null; selection = null; deleteDraft(key); errors.delete(key); if (result.thread) focus(result.thread.id); else closeSheet(); return }
     if (!t) return
     if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text })
     else if (name === 'send' && mode === 'no') await postReject(t.id, { text })
@@ -492,7 +551,7 @@ async function action(name: string, target: HTMLElement) {
     else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: 'Take the recommendation', how: 'take' })
     else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve' })
     else if (name === 'park') await postPark(t.id)
-    if ((drafts.get(key) || '').trim() === text) drafts.delete(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
+    if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
     if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
     renderCards()
   } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
@@ -580,7 +639,7 @@ document.addEventListener('click', e => {
   const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!) }
 })
-document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; drafts.set(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
+document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
 let selectionTimer = 0
 for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(selectionTimer); selectionTimer = window.setTimeout(readSelection, 80) })
 $('#prev').onclick = $('#chipPrev').onclick = () => step(-1)

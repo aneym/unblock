@@ -394,3 +394,5 @@ dialog.approve .btn:disabled { opacity: .5; cursor: default; }
   .title-row h1 { flex-basis: 100%; }
   dialog.approve { width: 100%; max-width: 100%; max-height: 90dvh; margin: auto 0 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; padding: 20px; }
 }
+
+.composer-note { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
