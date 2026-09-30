@@ -41,6 +41,7 @@ export const DEFAULT_PROJECT_ORDER: string
 export function levelOf<A>(ask: A): Level
 export function parseProjectOrder(text: string): ProjectOrderEntry[]
 export function projectRank(project?: string, order?: ProjectOrderEntry[]): number
+export function todayAsks<A>(asks: A[]): A[]
 export function sortAsks<A>(asks: A[], order?: ProjectOrderEntry[]): A[]
 export function isShort<A>(ask: A): boolean
 export function buildDeck<A>(asks: A[]): DeckItemOf<A>[]

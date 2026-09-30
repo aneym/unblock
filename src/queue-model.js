@@ -102,6 +102,11 @@ export function projectRank(project, order = defaultProjectOrder()) {
   return rank < 0 ? order.length : rank
 }
 
+/** Open asks still waiting in today's queue, excluding the weekly list. */
+export function todayAsks(asks) {
+  return asks.filter((ask) => ask.status === 'open' && ask.weekly_at == null)
+}
+
 /** Urgency, owner project order, dependent work, then oldest. */
 export function sortAsks(asks, order = defaultProjectOrder()) {
   return [...asks].sort((a, b) => LEVELS.indexOf(levelOf(a)) - LEVELS.indexOf(levelOf(b)) ||
@@ -200,7 +205,7 @@ export function selectDeck({
 } = {}) {
   const open = asks.filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))
   const weekly = sortAsks(open.filter((ask) => ask.weekly_at != null))
-  const live = sortAsks(open.filter((ask) => ask.weekly_at == null))
+  const live = sortAsks(todayAsks(open))
   const projects = projectCounts(live)
 
   // A filter naming a project with nothing open is dropped — otherwise a stale

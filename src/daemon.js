@@ -1225,6 +1225,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         const ask = store.get(ticket)
         if (ask?.status !== 'open' || ask.rechecked_at != null) return
         if (!ask.origin?.pane_id || await recheckNotice(ask) === 'sent') store.markRechecked(ticket)
+        else store.markRecheckFailed(ticket)
       })
     }
     for (const ticket of store.weeklyCandidates(weeklyAfterMs)) {

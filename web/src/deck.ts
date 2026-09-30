@@ -15,6 +15,7 @@ import {
   projectCounts as projectCountsJs,
   selectDeck as selectDeckJs,
   sortAsks as sortAsksJs,
+  todayAsks as todayAsksJs,
   unansweredFields as unansweredFieldsJs,
 } from '../../src/queue-model.js'
 
@@ -120,6 +121,7 @@ export const isMissing: (value: FieldValue | undefined) => boolean = isMissingJs
 export const isImageUrl: (url: string) => boolean = isImageUrlJs
 export const reviewLinks: (ask: Ask) => { images: Link[]; pages: Link[] } = reviewLinksJs
 export const unansweredFields: (ask: Ask) => Field[] = (ask) => unansweredFieldsJs<Field, Ask>(ask)
+export const todayAsks: (asks: Ask[]) => Ask[] = todayAsksJs
 export const sortAsks: (asks: Ask[]) => Ask[] = sortAsksJs
 export const buildDeck: (asks: Ask[]) => DeckItem[] = buildDeckJs
 export const selectDeck: (input: {

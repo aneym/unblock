@@ -246,6 +246,8 @@ export class Store {
     this.#addColumn('asks', 'draft_rev', 'INTEGER NOT NULL DEFAULT 0')
     this.#addColumn('asks', 'repinged_at', 'INTEGER')
     this.#addColumn('asks', 'rechecked_at', 'INTEGER')
+    this.#addColumn('asks', 'recheck_failures', 'INTEGER NOT NULL DEFAULT 0')
+    this.#addColumn('asks', 'recheck_unavailable_at', 'INTEGER')
     this.#addColumn('asks', 'weekly_at', 'INTEGER')
     this.#addColumn('asks', 'reping_unavailable_at', 'INTEGER')
   }
@@ -517,6 +519,7 @@ export class Store {
       answered_at: row.answered_at ?? undefined,
       repinged_at: row.repinged_at ?? undefined,
       rechecked_at: row.rechecked_at ?? undefined,
+      recheck_unavailable_at: row.recheck_unavailable_at ?? undefined,
       weekly_at: row.weekly_at ?? undefined,
       reping_unavailable_at: row.reping_unavailable_at ?? undefined,
       collected_at: row.collected_at ?? undefined,
@@ -826,8 +829,15 @@ export class Store {
 
   recheckCandidates(afterMs) {
     return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
-      AND created_at <= ? AND rechecked_at IS NULL`)
+      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL`)
       .all(nowMs() - afterMs).map(({ ticket }) => ticket)
+  }
+
+  markRecheckFailed(ticket) {
+    this.#db.prepare(`UPDATE asks SET recheck_failures = recheck_failures + 1,
+      recheck_unavailable_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE recheck_unavailable_at END
+      WHERE ticket = ? AND status = 'open' AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL`)
+      .run(nowMs(), ticket)
   }
 
   markRechecked(ticket) {

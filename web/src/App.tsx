@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, BASE, FinishedError, NetworkError, VIEWER } from './lib/api'
 import { clearLocal } from './lib/drafts'
-import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, type Ask, type QueueData } from './deck'
+import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, todayAsks, type Ask, type QueueData } from './deck'
 import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
 import { SoloCard, type SendRecovery } from './SoloCard'
@@ -290,7 +290,7 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
   const openAsks = useMemo(
-    () => sortAsks((data?.asks || []).filter((ask) => ask.status === 'open' && !doneTickets.has(ask.ticket))),
+    () => sortAsks(todayAsks(data?.asks || []).filter((ask) => !doneTickets.has(ask.ticket))),
     [data, doneTickets],
   )
   const products = useMemo(() => projectCounts(openAsks), [openAsks])
