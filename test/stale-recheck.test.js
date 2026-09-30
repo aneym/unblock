@@ -14,8 +14,10 @@ const stateDir = mkdtempSync(join(tmpdir(), 'unblock-recheck-'))
 process.env.UNBLOCK_STATE_DIR = stateDir
 process.env.UNBLOCK_CONFIG_DIR = join(stateDir, 'config')
 process.env.UNBLOCK_SECRET_BACKEND = 'env'
-process.env.UNBLOCK_RECHECK_AFTER_MS = '40'
-process.env.UNBLOCK_WEEKLY_AFTER_MS = '400'
+const recheckAfterMs = 1500
+const weeklyAfterMs = 4000
+process.env.UNBLOCK_RECHECK_AFTER_MS = String(recheckAfterMs)
+process.env.UNBLOCK_WEEKLY_AFTER_MS = String(weeklyAfterMs)
 const postLog = join(stateDir, 'lane-posts')
 const lanePost = join(stateDir, 'lane-post-stub')
 writeFileSync(lanePost, `#!/bin/sh\nfor a in "$@"; do printf '%s\\037' "$a" >> '${postLog}'; done\nprintf '\\n' >> '${postLog}'\n`)
@@ -56,6 +58,7 @@ test('a day-old ask goes back to its lane once; a three-day-old ask moves to the
     const stale = created(await json(base, '/api/asks', {
       method: 'POST', body: JSON.stringify({ ask: decision('Name the new tab'), origin: { session_id: 's-a', pane_id: 'w5H:pAA' } }),
     }))
+    const staleCreatedAt = Date.now()
     const answered = created(await json(base, '/api/asks', {
       method: 'POST', body: JSON.stringify({ ask: decision('Pick the chip color'), origin: { session_id: 's-b', pane_id: 'w5H:pBB' } }),
     }))
@@ -65,7 +68,7 @@ test('a day-old ask goes back to its lane once; a three-day-old ask moves to the
     await daemon.sweep()
     assert.deepEqual(posts(), [])
 
-    await wait(60)
+    await wait(Math.max(0, staleCreatedAt + recheckAfterMs + 50 - Date.now()))
     await daemon.sweep()
     const sent = posts()
     assert.equal(sent.length, 1, 'only the still-open ask is sent back, once')
@@ -87,7 +90,7 @@ test('a day-old ask goes back to its lane once; a three-day-old ask moves to the
     assert.equal(posts().length, 1, 'a second sweep does not send it again')
 
     // Three days on, still open: it leaves today's list for the weekly one.
-    await wait(400)
+    await wait(Math.max(0, staleCreatedAt + weeklyAfterMs + 50 - Date.now()))
     await daemon.sweep()
     const weekly = (await json(base, `/api/asks/${stale.ticket}`)).body
     assert.ok(weekly.weekly_at, 'the ask records when it moved to the weekly list')

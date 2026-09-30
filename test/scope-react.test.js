@@ -29,7 +29,7 @@ test('a comment goes out at once through lane-post; the lane marks it 👀 seen;
   const herdr = process.env.HERDR_BIN_PATH, paneLog = join(dirname(herdr), 'pane.log')
   writeFileSync(herdr, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${paneLog}'\ncase "$1 $2" in "agent get") echo '{"result":{"agent":{"agent_status":"working"}}}';; esac\n`)
   const postLog = join(dirname(herdr), 'lane-post.log'), postBin = join(dirname(herdr), 'lane-post-stub')
-  writeFileSync(postBin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\x1f' "$a" >> '${postLog}'; done\nprintf '\\n' >> '${postLog}'\n`)
+  writeFileSync(postBin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\037' "$a" >> '${postLog}'; done\nprintf '\\n' >> '${postLog}'\n`)
   chmodSync(postBin, 0o700)
   process.env.UNBLOCK_LANE_POST_BIN = postBin
   const get = async () => (await request('/api/scope/demo', { headers: human })).json
