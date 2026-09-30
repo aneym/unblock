@@ -342,6 +342,8 @@ Mocks get a viewport tag if they lack one, and `"phone"` renders at 390 CSS px (
 following `Figure: <caption>` line. Questions anchor to that caption, not the image's
 alt text. Exports keep the stored `asset:` references, so re-importing needs no render.
 
+`POST /api/scope/<slug>/threads/<T>/pick {text}` is a human-only, read-only ask picker; `UNBLOCK_ASK_PICKER_BIN` selects its binary and `UNBLOCK_ASK_PICK_MIN` sets the confidence cut (default 0.6).
+
 ### Rails Admin relay
 
 The `unblock-admin-relay` agent-secret handle (override with

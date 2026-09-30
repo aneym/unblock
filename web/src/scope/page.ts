@@ -25,7 +25,13 @@ type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; a
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
 function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+type AskChoice = { action: 'take' | 'option' | 'no' | 'else'; label: string; option?: number }
+const askDecisions = new Map<string, { choice: AskChoice; note: string; timer: number }>(), askSuggestions = new Map<string, AskChoice | null>(), picking = new Set<string>()
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
+function focusBox(id: string) {
+  const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${id}"] textarea`)
+  if (input && document.activeElement !== input) input.focus({ preventScroll: true })
+}
 const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
 function draftStorageKey(key: string) { return `scope:draft:${slug}:${key}` }
 function getDraft(key: string) { return drafts.get(key) ?? storage.get(draftStorageKey(key)) ?? '' }
@@ -259,17 +265,21 @@ function cardHtml(t: Thread) {
     return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span></div><div class="q">${esc(t.messages[0]?.text)}</div>${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div></div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
-  const compose = mode && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
+  const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
   let body = ''
   if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea><p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions"><button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
-  else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
+  else if (isOpen && t.kind === 'question') {
+    const decision = askDecisions.get(t.id), suggested = askSuggestions.has(t.id) ? ' suggest' : ''
+    const choices = decision ? `<p class="decided">${esc(decision.choice.action === 'take' ? 'Took it' : decision.choice.action === 'option' ? `Chose: ${decision.choice.label}` : decision.choice.action === 'no' ? 'Said no' : 'Something else')}${decision.note ? ` · ${esc(decision.note)}` : ''} <button data-action="undo">Undo</button></p>` : `<div class="choices"><button class="btn${suggested}" data-action="take">Take it</button><button class="btn${suggested}" data-action="no">No</button><button class="btn${suggested}" data-action="else">Something else</button></div>${suggested ? '<p class="pick-hint">Pick one; your note goes with it.</p>' : ''}`
+    body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
+  }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
   return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
-  ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
+  ${isOpen && t.kind === 'question' && t.options?.length && !askDecisions.has(t.id) ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<button${askSuggestions.get(t.id)?.option === i + 1 ? ' class="suggest"' : ''} data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div></div>`).join('')}</div>` : ''}
   ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
@@ -615,20 +625,15 @@ async function action(name: string, target: HTMLElement) {
   if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { openSelectionComment(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
-  if (pending.has(key) || sending.has(key)) return
+  if (name === 'undo' && t) { const decision = askDecisions.get(t.id); if (decision) clearTimeout(decision.timer); askDecisions.delete(t.id); renderCards(); return }
+  if (pending.has(key) || sending.has(key) || askDecisions.has(key) || picking.has(key) && ['take', 'no', 'else', 'option'].includes(name)) return
   const text = getDraft(key).trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
-  if (t && name === 'option') {
-    const option = t.options?.[Number(target.dataset.option)]
-    if (option == null || t.kind !== 'question' || t.status !== 'open') return
-    menus.delete(t.id); modes.set(t.id, 'else'); setDraft(t.id, option); focus(t.id, false, false); renderCards()
-    const input = $<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`, phone() ? sheet : cards)
-    input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); return
-  }
-  if (t && ['menu', 'no', 'else', 'menu-reply'].includes(name)) {
+  if (t && name === 'else' && t.recommendation && !text) { modes.set(t.id, 'else'); renderCards(); const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`); if (input) input.placeholder = 'Your answer'; focusBox(t.id); return }
+  if (t && ['menu', 'menu-reply', ...(!t.recommendation ? ['else'] : [])].includes(name)) {
     if (name === 'menu') { if (menus.has(t.id)) menus.delete(t.id); else menus.add(t.id) }
     else { menus.delete(t.id); modes.set(t.id, name === 'menu-reply' ? 'reply' : name as 'no' | 'else') }
-    renderCards(); if (name !== 'menu') $<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`, phone() ? sheet : cards).focus({ preventScroll: true }); return
+    renderCards(); if (name !== 'menu') focusBox(t.id); return
   }
   const mode = t && modes.get(t.id)
   if ((name === 'send' && mode !== 'no' || name === 'reply' || name === 'post') && !text) { target.closest('.card')?.querySelector<HTMLTextAreaElement>('textarea')?.focus(); return }
@@ -639,14 +644,39 @@ async function action(name: string, target: HTMLElement) {
     if (name === 'reply' || name === 'send' && mode === 'reply') await postReply(t.id, { text })
     else if (name === 'send' && mode === 'no') await postReject(t.id, { text })
     else if (name === 'send' && mode === 'else') await postResolve(t.id, { decision: text, alex_words: text, how: 'own' })
-    else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: 'Take the recommendation', how: 'take' })
+    else if (name === 'take' && t.recommendation) await postResolve(t.id, { decision: t.recommendation, alex_words: text || 'Take the recommendation', how: 'take' })
+    else if (name === 'no' && t.recommendation) await postReject(t.id, { text })
+    else if (name === 'else' && t.recommendation && text) await postResolve(t.id, { decision: text, alex_words: text, how: 'own' })
+    else if (name === 'option' && t.options?.[Number(target.dataset.option)] != null) { const option = t.options[Number(target.dataset.option)]; await postResolve(t.id, { decision: option, alex_words: text || option, how: 'own' }) }
     else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve' })
     else if (name === 'park') await postPark(t.id)
-    if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
+    if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id); askSuggestions.delete(t.id)
     if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
     renderCards()
   } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
   finally { pending.delete(key); renderCards() }
+}
+async function pickAsk(t: Thread) {
+  if (pending.has(t.id) || sending.has(t.id) || picking.has(t.id) || askDecisions.has(t.id)) return
+  const note = getDraft(t.id).trim()
+  focus(t.id, false, false)
+  picking.add(t.id)
+  let result: { choice: AskChoice | null; sure: boolean } = { choice: { action: 'take', label: t.recommendation! }, sure: true }
+  try {
+    if (note) { try { result = await api(`${endpoint}/threads/${t.id}/pick`, { text: note }) } catch { result = { choice: null, sure: false } } }
+    if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
+    if (!result.sure || !result.choice) { askSuggestions.set(t.id, result.choice); renderCards(); return }
+    const choice = result.choice
+    askSuggestions.delete(t.id)
+    const timer = window.setTimeout(() => {
+      askDecisions.delete(t.id)
+      if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open') { renderCards(); return }
+      const target = document.createElement('button'); target.dataset.t = t.id; if (choice.option != null) target.dataset.option = String(choice.option)
+      setDraft(t.id, note)
+      void action(choice.action, target)
+    }, 10_000)
+    askDecisions.set(t.id, { choice, note, timer }); renderCards()
+  } finally { picking.delete(t.id) }
 }
 const zoom = document.createElement('div')
 zoom.className = 'zoom'; zoom.hidden = true; zoom.setAttribute('role', 'dialog'); zoom.setAttribute('aria-modal', 'true')
@@ -699,6 +729,8 @@ document.addEventListener('keydown', e => {
   const target = e.target
   if (!(target instanceof HTMLTextAreaElement) || !target.matches('textarea[data-draft]')) return
   e.preventDefault()
+  const id = target.dataset.draft!, thread = scope?.threads.find(t => t.id === id)
+  if (thread?.kind === 'question' && thread.status === 'open' && thread.recommendation && modes.get(id) !== 'reply') { void pickAsk(thread); return }
   const button = target.closest('.reply')?.querySelector<HTMLElement>('.btn.primary[data-action]')
   if (button) void action(button.dataset.action!, button)
 })
@@ -728,7 +760,7 @@ document.addEventListener('click', e => {
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
   const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || mark.classList.contains('recent') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
-  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!) }
+  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim(); reply.disabled = pending.has(input.dataset.draft) || !input.value.trim() }; layout() })
 let selectionTimer = 0
@@ -740,7 +772,7 @@ $('#scrim').onclick = closeSheet
 $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 $('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
-document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
+document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('button,a,summary,select,textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && focused && !phone()) { e.preventDefault(); focusBox(focused) } })
 addEventListener('resize', () => { layout(); showSelection() }); document.fonts.ready.then(layout)
 let docWidth = doc.getBoundingClientRect().width, layoutFrame = 0
 new ResizeObserver(() => {

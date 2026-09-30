@@ -1,6 +1,6 @@
-import { readFileSync, readdirSync, statSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, writeFileSync, renameSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { execFile } from 'node:child_process'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { promptPane } from './pane-notice.js'
@@ -359,6 +359,38 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         } finally { if (writes.get(slug) === pending) writes.delete(slug) }
       }
       return sendJson(res, 404, { error: 'not found' })
+    }
+    if (req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && verb === 'pick') {
+      if (relayIdentity(req) || !proxyIdentity(req)) return sendJson(res, 403, { error: 'only Alex picks' })
+      requireHumanPath(req)
+      const thread = state.scope?.threads.find(t => t.id === threadId)
+      if (!thread) bad('no such thread', 404)
+      if (thread.kind !== 'question' || thread.status !== 'open' || !thread.recommendation) bad('only open lane questions')
+      const body = await readJson(req)
+      const text = typeof body?.text === 'string' ? body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim() : ''
+      if (text.length > 4000) bad(`your answer is too long (${text.length} of 4000 characters)`)
+      if (!text) bad('invalid text')
+      const fallback = { choice: null, confidence: null, sure: false }
+      const jev = join(homedir(), '.local', 'bin', 'jev')
+      const bin = process.env.UNBLOCK_ASK_PICKER_BIN || (process.env.UNBLOCK_SUPERVISED === '1' && existsSync(jev) ? jev : null)
+      if (!bin) return sendJson(res, 200, fallback)
+      const choices = new Map([['take', { action: 'take', label: thread.recommendation }]])
+      for (const [i, option] of (thread.options || []).entries()) if (i >= 1 && option !== thread.recommendation) choices.set(`option-${i}`, { action: 'option', option: i, label: option })
+      choices.set('no', { action: 'no', label: 'No' }); choices.set('else', { action: 'else', label: 'Something else' })
+      let dir
+      try {
+        dir = mkdtempSync(join(tmpdir(), 'unblock-ask-pick-'))
+        const file = join(dir, 'elements.json')
+        const elements = [...choices].map(([ref, choice]) => ({ ref, role: 'button', name: ref === 'take' ? `Take it: ${choice.label}` : ref === 'no' ? 'No: reject the recommendation' : ref === 'else' ? 'Something else: my own answer, not any option' : choice.label }))
+        writeFileSync(file, JSON.stringify({ url: `scope:${slug}#${threadId}`, elements }), { mode: 0o600 })
+        const goal = `The lane asked: "${thread.messages[0]?.text}". Alex replied: "${text}". Pick the button that matches what Alex meant.`
+        const stdout = await new Promise((resolve, reject) => execFile(bin, ['decide', file, goal], { timeout: 15000 }, (error, stdout) => error ? reject(error) : resolve(stdout)))
+        const result = JSON.parse(stdout), choice = choices.get(result.target)
+        if (!choice || typeof result.confidence !== 'number' || !Number.isFinite(result.confidence)) return sendJson(res, 200, fallback)
+        const cut = Number(process.env.UNBLOCK_ASK_PICK_MIN)
+        return sendJson(res, 200, { choice, confidence: result.confidence, sure: result.confidence >= (Number.isFinite(cut) ? cut : 0.6) })
+      } catch { return sendJson(res, 200, fallback) }
+      finally { if (dir) rmSync(dir, { recursive: true, force: true }) }
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
