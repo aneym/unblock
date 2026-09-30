@@ -49,10 +49,19 @@ function replaceAround(root: HTMLElement, nodes: Node[], kept?: HTMLElement | nu
   for (const node of nodes.slice(index + 1)) root.append(node)
 }
 function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
-  const reply = kept.querySelector<HTMLElement>('.reply'), nextReply = fresh.querySelector<HTMLElement>('.reply')
-  const textarea = reply?.querySelector<HTMLTextAreaElement>('textarea'), nextTextarea = nextReply?.querySelector('textarea'), note = reply?.querySelector<HTMLElement>('.composer-note')
+  const reply = kept.querySelector<HTMLElement>('.reply'), textarea = reply?.querySelector<HTMLTextAreaElement>('textarea')
+  let nextReply = fresh.querySelector<HTMLElement>('.reply')
+  if (kept.dataset.t && reply && textarea && (document.activeElement === textarea || textarea.value.trim()) && (!fresh.classList.contains('open') || !nextReply)) {
+    nextReply = document.createElement('div'); nextReply.className = 'reply'; nextReply.dataset.retainedReply = 'true'
+    nextReply.innerHTML = `<p class="composer-note">${fresh.classList.contains('parked') ? 'Parked' : 'Resolved'} while you were typing. Sending reopens it.</p><textarea></textarea><p class="error" role="alert">${esc(errors.get(kept.dataset.t))}</p><div class="actions"><button class="btn primary" data-action="reply">${fresh.classList.contains('comment') ? 'Reply' : 'Send'}</button></div>`
+    fresh.append(nextReply)
+  }
+  const nextTextarea = nextReply?.querySelector('textarea'), note = reply?.querySelector<HTMLElement>('.composer-note')
   if (reply && nextReply && textarea && nextTextarea) {
-    const nodes = [...nextReply.childNodes].flatMap(node => node === nextTextarea ? note ? [note, textarea] : [textarea] : [node])
+    const nextNote = nextReply.querySelector('.composer-note')
+    const nodes = [...nextReply.childNodes].flatMap(node => node === nextTextarea ? note && !nextNote && !reply.hasAttribute('data-retained-reply') ? [note, textarea] : [textarea] : [node])
+    reply.className = nextReply.className
+    reply.toggleAttribute('data-retained-reply', nextReply.hasAttribute('data-retained-reply'))
     replaceAround(reply, nodes, textarea)
   }
   kept.className = fresh.className
@@ -371,7 +380,9 @@ function renderCards() {
   syncThreadClasses()
   const visible = ordered().filter(t => t.status === 'open' || recent(t) || showResolved)
   const active = document.activeElement as HTMLElement | null
-  const kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
+  const kept = activeCard && (activeCard.parentElement === cards || activeCard.parentElement === detached) ? activeCard : retained || null
   const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
   const keptThread = kept?.dataset.t && scope?.threads.find(t => t.id === kept.dataset.t)
   if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
@@ -515,7 +526,10 @@ function renderSheet() {
   sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
   const fresh = document.createElement('div')
   fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? 'General comment' : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
-  const active = document.activeElement as HTMLElement | null, kept = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const active = document.activeElement as HTMLElement | null
+  const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
+  const retained = [...sheet.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
+  const kept = activeCard?.parentElement === sheet ? activeCard : retained || null
   const next = fresh.querySelector<HTMLElement>('.card')!
   if (kept?.parentElement === sheet && kept.dataset.t === t.id) { refreshCard(kept, next); replaceAround(sheet, [...fresh.childNodes].map(n => n instanceof HTMLElement && n.matches('.card') ? kept : n), kept) }
   else sheet.replaceChildren(...fresh.childNodes)
