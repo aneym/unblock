@@ -19,6 +19,7 @@ export interface Anchor {
   prefix: string
   /** Up to 40 chars of text just after the quote (collapsed, trimmed), may be ''. */
   suffix: string
+  general?: true
   t?: number
   t_end?: number
 }

@@ -9,6 +9,7 @@ export function normalizeAnchor(input) {
   const quote = anchorText(input.quote).slice(0, 300).trim()
   if (!quote) return null
   const anchor = { section: input.section, quote, prefix: anchorText(input.prefix).slice(-40).trim(), suffix: anchorText(input.suffix).slice(0, 40).trim() }
+  if (input.general === true && input.section === 'title') anchor.general = true
   if (Number.isFinite(input.t) && input.t >= 0 && input.t <= 86400) {
     anchor.t = Math.round(input.t * 10) / 10
     if (Number.isFinite(input.t_end) && input.t_end > input.t && input.t_end <= 86400) anchor.t_end = Math.round(input.t_end * 10) / 10

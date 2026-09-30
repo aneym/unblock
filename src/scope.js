@@ -609,6 +609,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       mkdirSync(join(dir, 'revisions'), { recursive: true })
       writeFileSync(join(dir, 'revisions', `${scope.revision}.json`), JSON.stringify({ revision: scope.revision, at, sections: scope.doc.sections }))
       result.detached = scope.threads.filter((t) => {
+        if (t.anchor.general) return false
         const section = scope.doc.sections.find((s) => s.id === t.anchor.section)
         return !section || !locateAnchor(sectionPlain(section), t.anchor)
       }).map((t) => t.id)

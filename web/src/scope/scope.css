@@ -373,8 +373,8 @@ body.zoom-open { overflow: hidden; }
 
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .title-row h1 { flex: 1; min-width: 0; }
-.title-row > .btn { flex-shrink: 0; }
-body.embed .title-row h1 { display: none; }
+.title-actions { display: flex; gap: 8px; flex-shrink: 0; }
+body.embed .title-row h1, body.embed #doc > h1 { display: none; }
 .approval { padding: 14px 16px; margin: 12px 0 20px; border: 1px solid var(--hairline); border-radius: var(--radius-small); background: var(--fill-1); font-size: 14px; }
 .approval-note { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
 dialog.approve { width: min(540px, calc(100% - 32px)); box-sizing: border-box; border: 1px solid var(--hairline); border-radius: var(--radius-panel); background: var(--raised); color: var(--ink); padding: 24px; box-shadow: var(--shadow-2); }

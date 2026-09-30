@@ -23,7 +23,7 @@ let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null 
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
-function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? 'composer' : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+function disablePending() { document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 const drafts = new Map<string, string>(), errors = new Map<string, string>(), notes = new Map<string, any>(), missing = new Set<string>()
 const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
@@ -76,7 +76,9 @@ async function submitApproval() {
     queuedApproval = null
     if (result.queued === true) trackQueuedApproval(result.client_id || client_id, mode, comment)
     else if (scope && result.approval) { scope.approval = result.approval; render(); publishApproval() }
-    try { accept(await api(endpoint)) } catch {}
+    let refreshed: Parameters<typeof accept>[0] | undefined
+    try { refreshed = await api<Parameters<typeof accept>[0]>(endpoint) } catch {}
+    if (refreshed) accept(refreshed)
   } catch (error) { $('.error', approveDialog).textContent = error instanceof Error ? error.message : 'Approval failed' }
   finally { approving = false; updateApproveDialog() }
 }
@@ -136,7 +138,9 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
     renderCards()
   } else if (typeof result.thread?.anchor?.section === 'string' && result.thread.created_at) upsert(result.thread)
   else {
-    try { accept(await api(endpoint)) } catch { /* The write landed; the next event or poll supplies the view. */ }
+    let refreshed: Parameters<typeof accept>[0] | undefined
+    try { refreshed = await api<Parameters<typeof accept>[0]>(endpoint) } catch { /* The write landed; the next event or poll supplies the view. */ }
+    if (refreshed) accept(refreshed)
   }
   return result
 }
@@ -173,7 +177,8 @@ function delivery(id: string): CommentState | '' {
 function updateCommentStates() {
   for (const t of scope?.threads || []) {
     const state = delivery(t.id), previous = commentStates.get(t.id)
-    if (!state || previous?.state === state) continue
+    if (!state) { if (previous?.timer) clearTimeout(previous.timer); commentStates.delete(t.id); continue }
+    if (previous?.state === state) continue
     if (previous?.timer) clearTimeout(previous.timer)
     const entry: { state: CommentState; takenAt?: number; timer?: number } = { state }
     if (state === 'In the doc') {
@@ -204,7 +209,7 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') body = t.recommendation ? '<div class="choices only-on"><button class="btn" data-action="take">Take it</button><button class="btn" data-action="no">No</button><button class="btn" data-action="else">Something else</button></div>' : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  const state = [deliveryChip(t.id), t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
+  const state = [deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
   return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span><span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
@@ -218,6 +223,7 @@ function card(t: Thread) {
 function highlight() {
   missing.clear()
   for (const t of ordered()) {
+    if (t.anchor.general) continue
     const root = document.getElementById(t.anchor.section)
     if (!root?.matches('section[data-section]')) { missing.add(t.id); continue }
     const { text, map } = sectionText(root), found = locateAnchor(text, t.anchor)
@@ -261,7 +267,7 @@ function render() {
   for (const s of scope.doc.sections) {
     let node = [...doc.children].find(n => n.id === s.id) as HTMLElement | undefined
     if (!node || !unchanged(s.id)) {
-      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}${s.id === 'title' ? `<div class="title-row"><h1>${esc(s.heading)}</h1>${boot.approve !== 'host' && !isApproved() && (!queuedApproval || queuedApproval.failed) ? '<button type="button" class="btn primary" data-action="approve-scope" data-cm-skip>Approve scope</button>' : ''}</div>${approvalBanner()}` : `<h2>${esc(s.heading)}</h2>`}<div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
+      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}${s.id === 'title' ? `<div class="title-row"><h1>${esc(s.heading)}</h1><span class="title-actions" data-cm-skip>${boot.comment !== 'host' ? '<button type="button" class="btn" data-action="general-comment">Comment</button>' : ''}${boot.approve !== 'host' && !isApproved() && (!queuedApproval || queuedApproval.failed) ? '<button type="button" class="btn primary" data-action="approve-scope" data-cm-skip>Approve scope</button>' : ''}</span></div>${approvalBanner()}` : `<h2>${esc(s.heading)}</h2>`}<div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
       const next = replacement.firstElementChild as HTMLElement
       if (node) node.replaceWith(next)
       node = next; redrawn.push(node)
@@ -312,7 +318,7 @@ function renderCards() {
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">You commented</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
-    cards.append(node)
+    if (item.anchor.general) cards.prepend(node); else cards.append(node)
   }
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', showResolved)
@@ -361,6 +367,7 @@ function layout() {
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
   const want = nodes.map(n => {
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
+    if (queued?.anchor?.general || n.classList.contains('composer') && composing?.general) return 8
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
     return Math.max(8, (n.classList.contains('composer') ? selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - 12)
   })
@@ -384,13 +391,34 @@ function seekMoment(id: string) {
   const video = figureFor(marks(id)[0])?.querySelector<HTMLVideoElement>('video')
   if (video && anchor?.t != null) video.currentTime = anchor.t
 }
+function threadTarget(id: string) {
+  const thread = scope?.threads.find(t => t.id === id)
+  if (thread?.anchor.general) return { node: document.getElementById('title'), general: true, fallback: true }
+  const list = marks(id), mark = list.find(m => !hidden(m) && m.getClientRects().length)
+  if (mark) return { node: figureFor(mark) || mark, general: false, fallback: false }
+  return { node: list.length && !list.some(hidden) ? document.getElementById(thread?.anchor.section || '') : null, general: false, fallback: true }
+}
+function jumpThread(id: string, flash = false) {
+  const target = threadTarget(id), node = target.node
+  if (!node) return
+  if (target.general) scrollTo({ top: 0, behavior: 'instant' })
+  else if (phone()) scrollTo({ top: scrollY + node.getBoundingClientRect().top - 96, behavior: 'instant' })
+  else node.scrollIntoView({ block: target.fallback ? 'start' : 'center', behavior: 'smooth' })
+  if (flash && !target.fallback) { node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash') }
+}
+function threadOnScreen(id: string) {
+  const node = threadTarget(id).node
+  if (!node) return false
+  const rect = node.getBoundingClientRect()
+  return rect.bottom >= 52 && rect.top < innerHeight
+}
 function focus(id: string | null, scroll = false, openSheet = true) {
   focused = id
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
   document.querySelectorAll<HTMLElement>('.card[data-t],mark[data-t]').forEach(n => n.classList.toggle('on', n.dataset.t === id))
   syncFigureFocus()
-  if (id && scroll) { const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) { if (phone()) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }); else mark.scrollIntoView({ block: 'center', behavior: 'smooth' }); mark.classList.remove('flash'); void mark.offsetWidth; mark.classList.add('flash') } }
-  if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); const mark = figureFor(marks(id)[0]) || marks(id)[0]; if (mark) scrollTo({ top: scrollY + mark.getBoundingClientRect().top - 96, behavior: 'instant' }) }
+  if (id && scroll) jumpThread(id, true)
+  if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); jumpThread(id) }
   updateCount(); layout()
 }
 function step(direction: number) { const list = open(); if (!list.length) return; const index = list.findIndex(t => t.id === focused); focus(list[Math.max(0, Math.min(list.length - 1, index < 0 ? 0 : index + direction))].id, true) }
@@ -398,7 +426,7 @@ function renderSheet() {
   const t = scope?.threads.find(t => t.id === focused); if (!t) { closeSheet(); return }
   const i = open().findIndex(x => x.id === t.id)
   sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
-  sheet.innerHTML = `<div class="grab"></div><div class="quote">On <q>${esc(t.anchor.quote)}</q></div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+  sheet.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? 'General comment' : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
 }
 function closeSheet() { document.body.classList.remove('sheet-open') }
 function showSelection() {
@@ -414,17 +442,32 @@ function readSelection() {
   const range = sel.getRangeAt(0), anchor = anchorFromRange(range)
   if (anchor) { selection = anchor; selectionTop = range.getBoundingClientRect().top + scrollY; showSelection() }
 }
+function openGeneralComment() {
+  const quote = scope?.doc.sections.find(s => s.id === 'title')?.heading.trim().slice(0, 300)
+  if (!quote) return
+  getSelection()?.removeAllRanges(); selection = null
+  composing = { section: 'title', quote, prefix: '', suffix: '', general: true }
+  renderCards(); $('.composer textarea', phone() ? sheet : cards).focus()
+}
+window.addEventListener('scope:comment-open', openGeneralComment)
+function cancelComposer() {
+  if (!composing?.general) drafts.delete('composer')
+  composing = null; closeSheet(); renderCards()
+}
 function renderComposer() {
-  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="composer" placeholder="${composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(drafts.get('composer'))}</textarea><p class="error">${esc(errors.get('composer'))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  const key = composing?.general ? 'general' : 'composer'
+  const node = document.createElement('div'); node.className = 'card composer comment on'; node.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${key}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(drafts.get(key))}</textarea><p class="error">${esc(errors.get(key))}</p><div class="actions"><button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
   if (phone()) { sheet.replaceChildren(node); document.body.classList.add('sheet-open') }
+  else if (composing?.general) cards.prepend(node)
   else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
 }
 async function action(name: string, target: HTMLElement) {
+  if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { composing = selection; renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return }
-  const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? 'composer' : id!
+  const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = name === 'post' ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
   if (pending.has(key) || sending.has(key)) return
   const text = (drafts.get(key) || '').trim()
-  if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { composing = null; drafts.delete('composer'); closeSheet(); renderCards() }; return }
+  if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
   if (t && name === 'option') {
     const option = t.options?.[Number(target.dataset.option)]
     if (option == null || t.kind !== 'question' || t.status !== 'open') return
@@ -545,10 +588,17 @@ $('#next').onclick = $('#chipNext').onclick = () => step(1)
 $('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
 $('#scrim').onclick = closeSheet
 $('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
-document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
+document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1) })
 addEventListener('resize', layout); document.fonts.ready.then(layout)
+let docWidth = doc.getBoundingClientRect().width, layoutFrame = 0
+new ResizeObserver(() => {
+  const width = doc.getBoundingClientRect().width
+  if (Math.abs(width - docWidth) < .5) return
+  docWidth = width
+  cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layout)
+}).observe(doc)
 let scrollTimer = 0
-addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; const current = focused && marks(focused).find(m => !hidden(m))?.getBoundingClientRect(); if (current && current.bottom >= 52 && current.top <= innerHeight) return; const next = open().find(t => marks(t.id).some(m => { if (hidden(m)) return false; const r = m.getBoundingClientRect(); return r.bottom >= 52 && r.top < innerHeight })); if (next) focus(next.id, false, false) }, 180) })
+addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; if (focused && threadOnScreen(focused)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 180) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 const feedRows: (ScopeFeedLine & { at: Date })[] = []

@@ -39,6 +39,7 @@ export function headingOf(scope, id) { return scope.doc.sections.find((s) => s.i
 export function nextThreadId(scope) { return `T${Math.max(0, ...scope.threads.map((t) => Number(t.id.slice(1)))) + 1}` }
 export function orderThreads(scope) {
   const position = (thread) => {
+    if (thread.anchor.general) return [-1, -1]
     const index = scope.doc.sections.findIndex((s) => s.id === thread.anchor.section)
     const found = index < 0 ? null : locateAnchor(sectionPlain(scope.doc.sections[index]), thread.anchor)
     return found ? [index, found.start] : [Infinity, Infinity]
