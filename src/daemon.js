@@ -514,6 +514,13 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   return withTicket(ticket, async () => {
     const ask = store.get(ticket)
     if (!ask) return null
+    if (answeredVia?.startsWith('admin:')) {
+      if (ask.fields.some((field) => ['secret', 'paste'].includes(field.type) && Object.hasOwn(values, field.name))) {
+        const error = new Error('Admin cannot submit secret or paste values'); error.code = 'RELAY_NO_SECRETS'; error.status = 400; throw error
+      }
+      if (ask.status !== 'open') { const error = new Error('Ask is not open'); error.code = 'ASK_NOT_OPEN'; error.status = 409; throw error }
+      if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
+    }
     if (APPROVAL_PURPOSES.includes(ask.purpose)) {
       // Reject stale or agent-supplied approvals before processing any values.
       if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
@@ -678,7 +685,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const slug = '[a-z0-9][a-z0-9-]{0,63}'
       const allowed = req.method === 'GET'
         ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}(?:/assets/${ASSET_ID.source.slice(1, -1)})?$`).test(pathname)
-        : req.method === 'POST' && new RegExp(`^/api/scope/${slug}/(?:approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park))?)$`).test(pathname)
+        : req.method === 'POST' && (routeTicket(pathname, '/answer') || new RegExp(`^/api/scope/${slug}/(?:approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park))?)$`).test(pathname))
       if (!allowed) return sendJson(res, 403, { code: 'RELAY_SCOPE_ONLY' })
     }
 
@@ -851,6 +858,18 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     ticket = routeTicket(pathname, '/answer')
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
+      if (relay) {
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !['values', 'reply', 'revision', 'via', 'client_id'].includes(key))) {
+          return sendJson(res, 400, { error: 'invalid relay answer body' })
+        }
+        if (body.via !== 'admin' || typeof body.client_id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(body.client_id)) {
+          return sendJson(res, 400, { error: 'invalid relay answer identity' })
+        }
+        const result = await answerAsk(ticket, body.values || {}, body.reply, undefined, undefined, body.revision, `admin:${relay.login}`)
+        if (!result) return notFound(res)
+        emitQueue()
+        return sendJson(res, 200, result)
+      }
       const result = body.bounce
         ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
@@ -1142,7 +1161,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
-      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
+      if (['HUMAN_ONLY', 'STALE_REVISION', 'RELAY_NO_SECRETS', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }
