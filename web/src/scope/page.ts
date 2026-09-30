@@ -352,6 +352,7 @@ function inflight() {
   return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [sent, 'Sent']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
 const deleting = new Set<string>(), copiedLinks = new Set<string>()
+const checkButton = '<button type="button" class="check" data-action="resolve" aria-label="Resolve" title="Resolve"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button>'
 const moreButton = '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>'
 function threadMenu(t: Thread) {
   if (!menus.has(t.id)) return ''
@@ -390,7 +391,7 @@ function cardHtml(t: Thread) {
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length && !askDecisions.has(t.id) ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<button${askSuggestions.get(t.id)?.option === i + 1 ? ' class="suggest"' : ''} data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
