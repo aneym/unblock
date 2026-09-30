@@ -27,12 +27,14 @@ function ScopeVoice({ audio, deps, onUi, onActive }: { audio: AudioContext; deps
     const current = ++attempt.current
     call.current?.stop(); call.current = null
     setTranscript([]); setMinutesLeft(false); setTiming(null); setSpend(undefined); setState({ name: 'connecting' }); onActive(true)
+    const rules = createScopeVoiceSession({ ...deps, getProvider: () => callProvider })
     call.current = startVoiceCall(context, {
       onState: (next) => { if (current !== attempt.current) return; setState(next); if (!['connecting', 'listening', 'speaking'].includes(next.name)) onActive(false) },
       onTranscript: (line) => setTranscript((previous) => previous.at(-1)?.who === line.who ? [...previous.slice(0, -1), line] : [...previous, line]),
+      onAssistantSaid: (text) => { if (current === attempt.current) rules.assistantSaid(text) },
       onUi: (ui) => onUi(ui as unknown as ScopeVoiceUi), onChanged: () => {},
       onSession: (session) => { callProvider = session.provider; setProvider(session.provider); setSpend(session.spend); setTiming({ startedAt: Date.now(), maxMinutes: session.maxMinutes }) },
-    }, { provider: picked, profile: { kickoff: SCOPE_VOICE_KICKOFF, prompt: SCOPE_VOICE_PROMPT, tools: SCOPE_VOICE_TOOLS, rules: createScopeVoiceSession({ ...deps, getProvider: () => callProvider }), session: { profile: 'scope' } } })
+    }, { provider: picked, profile: { kickoff: SCOPE_VOICE_KICKOFF, prompt: SCOPE_VOICE_PROMPT, tools: SCOPE_VOICE_TOOLS, rules, session: { profile: 'scope' } } })
   }
   const retry = (picked = provider) => {
     try { start(prepareAudio(), picked) } catch (error) { setState({ name: 'error', message: error instanceof Error ? error.message : 'Audio is unavailable.' }); onActive(false) }

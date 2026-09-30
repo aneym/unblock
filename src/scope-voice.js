@@ -65,6 +65,7 @@ const filingQuote = (text, limit = 10) => { const parts = text.split(/\s+/); ret
 
 export function createScopeVoiceSession(deps) {
   let pending = null
+  let hasTranscripts = false
   let filed = []
   const now = () => deps.now?.() ?? Date.now()
   const duplicate = (pool, text) => {
@@ -78,6 +79,14 @@ export function createScopeVoiceSession(deps) {
     })
   }
   return {
+    assistantSaid(text) {
+      if (!textOf(text)) return
+      hasTranscripts = true
+      if (!pending || !['comment', 'reply'].includes(pending.kind)) return
+      pending.said = `${pending.said} ${text}`
+      const expected = norm(pending.readback).split(' ').slice(0, 4).join(' ') || (pending.kind === 'comment' ? 'file it' : 'send it')
+      if (` ${norm(pending.said)} `.includes(` ${expected} `)) pending.heard = true
+    },
     async handle(name, args = {}) {
       const proposal = pending
       if (name !== 'confirm' && name !== 'set_speed') pending = null
@@ -108,14 +117,20 @@ export function createScopeVoiceSession(deps) {
             if (!text) return fail("I didn't catch that.")
             if (unfinished(text)) { filingLabel = 'Waiting for the rest'; return fail('Go on.') }
             if (duplicate('doc', text)) return already('doc', text, kind === 'reply' ? target : undefined)
-            pending = { kind, text, ...(kind === 'reply' ? { thread: target } : { anchor: target }) }
+            const readback = clean(filingQuote(text, 20), false)
+              .replace(/\b[\p{L}\p{N}]+(?:_[\p{L}\p{N}]+)+\b/gu, identifier => identifier.replace(/_/g, ' '))
+              .replace(/\b[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+){2,}\b/gu, identifier => identifier.replace(/-/g, ' '))
+              .replace(/^([\p{L}\p{N}]+-[\p{L}\p{N}]+)([.?!]?)$/u, (_, identifier, punctuation) => identifier.replace(/-/g, ' ') + punctuation)
+            const speech = result(`${kind === 'comment' ? 'Comment' : 'Reply'}: "${readback}" ${kind === 'comment' ? 'File it?' : 'Send it?'}`).speech
+            pending = { kind, text, readback, speech, heard: false, said: '', ...(kind === 'reply' ? { thread: target } : { anchor: target }) }
             filingThread = pending.thread
             filingLabel = kind === 'comment' ? `Proposed comment: "${filingQuote(text)}"` : `Proposed reply on ${target}: "${filingQuote(text)}"`
-            return result(`${kind === 'comment' ? 'Comment' : 'Reply'}: "${filingQuote(text, 20).replace(/https?:\/\/\S+/gi, '')}" ${kind === 'comment' ? 'File it?' : 'Send it?'}`)
+            return result(speech)
           }
           const confirm = async () => {
             if (!proposal) return fail('Nothing to confirm.')
             pending = proposal
+            if (hasTranscripts && ['comment', 'reply'].includes(proposal.kind) && !proposal.heard) return fail(`First, the ${proposal.kind}: "${proposal.readback}" ${proposal.kind === 'comment' ? 'File it?' : 'Send it?'}`)
             let sent
             if (proposal.kind === 'approve') {
               sent = await send(() => deps.postApprove({ mode: proposal.mode, comment: proposal.note ?? '', via: 'voice', client_id: proposal.client_id }), ({ approve: 'Approved. The lane moves to build.', approve_with_changes: 'Approved with changes.', not_yet: 'Sent. The lane keeps scoping.' })[proposal.mode])

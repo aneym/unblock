@@ -107,6 +107,8 @@ export interface ScopeVoiceDeps {
 }
 
 export interface ScopeVoiceSession {
+  /** Report finished assistant speech. Once transcripts exist, filing requires its read-back to be heard. */
+  assistantSaid(text: string): void
   /** Run one tool call. Never throws: failures come back as { ok: false, speech }. */
   handle(name: string, args: Record<string, unknown>): Promise<ScopeToolResult>
 }
@@ -133,7 +135,8 @@ export interface ScopeVoiceSession {
  *   "Sent. Waiting for a new option." Otherwise ok:false "Nothing to say no to here."
  * - park {}: "not now" on the focused open question → postPark at once; speech "Parked for later."
  * - confirm {}: sends the pending proposal (postResolve with decision = alex_words = his text, how 'own'); speech
- *   "Resolved." Comment proposals postThread ("Posted."); reply proposals postReply ("Sent."). No pending → ok:false "Nothing to confirm."
+ *   "Resolved." Comment proposals postThread ("Posted."); reply proposals postReply ("Sent."). When assistant transcripts
+ *   are reported, an unheard filing read-back is repeated with ok:false and stays pending. No pending → ok:false "Nothing to confirm."
  * - cancel {}: drops the pending proposal; speech "Okay, dropped." for comments/replies, "Okay, left open." for resolves
  * - resolve { decision?: STRING }: with a non-empty decision → a proposal on the focused open thread (question or
  *   comment), confirmed like answer's (a comment confirms with how 'resolve'). Without one:

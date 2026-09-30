@@ -45,6 +45,7 @@ export interface VoiceProfile {
 interface VoiceCallbacks {
   onState(state: VoiceState): void
   onTranscript(line: TranscriptLine): void
+  onAssistantSaid?(text: string): void
   onUi(ui: VoiceUi): void
   onChanged(): void
   onSession(session: { provider: VoiceProvider; spend: VoiceSpend; maxMinutes: number }): void
@@ -55,7 +56,7 @@ function messageOf(error: unknown): string {
 }
 
 /** The AudioContext must be created and resumed by the tap handler before import(). */
-export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onUi, onChanged, onSession }: VoiceCallbacks,
+export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onAssistantSaid, onUi, onChanged, onSession }: VoiceCallbacks,
   options: { provider?: VoiceProvider; profile?: VoiceProfile } = {}): { stop(): void; setSpeed(v: number): void } {
   const clampSpeed = (v: number) => Math.round(Math.max(0.7, Math.min(1.5, Number.isFinite(v) ? v : 1.5)) * 10) / 10
   let speed = 1.5
@@ -162,6 +163,7 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
     },
     onTurnDone: () => {
       if (stopped) return
+      if (transcripts.agent) onAssistantSaid?.(transcripts.agent)
       transcripts.you = ''
       transcripts.agent = ''
       const turn = ++completedTurns
