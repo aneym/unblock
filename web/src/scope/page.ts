@@ -1,5 +1,8 @@
 import './scope.css'
-import { orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval, type CommentImage } from '../../../src/scope-doc.js'
+import '../vendor/page-chrome/v1.css'
+import './page-chrome.css'
+import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
+import { appOf, orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval, type CommentImage } from '../../../src/scope-doc.js'
 import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
@@ -13,12 +16,30 @@ const slug = boot.slug || location.pathname.match(/^\/s\/([^/]+)/)?.[1]
 const apiBase = (boot.api || '/api/scope').replace(/\/$/, '')
 const embed = boot.embed === true || new URLSearchParams(location.search).get('embed') === '1'
 document.body.classList.toggle('embed', embed)
+document.body.classList.toggle('in-frame', window.parent !== window)
 const doc = $('#doc'), cards = $('#cards'), detached = $('#detached'), sheet = $('#sheet')
 const phone = () => matchMedia('(max-width:899px)').matches
 const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} }, remove(key: string) { try { localStorage.removeItem(key) } catch {} } }
 const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
 let showResolved = storage.get('scope:showResolved') === 'true'
+const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 0, showResolved, onPrev: () => step(-1), onNext: () => step(1), onShowResolved: checked => { showResolved = checked; storage.set('scope:showResolved', String(checked)); renderCards() } })
+let chrome: ReturnType<typeof mountPage> | null = null, chromeSignature = ''
+const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rails Admin' }
+function chromeSpec() {
+  const actions: PageAction[] = []
+  if (boot.comment !== 'host') actions.push({ id: 'comment', label: 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: 'Comment on the whole doc.' } } })
+  if (!isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
+  if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: 'Talk it through by voice', kind: 'screen-only', placement: 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
+  return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const }
+}
+function syncChrome() {
+  if (!scope) return
+  const spec = chromeSpec(), signature = JSON.stringify(spec)
+  if (!chrome) chrome = mountPage($('#page'), spec)
+  else if (signature !== chromeSignature) chrome.update(spec)
+  chromeSignature = signature
+}
 let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
 let selectionRange: Range | null = null, selectionScrolling = false
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
@@ -245,6 +266,7 @@ function publishApproval() {
   if (signature === approvalSignature) return
   approvalSignature = signature
   window.dispatchEvent(new CustomEvent('scope:approval', { detail: approval }))
+  syncChrome()
 }
 function upsert(thread: Thread) {
   if (!scope) return
@@ -414,7 +436,7 @@ function render() {
   for (const s of scope.doc.sections) {
     let node = [...doc.children].find(n => n.id === s.id) as HTMLElement | undefined
     if (!node || !unchanged(s.id)) {
-      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}${s.id === 'title' ? `<div class="title-row"><h1>${esc(s.heading)}</h1><span class="title-actions" data-cm-skip>${boot.comment !== 'host' ? '<button type="button" class="btn" data-action="general-comment">Comment</button>' : ''}${boot.approve !== 'host' && !isApproved() && (!queuedApproval || queuedApproval.failed) ? '<button type="button" class="btn primary" data-action="approve-scope" data-cm-skip>Approve scope</button>' : ''}</span></div>${approvalBanner()}` : `<h2>${esc(s.heading)}</h2>`}<div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
+      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? `<h1 class="title-anchor">${esc(s.heading)}</h1>${approvalBanner()}` : `<h2>${esc(s.heading)}</h2>`}<div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
       const next = replacement.firstElementChild as HTMLElement
       if (node) node.replaceWith(next)
       node = next; redrawn.push(node)
@@ -442,7 +464,7 @@ function render() {
   sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
-  document.title = scope.title; highlight(); syncFigureFocus(); renderCards(); renderFeed()
+  document.title = scope.title; syncChrome(); highlight(); syncFigureFocus(); renderCards(); renderFeed()
   const restoreReading = () => {
     const section = readingSection ? document.getElementById(readingSection) : null
     const anchor = composerAnchor && rangeFromAnchor(composerAnchor)?.range || (reading?.isConnected ? reading : section?.querySelectorAll('h1,h2,p,li,figure,pre,table')[readingIndex] || section?.querySelector('h1,h2'))
@@ -484,9 +506,7 @@ function renderCards() {
   }
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', showResolved)
-  const toggle = $<HTMLInputElement>('#showResolved'); toggle.checked = showResolved; toggle.toggleAttribute('checked', showResolved)
   const resolvedCount = ordered().filter(t => t.status !== 'open').length, resolvedLabel = `Resolved (${resolvedCount})`
-  $('#resolvedLabel').textContent = resolvedLabel
   const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
   if (!composing && phone() && document.body.classList.contains('sheet-open')) renderSheet()
   updateCount(); layout(); disablePending()
@@ -560,7 +580,7 @@ function layout() {
 }
 function updateCount() {
   const list = open(), i = list.findIndex(t => t.id === focused)
-  $('#openCount').innerHTML = `${list.length} open${i >= 0 ? `<small>${i + 1} of ${list.length}</small>` : ''}`
+  commentsBar.update({ open: list.length, index: i + 1, total: list.length, showResolved })
   $('#openLabel').textContent = `${list.length} open`
 }
 // Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
@@ -841,11 +861,10 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
 let selectionTimer = 0
 for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(selectionTimer); selectionTimer = window.setTimeout(readSelection, 80) })
-$('#prev').onclick = $('#chipPrev').onclick = () => step(-1)
-$('#next').onclick = $('#chipNext').onclick = () => step(1)
+$('#chipPrev').onclick = () => step(-1)
+$('#chipNext').onclick = () => step(1)
 $('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
 $('#scrim').onclick = closeSheet
-$('#showResolved').onchange = e => { showResolved = (e.target as HTMLInputElement).checked; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 $('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('button,a,summary,select,textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && focused && !phone()) { e.preventDefault(); focusBox(focused) } })
@@ -891,8 +910,7 @@ function renderFeed() {
 }
 function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }); if (feedRows.length > 50) feedRows.shift(); renderFeed() }
 $('#talk').hidden = boot.voice === false
-if (embed && boot.voice !== false) document.body.append($('#talk'))
-$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#live').textContent = error instanceof Error ? error.message : 'Voice unavailable' } }
+$('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
 function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   scope = payload.scope
@@ -901,20 +919,19 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]))
   for (const [key, item] of sending) if (settled.has(item.clientId)) sending.delete(key)
   for (const note of payload.notes || []) notes.set(note.id, note); render() }
+let lastOk = 0, stale = false
+function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }
+function failedRead() { if (lastOk && !stale) { stale = true; chrome?.update({ updatedAt: lastOk, staleAfterMs: 60_000, onRefresh: () => void poll() }) } }
+async function poll() { try { accept(await api(endpoint)); goodRead() } catch { failedRead() } }
 async function start() {
-  if (!slug) { const { scopes } = await api<{ scopes: any[] }>(apiBase); doc.innerHTML = `<h1>Scoping</h1>${scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join('')}`; return }
-  const poll = async () => { try { accept(await api(endpoint)); $('#live').textContent = 'Live' } catch { $('#live').textContent = 'Reconnecting' } }
+  if (!slug) { const { scopes } = await api<{ scopes: any[] }>(apiBase); doc.innerHTML = scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join(''); chrome = mountPage($('#page'), { title: 'Scoping', initialize: false }); return }
   if (boot.events === false) { await poll(); setInterval(() => void poll(), 2000); return }
-  accept(await api(endpoint)); $('#live').textContent = 'Live'
+  accept(await api(endpoint)); goodRead()
   const events = new EventSource(`${endpoint}/events`)
-  events.addEventListener('state', e => accept(JSON.parse((e as MessageEvent).data)))
-  events.addEventListener('scope', e => { const data = JSON.parse((e as MessageEvent).data); accept(data.scope ? data : { scope: data }) })
-  events.addEventListener('note', e => { const note = JSON.parse((e as MessageEvent).data); notes.set(note.id, note); render() })
-  let reconnectTimer = 0
-  events.onopen = () => { clearTimeout(reconnectTimer); reconnectTimer = 0; $('#live').textContent = 'Live' }
-  events.onerror = () => {
-    if (events.readyState === EventSource.CLOSED) { clearTimeout(reconnectTimer); reconnectTimer = 0; $('#live').textContent = 'Reconnecting' }
-    else if (!reconnectTimer) reconnectTimer = window.setTimeout(() => { reconnectTimer = 0; if (events.readyState !== EventSource.OPEN) $('#live').textContent = 'Reconnecting' }, 5000)
-  }
+  events.addEventListener('state', e => { accept(JSON.parse((e as MessageEvent).data)); goodRead() })
+  events.addEventListener('scope', e => { const data = JSON.parse((e as MessageEvent).data); accept(data.scope ? data : { scope: data }); goodRead() })
+  events.addEventListener('note', e => { const note = JSON.parse((e as MessageEvent).data); notes.set(note.id, note); render(); goodRead() })
+  events.onopen = goodRead
+  events.onerror = failedRead
 }
-void start().catch(error => { doc.textContent = `Could not load: ${error.message}`; $('#live').textContent = 'Reconnecting' })
+void start().catch(error => { doc.textContent = `Could not load: ${error.message}`; failedRead() })

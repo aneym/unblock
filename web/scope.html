@@ -7,8 +7,9 @@
 <link rel="icon" href="./favicon.svg">
 </head>
 <body>
-<header class="bar"><a class="app" href="/s/">Scoping</a><span class="spacer"></span><span class="live" id="live">Connecting</span><button class="talk" id="talk" aria-label="Talk it through"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Talk</span></button></header>
-<div class="layout"><main class="doc" id="doc"><p>Loading…</p></main><aside class="side"><div class="side-head"><span class="count" id="openCount"></span><button class="icon-btn" id="prev" aria-label="Previous (k)">↑</button><button class="icon-btn" id="next" aria-label="Next (j)">↓</button><span class="spacer"></span><label class="toggle"><input type="checkbox" id="showResolved"> <span id="resolvedLabel">Resolved (0)</span></label></div><div class="cards" id="cards"></div><div id="detached"></div></aside></div>
+
+<div id="page"><div class="layout"><main class="doc" id="doc"><p>Loading…</p></main><aside class="side"><div class="side-head"></div><div class="cards" id="cards"></div><div id="detached"></div></aside></div></div>
+<button class="talk" id="talk" aria-label="Talk it through"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Talk</span></button>
 <div class="open-chip" id="openBar"><button class="label" id="openLabel"></button><button id="resolvedChip" aria-pressed="false" hidden>Resolved (0)</button><button id="chipPrev" aria-label="Previous">↑</button><button id="chipNext" aria-label="Next">↓</button></div>
 <div class="scrim" id="scrim"></div><div class="sheet" id="sheet" role="dialog" aria-label="Question or comment"></div>
 <div id="voiceRoot" data-cm-skip></div>

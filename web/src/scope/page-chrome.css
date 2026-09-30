@@ -1,0 +1,27 @@
+:root {
+  --space-bar: 52px; --space-stroke: 1px; --stroke: var(--line);
+  --bar-gap: 8px; --bar-padding-x: 16px; --space-step-16: 16px;
+  --type-large-title-size: 30px; --type-large-title-line: 36px;
+  --type-large-title-weight: 700; --type-large-title-tracking: -.02em;
+  --signal-text: var(--warning);
+}
+.frame-btn { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); display: inline-grid; place-items: center; }
+.frame-btn:hover { background: var(--fill-1); }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn--primary:hover { background: var(--accent-hover); }
+.pc-action { min-height: 32px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--ink); }
+.pc-action.btn--primary { background: var(--accent); color: white; }
+.pc-menu { z-index: 30; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-2); padding: 6px; min-width: 220px; }
+.pc-menu-item { display: flex; align-items: center; width: 100%; text-align: left; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); padding: 6px 10px; }
+.pc-menu-item:hover { background: var(--fill-1); }
+.pc-menu-item kbd { margin-left: auto; color: var(--muted); }
+.pc-bar { background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid var(--line); }
+.pc-back { width: auto; padding-inline: 8px; white-space: nowrap; }
+.pc-comments { background: var(--page); height: auto; min-height: 52px; }
+#page > .pc-head { max-width: 1180px; margin: 0 auto; padding: 32px 24px 0; display: grid; grid-template-columns: minmax(0, 720px) var(--side); justify-content: center; column-gap: 56px; }
+.pc-head-row, .pc-description, .pc-status { grid-column: 1 / -1; }
+body.in-frame .pc-bar { display: none; }
+body.in-frame .pc-comments { top: 0; }
+@media (max-width: 899px) {
+  #page > .pc-head { padding: 24px 16px 0; grid-template-columns: minmax(0, 1fr); column-gap: 0; }
+}
