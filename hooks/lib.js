@@ -73,7 +73,7 @@ export async function request(path, body) {
   return data
 }
 
-/** The allow/deny value a watcher may act on: a permission ask's passkey-gated verdict, or a pre-v2 decision ask's field. */
+/** The allow/deny value a watcher may act on: a permission ask's verdict, or a pre-v2 decision ask's field. */
 export function permissionVerdict(ask) {
   const value = ask.purpose === 'permission' ? ask.answers?.verdict : ask.purpose === 'decision' ? ask.answers?.decision : undefined
   return ['allow_once', 'deny'].includes(value) ? value : undefined
@@ -81,7 +81,7 @@ export function permissionVerdict(ask) {
 
 // A daemon that predates v2 names the unknown purpose or v2-only key in its 400.
 export const NEWER_SHAPE = /(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i
-// Only an unknown purpose: once the daemon knows 'permission', its passkey gate must not be sidestepped.
+// Only adopt the known purpose; fall back only if the daemon does not recognize it.
 export const UNKNOWN_PURPOSE = /^purpose: must be one of/i
 
 /** Fall back only when the daemon does not recognize a newer ask shape. */
@@ -95,7 +95,7 @@ export async function fileFirst(candidates, source, fallback = NEWER_SHAPE) {
     } catch (error) {
       if (error.status === 409 && error.data?.ticket) {
         const old = await request(`/api/asks/${encodeURIComponent(error.data.ticket)}`)
-        // A different purpose could be an older, passkey-free decision ask; never adopt it.
+        // A different purpose could be an older decision ask; never adopt it.
         if (old.status !== 'open' || old.origin?.pane_id !== source.pane_id || old.purpose !== ask.purpose) throw new Error('duplicate belongs to another pane, is closed or has another purpose')
         return { ticket: old.ticket, created: false }
       }

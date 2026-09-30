@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, BASE, FinishedError, NetworkError, VIEWER } from './lib/api'
 import { clearLocal } from './lib/drafts'
-import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, type Ask, type PasskeyState, type QueueData } from './deck'
+import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, type Ask, type QueueData } from './deck'
 import { Icon } from './icons'
 import { ChipText, PlainText } from './ChipText'
 import { SoloCard, type SendRecovery } from './SoloCard'
-import { dismissBanner, listPasskeys, type BannerEvent } from './lib/passkey'
 import { TalkButton, VoiceBar } from './VoiceBar'
 import type { TranscriptLine, VoiceState } from './lib/voice-live'
 import { prepareAudio } from './lib/voice-audio'
@@ -19,30 +18,6 @@ function pinned() {
 function whyLead(why: string) {
   const sentence = why.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] || why
   return sentence.length > 180 ? `${sentence.slice(0, 179).trimEnd()}…` : sentence
-}
-/**
- * Sits above everything on the canonical page until dismissed. Every
- * enrollment — including Alex's own, during the review — raises one of
- * these, because enrollment is open to whoever reaches the human path
- * first while zero credentials exist (see SPEC-v2, "Passkey gate").
- */
-function PasskeyBanner({ events, dismiss }: { events: BannerEvent[]; dismiss: (eventId: string) => void }) {
-  if (!events.length) return null
-  return (
-    <div className="passkey-banner">
-      {events.map((event) => (
-        <div className="passkey-banner-row" key={event.event_id}>
-          <Icon name="shield" size={16} />
-          <span>
-            A passkey was added{' '}
-            {new Date(event.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
-            If that wasn't you, stop and check before approving anything.
-          </span>
-          <button className="text-button" type="button" onClick={() => dismiss(event.event_id)}>Dismiss</button>
-        </div>
-      ))}
-    </div>
-  )
 }
 function QueueRow({ ask, active, choose }: { ask: Ask; active: boolean; choose: (ticket: string) => void }) {
   return (
@@ -162,27 +137,6 @@ export default function App() {
     else names.add(name)
     updateHiddenProducts(names)
   }
-  // A share link (BASE = `/u/<token>`) has no human path to the passkey
-  // routes; only the canonical, trusted-proxy page can enroll or approve.
-  const passkeyAvailable = !BASE
-  const [passkeyCount, setPasskeyCount] = useState(0)
-  const [passkeyBanner, setPasskeyBanner] = useState<BannerEvent[]>([])
-  const refreshPasskeys = useCallback(async () => {
-    if (!passkeyAvailable) return
-    try {
-      const result = await listPasskeys()
-      setPasskeyCount(result.credentials.length)
-      setPasskeyBanner(result.banner)
-    } catch { /* best effort; the page still works without this */ }
-  }, [passkeyAvailable])
-  useEffect(() => { void refreshPasskeys() }, [refreshPasskeys])
-  const dismissPasskeyBanner = useCallback((eventId: string) => {
-    void dismissBanner(eventId).catch(() => undefined).then(refreshPasskeys)
-  }, [refreshPasskeys])
-  const passkeys: PasskeyState = useMemo(
-    () => ({ available: passkeyAvailable, count: passkeyCount, refresh: refreshPasskeys }),
-    [passkeyAvailable, passkeyCount, refreshPasskeys],
-  )
   const load = useCallback(async () => {
     try { setData(await api<QueueData>('/api/queue')); setError('') }
     catch (cause) {
@@ -440,7 +394,6 @@ export default function App() {
   }, [asks, selected, selectedTicket, currentIndex, choose, goToList])
   return (
     <>
-      <PasskeyBanner events={passkeyBanner} dismiss={dismissPasskeyBanner} />
       <header className="topbar">
         <div className="top-inner">
           <span className="wordmark">unblock</span>
@@ -493,7 +446,7 @@ export default function App() {
               </span>
             </nav>
             <SoloCard
-              key={selected.ticket} ask={selected} passkeys={passkeys}
+              key={selected.ticket} ask={selected}
               onFinished={() => finish(selected.ticket)} onReload={load}
               queueSend={!BASE ? queueSend : undefined} recovery={recoveries[selected.ticket]}
               voiceDetails={voiceDetails?.ticket === selected.ticket && voiceDetails.nonce > consumedDetails.current ? voiceDetails : undefined}

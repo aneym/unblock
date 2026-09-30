@@ -10,15 +10,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { applyConfig, daemonRoot } from './config.js'
 import { createLivedocApprovals } from './scope-approvals.js'
-import {
-  approveOptions, dismissBanner, enrollAuthOptions, listPasskeys, register, registerOptions,
-  removeCredential, verifyApprovalAssertion,
-} from './passkey.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
 import { defaultReadKey, mintVoiceToken, mintXaiToken, mintOpenAiToken, buildLiveSession, connectLiveCall } from './voice-token.js'
 import { createSpendLedger, rateFor } from './voice-spend.js'
-import { CLOSED_TO_ANSWERS, finished, PASSKEY_VERDICTS, Store } from './store.js'
+import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -183,13 +179,7 @@ function isAuthorized(req, secret) {
   return typeof alt === 'string' && sameSecret(alt.trim(), secret)
 }
 
-/**
- * Every passkey management route (enroll, list, dismiss the banner, mint an
- * approval challenge, remove a credential) is human-path only, the same as
- * the page's own /api/answer: the trusted-proxy tailnet identity, never the
- * bearer secret an agent uses. Share links are refused earlier, in
- * handleTokenRoute, so this only ever sees the plain /api surface.
- */
+/** Trusted-proxy human identity, never the bearer secret an agent uses. */
 function requireHumanPath(req) {
   if (!proxyIdentity(req)) { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
 }
@@ -519,7 +509,7 @@ function scrubFieldBounce(raw) {
   return out
 }
 
-async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia, assertion) {
+async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia) {
   return withTicket(ticket, async () => {
     const ask = store.get(ticket)
     if (!ask) return null
@@ -528,11 +518,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (revision !== ask.revision) { const error = new Error('The agent changed this ask. Check it again.'); error.code = 'STALE_REVISION'; error.status = 409; throw error }
       if (answeredVia === 'local' || answeredVia === 'share-link:local') { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
     }
-    // The passkey gate: verified here, before anything is recorded (secret,
-    // answer, or challenge consumption). store.answer consumes the matching
-    // challenge in the same transaction as the write it gates.
-    let passkeyAssertion
-    if (PASSKEY_VERDICTS[ask.purpose] && PASSKEY_VERDICTS[ask.purpose] === values?.verdict) passkeyAssertion = verifyApprovalAssertion(store, ask, revision, assertion)
     // Before any secret is stored: a page retrying a send whose reply it lost
     // must not write the secret again once the agent already has the answer.
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
@@ -570,7 +555,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         reply: optionalScrub(reply, 1000),
         fieldContext: scrubFieldContext(fieldContext),
         fieldBounce: scrubFieldBounce(fieldBounce),
-        revision, answeredVia, assertion: passkeyAssertion,
+        revision, answeredVia,
       })
     } catch (error) {
       await compensate(records.map(([, record]) => record)).catch(() => {})
@@ -625,13 +610,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (viaToken) return sendAsset(res, viaToken)
     }
 
-    // A share link can answer ungated verdicts, but cannot fetch a passkey
-    // ceremony or carry an assertion. Enrollment and Touch ID approval stay
-    // on the tailnet page, where Alex's identity is checked.
-    if (tail.startsWith('/api/passkeys')) {
-      return sendJson(res, 403, { error: 'passkey routes are not available on a share link; use the tailnet page', code: 'PASSKEY_ON_SHARE_LINK' })
-    }
-
     const link = store.resolveLink(token)
     if (!link) return expiredPage(res)
     const scopedAsk = link.ask_id ? store.get(link.ask_id) : null
@@ -667,7 +645,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (tail === '/api/draft') {
         return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body, `share-link:${link.minted_by}`)) })
       }
-      if (body.assertion != null) return sendJson(res, 403, { error: 'approve on the unblock page; it needs Touch ID', code: 'PASSKEY_ON_SHARE_LINK' })
       const result = body.bounce
         ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, `share-link:${link.minted_by}`, body.revision, body.field_bounce))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, `share-link:${link.minted_by}`)
@@ -788,43 +765,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       return sendJson(res, 200, { asks, hidden: store.countHidden(profile) })
     }
 
-    if (req.method === 'POST' && pathname === '/api/passkeys/register/options') {
-      requireHumanPath(req)
-      return sendJson(res, 200, registerOptions(store, await readJson(req)))
-    }
-    if (req.method === 'POST' && pathname === '/api/passkeys/enroll-auth/options') {
-      requireHumanPath(req)
-      return sendJson(res, 200, enrollAuthOptions(store))
-    }
-    if (req.method === 'POST' && pathname === '/api/passkeys/register') {
-      requireHumanPath(req)
-      const body = await readJson(req)
-      const result = register(store, body, { userAgent: req.headers['user-agent'], logDir: stateDir() })
-      emitQueue()
-      return sendJson(res, 200, result)
-    }
-    if (req.method === 'GET' && pathname === '/api/passkeys') {
-      requireHumanPath(req)
-      return sendJson(res, 200, listPasskeys(store))
-    }
-    if (req.method === 'POST' && pathname === '/api/passkeys/banner/dismiss') {
-      requireHumanPath(req)
-      return sendJson(res, 200, dismissBanner(store, await readJson(req)))
-    }
-    if (req.method === 'POST' && pathname === '/api/passkeys/approve/options') {
-      requireHumanPath(req)
-      const body = await readJson(req)
-      const ask = body.ticket ? store.get(body.ticket) : null
-      if (!ask) return notFound(res)
-      return sendJson(res, 200, approveOptions(store, ask))
-    }
-    const passkeyId = pathname.match(/^\/api\/passkeys\/([^/]+)$/)
-    if (passkeyId && req.method === 'DELETE') {
-      requireHumanPath(req)
-      const result = removeCredential(store, decodeURIComponent(passkeyId[1]), await readJson(req))
-      return sendJson(res, 200, result)
-    }
-
     let ticket = routeTicket(pathname, '/pay-claim')
     if (ticket && req.method === 'POST') return sendJson(res, 200, await withTicket(ticket, () => store.payClaim(ticket)))
 
@@ -912,7 +852,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       const result = body.bounce
         ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.assertion)
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       if (!result) return notFound(res)
       emitQueue()
       return sendJson(res, 200, result)
@@ -1164,7 +1104,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       const result = body.bounce
         ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
-        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.assertion)
+        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
       emitQueue()
       return sendJson(res, 200, result)
     }
@@ -1201,7 +1141,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
-      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED', 'PASSKEY_REQUIRED', 'PASSKEY_INVALID', 'PASSKEY_EXISTS', 'PASSKEY_CAP'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : error.code === 'PASSKEY_CAP' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
+      if (['HUMAN_ONLY', 'STALE_REVISION', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }

@@ -58,8 +58,6 @@ export function finished(ask) {
  * macOS user with `tailscaled`), so these three go through Touch ID as well.
  * Spend does not: Link's own push to Alex's phone is spend's human check.
  */
-export const PASSKEY_VERDICTS = { consent: 'approve', message: 'approve', permission: 'allow_once' }
-export const PASSKEY_CREDENTIAL_CAP = 5
 
 // Prune long-closed rows so the queue file cannot grow without bound.
 // Everything closed keeps a 30-day window for `unblock_check` stragglers
@@ -183,7 +181,6 @@ export class Store {
         created_at  INTEGER NOT NULL,
         expires_at  INTEGER NOT NULL,
         used_at     INTEGER,
-        -- 1 when an existing passkey signed off on this 'register' challenge.
         authorized  INTEGER NOT NULL DEFAULT 0
       );
 
@@ -590,7 +587,7 @@ export class Store {
     }
   }
 
-  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, revision, answeredVia, assertion, puts = [] } = {}) {
+  answer(idOrTicket, values, { refs = {}, reply, fieldContext, fieldBounce, revision, answeredVia, puts = [] } = {}) {
     // One answer spans references, bounces, context, drafts and status, and
     // SQLite serializes the status/revision check with the write. `puts` are
     // the secrets stored for this attempt: any the answer leaves unreferenced,
@@ -598,7 +595,7 @@ export class Store {
     // in the same transaction.
     return this.#transact(() => {
       const before = this.get(idOrTicket)
-      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion })
+      const result = this.#answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia })
       this.#queueDropped([...secretRecords(before), ...puts], secretRecords(result.ask))
       return result
     })
@@ -624,7 +621,7 @@ export class Store {
     this.queueSecretDeletes([...dropped.values()])
   }
 
-  #answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia, assertion }) {
+  #answer(idOrTicket, values, { refs, reply, fieldContext, fieldBounce, revision, answeredVia }) {
     const ask = this.get(idOrTicket)
     if (!ask) throw new Error(`no such ask: ${idOrTicket}`)
     if (APPROVAL_PURPOSES.includes(ask.purpose)) {
@@ -640,24 +637,6 @@ export class Store {
         (fieldContext && Object.values(fieldContext).some((note) => typeof note === 'string' && note.trim()))
       )) error('NOTE_MEANS_CHANGE', 'change the plan before approval', 400)
       if (values.edited_text != null && typeof values.edited_text !== 'string') error('INVALID_VERDICT', 'edited text must be text', 400)
-      // The passkey gate: consent approve, message approve and permission
-      // allow_once need a WebAuthn assertion verified by the caller (crypto
-      // work happens outside this transaction; see src/passkey.js), whose
-      // challenge is consumed HERE, atomically with the write it gates, so a
-      // replayed or reused challenge can never ride in on a second answer.
-      // This runs BEFORE the open-ask check below on purpose: a reused
-      // challenge is a distinct, more specific failure than "already
-      // answered" — replaying the exact request that just succeeded must
-      // read PASSKEY_INVALID, not the generic ASK_NOT_OPEN a retry would
-      // otherwise get once the first attempt already closed the ask.
-      if (PASSKEY_VERDICTS[ask.purpose] && PASSKEY_VERDICTS[ask.purpose] === values.verdict) {
-        if (!this.countCredentials()) error('PASSKEY_REQUIRED', 'enroll a passkey to approve', 403)
-        if (!assertion) error('PASSKEY_REQUIRED', 'a passkey assertion is required to approve', 403)
-        if (!this.#consumeChallenge(assertion.challengeId, { kind: 'approve', askId: ask.id, revision }))
-          error('PASSKEY_INVALID', 'the passkey assertion is invalid, expired, or already used', 403)
-        this.#db.prepare('UPDATE webauthn_credentials SET sign_count = ? WHERE id = ?').run(assertion.newSignCount, assertion.credentialId)
-        answeredVia = `passkey:${assertion.credentialId.slice(-8)}`
-      }
       if (ask.status !== 'open') error('ASK_NOT_OPEN', `ask ${ask.ticket} is ${ask.status}`, 409)
     }
     if (CLOSED_TO_ANSWERS.includes(ask.status)) throw finished(ask)
@@ -1046,47 +1025,6 @@ export class Store {
     this.#db.prepare('UPDATE links SET used_at = ? WHERE token = ?').run(nowMs(), token)
   }
 
-  // ------------------------------------------------------------ webauthn
-
-  /**
-   * Mint a single-use challenge. `challenge` is 32 random bytes (a Buffer);
-   * the caller base64url-encodes it for the client. `askId`/`revision` bind
-   * an `approve` challenge to the exact answer it may gate.
-   */
-  saveChallenge({ kind, challenge, askId = null, revision = null, ttlMs = 120_000, authorized = false }) {
-    const id = randomUUID()
-    const at = nowMs()
-    this.#db
-      .prepare(
-        `INSERT INTO webauthn_challenges (id, challenge, kind, ask_id, revision, created_at, expires_at, authorized)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, challenge, kind, askId, revision, at, at + ttlMs, authorized ? 1 : 0)
-    return id
-  }
-
-  getChallenge(id) {
-    if (!id) return null
-    const row = this.#db.prepare('SELECT * FROM webauthn_challenges WHERE id = ?').get(id)
-    if (!row) return null
-    return { ...row, challenge: Buffer.from(row.challenge) }
-  }
-
-  /**
-   * Unused, unexpired, the right kind, and — for `approve` — bound to the
-   * exact ask and revision it was minted for. The UPDATE's own WHERE clause
-   * is the compare-and-swap: two callers racing to consume the same
-   * challenge can never both succeed, even outside an explicit transaction.
-   */
-  #consumeChallenge(id, { kind, askId = null, revision = null }) {
-    if (!id) return false
-    const row = this.#db.prepare('SELECT * FROM webauthn_challenges WHERE id = ?').get(id)
-    if (!row || row.kind !== kind || row.used_at != null || row.expires_at < nowMs()) return false
-    if (kind === 'approve' && (row.ask_id !== askId || row.revision !== revision)) return false
-    const result = this.#db.prepare('UPDATE webauthn_challenges SET used_at = ? WHERE id = ? AND used_at IS NULL').run(nowMs(), id)
-    return result.changes === 1
-  }
-
   /** Run a synchronous store operation as one write transaction. */
   transaction(fn) {
     this.#db.exec('BEGIN IMMEDIATE')
@@ -1100,84 +1038,6 @@ export class Store {
     }
   }
 
-  /** Consume a challenge inside a caller-owned transaction, or atomically on its own. */
-  consumeChallenge(id, opts, { inTransaction = false } = {}) {
-    if (inTransaction) return this.#consumeChallenge(id, opts)
-    return this.transaction(() => this.#consumeChallenge(id, opts))
-  }
-
-  countCredentials() {
-    return this.#db.prepare('SELECT COUNT(*) AS n FROM webauthn_credentials').get().n
-  }
-
-  listCredentials() {
-    return this.#db
-      .prepare('SELECT id, public_key_jwk, alg, sign_count, label, created_at, created_via, user_agent FROM webauthn_credentials ORDER BY created_at ASC')
-      .all()
-      .map((row) => this.#hydrateCredential(row))
-  }
-
-  getCredential(id) {
-    const row = this.#db.prepare('SELECT * FROM webauthn_credentials WHERE id = ?').get(id)
-    return row ? this.#hydrateCredential(row) : null
-  }
-
-  #hydrateCredential(row) {
-    return {
-      id: row.id,
-      publicKeyJwk: JSON.parse(row.public_key_jwk),
-      alg: row.alg,
-      signCount: row.sign_count,
-      label: row.label ?? null,
-      createdAt: row.created_at,
-      createdVia: row.created_via ?? null,
-      userAgent: row.user_agent ?? null,
-    }
-  }
-
-  /** A sixth credential is refused (409 `PASSKEY_CAP`) by the caller before this ever runs; this is the floor. */
-  addCredential({ id, publicKeyJwk, alg, signCount, label, createdVia, userAgent }) {
-    if (this.countCredentials() >= PASSKEY_CREDENTIAL_CAP) {
-      const err = new Error(`at most ${PASSKEY_CREDENTIAL_CAP} passkeys`)
-      err.code = 'PASSKEY_CAP'
-      err.status = 409
-      throw err
-    }
-    this.#db
-      .prepare(
-        `INSERT INTO webauthn_credentials (id, public_key_jwk, alg, sign_count, label, created_at, created_via, user_agent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(id, JSON.stringify(publicKeyJwk), alg, signCount, label ?? null, nowMs(), createdVia ?? null, userAgent ?? null)
-  }
-
-  updateCredentialSignCount(id, signCount) {
-    this.#db.prepare('UPDATE webauthn_credentials SET sign_count = ? WHERE id = ?').run(signCount, id)
-  }
-
-  removeCredential(id) {
-    this.#db.prepare('DELETE FROM webauthn_credentials WHERE id = ?').run(id)
-  }
-
-  addPasskeyEvent({ kind, credentialId, label, via }) {
-    const id = randomUUID()
-    const at = nowMs()
-    this.#db
-      .prepare('INSERT INTO passkey_events (id, kind, credential_id, label, at, via) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, kind, credentialId, label ?? null, at, via ?? null)
-    return { id, kind, credential_id: credentialId, label: label ?? null, at, via: via ?? null }
-  }
-
-  /** Enrolment events nobody has dismissed yet — the "not you? remove it" banner. */
-  listBannerEvents() {
-    return this.#db
-      .prepare(`SELECT id AS event_id, label, at FROM passkey_events WHERE kind = 'enrolled' AND dismissed_at IS NULL ORDER BY at ASC`)
-      .all()
-  }
-
-  dismissBannerEvent(id) {
-    this.#db.prepare('UPDATE passkey_events SET dismissed_at = ? WHERE id = ?').run(nowMs(), id)
-  }
 }
 
 export { agentKey }
