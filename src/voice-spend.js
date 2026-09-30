@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export const USD_PER_MINUTE = {
+  'gpt-live-1': 0.08,
   'gpt-realtime-2.1': 0.10,
   'gpt-realtime-2.1-mini': 0.04,
   'gemini-3.8-live': 0.02,

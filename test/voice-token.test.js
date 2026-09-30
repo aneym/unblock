@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { startDaemon, loadOrCreateSecret } from '../src/daemon.js'
-import { mintVoiceToken, mintXaiToken, mintOpenAiToken } from '../src/voice-token.js'
+import { mintVoiceToken, mintXaiToken, mintOpenAiToken, buildLiveSession, connectLiveCall } from '../src/voice-token.js'
 import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from '../src/voice.js'
 import { SCOPE_VOICE_PROMPT, SCOPE_VOICE_TOOLS } from '../src/scope-voice.js'
 
@@ -200,7 +200,7 @@ test('daemon defaults to OpenAI and records sanitized settled session metrics on
     daemon = await startDaemon({ port: 0 })
     const providers = await request('/api/voice/providers')
     assert.equal(providers.body.default, 'openai')
-    assert.deepEqual(providers.body.providers.map((provider) => provider.id), ['openai', 'xai', 'gemini'])
+    assert.deepEqual(providers.body.providers.map((provider) => provider.id), ['openai', 'live', 'xai', 'gemini'])
     const session = await request('/api/voice/session', { provider: 'gemini' })
     assert.equal(session.status, 200)
     assert.equal(session.body.provider, 'openai')
@@ -223,4 +223,30 @@ test('daemon defaults to OpenAI and records sanitized settled session metrics on
     }
     rmSync(state, { recursive: true, force: true })
   }
+})
+
+test('GPT Live builds a WebRTC session with delegated lowered tools and no speed', async () => {
+  const session = buildLiveSession({ prompt: 'Speak with the person.', tools: [{ name: 'answer', description: 'Answer', parameters: { type: 'OBJECT', properties: { reply: { type: 'STRING' } } } }] })
+  assert.deepEqual(session, { model: 'gpt-live-1', instructions: 'Speak with the person.', audio: { output: { voice: 'marin' } }, delegation: { type: 'responses', responses: { model: 'gpt-6-luna', instructions: 'Speak with the person.', tools: [{ type: 'function', name: 'answer', description: 'Answer', parameters: { type: 'object', properties: { reply: { type: 'string' } } } }] } } })
+  const key = 'fake-live-test-key'
+  let request
+  const result = await connectLiveCall({ sdp: 'fake-offer', session, readKey: async (ref, env) => {
+    assert.equal(ref, 'openai-rails-voice-prod')
+    assert.equal(env, 'OPENAI_API_KEY')
+    return key
+  }, fetch: async (url, options) => {
+    request = { url, ...options }
+    return { ok: true, json: async () => ({ session: { id: 'live-test' }, transport: { sdp: 'fake-answer' } }) }
+  } })
+  assert.deepEqual(result, { sdp: 'fake-answer', id: 'live-test' })
+  assert.equal(request.url, 'https://api.openai.com/v1/live/sessions')
+  assert.equal(request.method, 'POST')
+  assert.equal(request.headers.Authorization, `Bearer ${key}`)
+  assert.deepEqual(JSON.parse(request.body), { session, transport: { type: 'webrtc', sdp: 'fake-offer' } })
+  assert.equal(request.body.includes(key), false)
+  await assert.rejects(connectLiveCall({ session, sdp: 'fake-offer', readKey: async () => '', fetch: async () => { throw new Error('must not fetch') } }), { code: 'VOICE_NOT_CONFIGURED' })
+  for (const fetch of [async () => ({ ok: false }), async () => ({ ok: true, json: async () => ({}) }), async () => { throw new Error(key) }]) {
+    await assert.rejects(connectLiveCall({ session, sdp: 'fake-offer', readKey: async () => key, fetch }), { message: 'Voice token service unavailable' })
+  }
+  await assert.rejects(connectLiveCall({ session, sdp: 'fake-offer', readKey: async () => { throw new Error(key) } }), { message: 'Voice token service unavailable' })
 })

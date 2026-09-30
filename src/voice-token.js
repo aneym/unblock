@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS } from './voice.js'
+import { VOICE_SYSTEM_PROMPT, VOICE_TOOLS, xaiTools } from './voice.js'
 
 const call = promisify(execFile)
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1alpha/auth_tokens'
@@ -100,4 +100,28 @@ export async function mintOpenAiToken({ keyRef = 'openai-rails-voice-prod', read
   } catch {
     throw new Error('Voice token service unavailable')
   }
+}
+
+export function buildLiveSession({ model = 'gpt-live-1', voice = 'marin', delegate = 'gpt-6-luna', prompt, tools }) {
+  return { model, instructions: prompt, audio: { output: { voice } }, delegation: { type: 'responses', responses: { model: delegate, instructions: prompt, tools: xaiTools(tools) } } }
+}
+
+export async function connectLiveCall({ keyRef = 'openai-rails-voice-prod', readKey = defaultReadKey, fetch = globalThis.fetch, sdp, session }) {
+  let key
+  try { key = await readKey(keyRef, 'OPENAI_API_KEY') } catch { throw new Error('Voice token service unavailable') }
+  if (!key) {
+    const error = new Error('Voice is not configured')
+    error.code = 'VOICE_NOT_CONFIGURED'
+    throw error
+  }
+  try {
+    const response = await fetch('https://api.openai.com/v1/live/sessions', {
+      method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session, transport: { type: 'webrtc', sdp } }),
+    })
+    if (!response.ok) throw new Error('Voice token service unavailable')
+    const data = await response.json()
+    if (typeof data.transport?.sdp !== 'string' || !data.transport.sdp || typeof data.session?.id !== 'string' || !data.session.id) throw new Error('Voice token service unavailable')
+    return { sdp: data.transport.sdp, id: data.session.id }
+  } catch { throw new Error('Voice token service unavailable') }
 }

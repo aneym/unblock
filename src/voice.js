@@ -235,7 +235,7 @@ export function createVoiceSession(deps) {
       let ticket
       try {
         if (name === 'set_speed') {
-          if (deps.provider === 'gemini') return fail('I can only change my speed on GPT or Grok.')
+          if (deps.provider === 'gemini' || deps.provider === 'live') return fail('I can only change my speed on GPT Realtime or Grok.')
           if (typeof args.speed === 'number' && Number.isFinite(args.speed)) {
             const value = Math.round(Math.max(0.7, Math.min(1.5, args.speed)) * 10) / 10
             return { ok: true, speech: `Okay, ${value} times.`, ui: { do: 'speed', value } }

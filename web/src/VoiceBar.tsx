@@ -56,8 +56,8 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, choices,
   const latest = transcript.at(-1)
   const switchButton = choices.length > 1 && provider ? choices.filter((choice) => choice.id !== provider).map((choice) => <button key={choice.id} className="voice-switch" type="button" onClick={() => onSwitch(choice.id)}
     title={`Switch to ${choice.label}`}>Switch to {choice.label}</button>) : null
-  const meta = <>{provider && (choices.find((choice) => choice.id === provider)?.label || { openai: 'GPT Realtime', xai: 'Grok', gemini: 'Gemini' }[provider])}
-    {provider && provider !== 'gemini' && <> · <span className="voice-speed">
+  const meta = <>{provider && (choices.find((choice) => choice.id === provider)?.label || { live: 'GPT Live', openai: 'GPT Realtime', xai: 'Grok', gemini: 'Gemini' }[provider])}
+    {provider && provider !== 'gemini' && provider !== 'live' && <> · <span className="voice-speed">
       <button type="button" data-voice-speed="down" aria-label="Slower" disabled={speed <= 0.7} onClick={() => stepSpeed(-0.1)}>−</button>
       <span className="voice-speed-value">{speed.toFixed(1)}×</span>
       <button type="button" data-voice-speed="up" aria-label="Faster" disabled={speed >= 1.5} onClick={() => stepSpeed(0.1)}>+</button>

@@ -142,8 +142,8 @@ test('file_issue includes the shown ask and reports no provider or a filing fail
   assert.equal((await broken.handle('file_issue', { title: 'Show dates', details: '', about: 'other' })).speech, "That didn't file. Try again.")
 })
 
-test('set_speed returns steps and rounded, clamped multipliers only on GPT or Grok', async () => {
-  for (const provider of [undefined, 'xai']) {
+test('set_speed returns steps and rounded, clamped multipliers only on GPT Realtime or Grok', async () => {
+  for (const provider of [undefined, 'openai', 'xai']) {
     const voice = createVoiceSession({ provider, getAsks: async () => [], postAnswer: async () => ({}) })
     for (const [args, ui, speech] of [
       [{ change: 'faster' }, { do: 'speed', change: 'faster' }, 'Okay, faster.'],
@@ -155,10 +155,12 @@ test('set_speed returns steps and rounded, clamped multipliers only on GPT or Gr
       [{ speed: 1.234 }, { do: 'speed', value: 1.2 }, 'Okay, 1.2 times.'],
     ]) assert.deepEqual(await voice.handle('set_speed', args), { ok: true, speech, ui })
   }
-  const gemini = createVoiceSession({ provider: 'gemini', getAsks: async () => [], postAnswer: async () => ({}) })
-  assert.deepEqual(await gemini.handle('set_speed', { change: 'faster' }), {
-    ok: false, speech: 'I can only change my speed on GPT or Grok.',
-  })
+  for (const provider of ['gemini', 'live']) {
+    const voice = createVoiceSession({ provider, getAsks: async () => [], postAnswer: async () => ({}) })
+    assert.deepEqual(await voice.handle('set_speed', { change: 'faster' }), {
+      ok: false, speech: 'I can only change my speed on GPT Realtime or Grok.',
+    })
+  }
 })
 
 test('speech does not double punctuate titles or labels ending in punctuation', async () => {

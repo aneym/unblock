@@ -5,6 +5,7 @@ import { createPlayer, startMic, voiceAudioError } from './voice-audio'
 import { connectGemini } from './voice-gemini'
 import { connectXai } from './voice-xai'
 import { connectOpenAi } from './voice-openai'
+import { connectGptLive } from './voice-gptlive'
 
 export type VoiceState =
   | { name: 'connecting' | 'listening' | 'speaking' | 'ended' | 'unconfigured' }
@@ -14,6 +15,7 @@ export type TranscriptLine = { who: 'you' | 'agent'; text: string }
 
 export interface VoiceAdapter {
   sampleRate: 16000 | 24000
+  media?: boolean
   sendAudio(audio: string): void
   setSpeed?(v: number): void
   sendToolResults(results: { id: string; name: string; ok: boolean; speech: string; context?: string }[]): void
@@ -21,6 +23,7 @@ export interface VoiceAdapter {
 }
 export interface VoiceAdapterCallbacks {
   onOpen(): void
+  onSpeaking?(): void
   onAudio(data: string): void
   onInterrupted(): void
   onTranscript(who: TranscriptLine['who'], text: string, mode: 'append' | 'replace'): void
@@ -84,10 +87,11 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   let awaitingGoodbyeAudio = false
   const cancelledCalls = new Set<string>()
   const player = createPlayer(audio)
+  const connecting = new AbortController()
   let rules = options.profile?.rules
   const tellSpeed = () => window.dispatchEvent(new CustomEvent('unblock:voice-speed', { detail: speed }))
   const setSpeed = (v: number) => {
-    if (stopped || session?.provider === 'gemini') return
+    if (stopped || session?.provider === 'gemini' || session?.provider === 'live') return
     speed = clampSpeed(v)
     try { localStorage.setItem('unblock.voice.speed', String(speed)) } catch { /* Storage may be unavailable. */ }
     live?.setSpeed?.(speed)
@@ -99,11 +103,12 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   const release = () => {
     if (stopped) return
     stopped = true
+    connecting.abort()
     window.removeEventListener('unblock:voice-set-speed', onSpeedRequest)
     window.clearTimeout(endTimer)
     window.clearTimeout(goodbyeTimer)
     mic?.stop()
-    player.flush()
+    if (!live?.media) player.flush()
     live?.close()
     void audio.close()
     if (session) void fetch('/api/voice/end', {
@@ -119,27 +124,35 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
   const end = () => { if (!stopped) { release(); onState({ name: 'ended' }) } }
   const afterPlayback = (turn: number, toolResponse = false) => {
     const epoch = audioEpoch
-    player.whenDrained(() => {
+    const drained = () => {
       if (stopped || epoch !== audioEpoch) return
       if (endingTurn !== undefined && turn >= endingTurn) {
         if (!awaitingGoodbyeAudio) end()
       } else if (!endingRequested && (toolResponse || turn !== toolTurn)) onState({ name: 'listening' })
-    })
+    }
+    if (live?.media) drained()
+    else player.whenDrained(drained)
   }
   const callbacks: VoiceAdapterCallbacks = {
     onOpen: () => { if (!stopped) onState({ name: 'listening' }) },
+    onSpeaking: () => {
+      if (stopped) return
+      if (firstAudioMs === null) firstAudioMs = Math.max(0, Date.now() - fetchStartedAt)
+      awaitingGoodbyeAudio = false
+      onState({ name: 'speaking' })
+    },
     onAudio: (data) => {
       if (stopped) return
       if (firstAudioMs === null) firstAudioMs = Math.max(0, Date.now() - fetchStartedAt)
       if (awaitingGoodbyeAudio) awaitingGoodbyeAudio = false
       audioEpoch++
-      player.enqueue(data)
+      if (!live?.media) player.enqueue(data)
       onState({ name: 'speaking' })
     },
     onInterrupted: () => {
       if (stopped) return
       audioEpoch++
-      player.flush()
+      if (!live?.media) player.flush()
       onState({ name: 'listening' })
     },
     onTranscript: (who, text, mode) => {
@@ -246,11 +259,12 @@ export function startVoiceCall(audio: AudioContext, { onState, onTranscript, onU
       onSession({ provider: token.provider, spend: token.spend, maxMinutes: token.max_minutes })
       endTimer = window.setTimeout(end, token.max_minutes * 60_000)
       const profile = options.profile || { prompt: VOICE_SYSTEM_PROMPT, tools: VOICE_TOOLS }
-      live = token.provider === 'openai' ? await connectOpenAi(token, callbacks, profile, { speed }) : token.provider === 'xai' ? await connectXai(token, callbacks, profile, { speed }) : await connectGemini(token, callbacks, profile)
+      live = token.provider === 'live' ? await connectGptLive(token, callbacks, profile, { signal: connecting.signal }) : token.provider === 'openai' ? await connectOpenAi(token, callbacks, profile, { speed }) : token.provider === 'xai' ? await connectXai(token, callbacks, profile, { speed }) : await connectGemini(token, callbacks, profile)
       if (stopped) { live.close(); return }
-      if (token.provider !== 'gemini') { live.setSpeed?.(speed); tellSpeed() }
+      if (token.provider !== 'gemini' && token.provider !== 'live') { live.setSpeed?.(speed); tellSpeed() }
       await audio.resume()
       if (stopped) return
+      if (live.media) return
       mic = await startMic(audio, live.sampleRate, (data) => { if (!stopped) live?.sendAudio(data) }, () => stopped)
       if (stopped) { mic.stop(); return }
     } catch (error) {

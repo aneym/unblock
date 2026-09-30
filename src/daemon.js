@@ -15,7 +15,7 @@ import {
 } from './passkey.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
-import { defaultReadKey, mintVoiceToken, mintXaiToken, mintOpenAiToken } from './voice-token.js'
+import { defaultReadKey, mintVoiceToken, mintXaiToken, mintOpenAiToken, buildLiveSession, connectLiveCall } from './voice-token.js'
 import { createSpendLedger, rateFor } from './voice-spend.js'
 import { CLOSED_TO_ANSWERS, finished, PASSKEY_VERDICTS, Store } from './store.js'
 
@@ -1075,6 +1075,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         } catch { return sendJson(res, 502, { error: 'Could not file the issue' }) }
       }
       const settings = {
+        live: { id: 'live', label: 'GPT Live', model: process.env.UNBLOCK_LIVE_MODEL || 'gpt-live-1', keyRef: process.env.UNBLOCK_OPENAI_KEY_REF || 'openai-rails-voice-prod', envName: 'OPENAI_API_KEY', voice: process.env.UNBLOCK_LIVE_VOICE || 'marin', delegate: process.env.UNBLOCK_LIVE_DELEGATE_MODEL || 'gpt-6-luna' },
         openai: { id: 'openai', label: 'GPT Realtime', model: process.env.UNBLOCK_OPENAI_MODEL || 'gpt-realtime-2.1', keyRef: process.env.UNBLOCK_OPENAI_KEY_REF || 'openai-rails-voice-prod', envName: 'OPENAI_API_KEY', voice: process.env.UNBLOCK_OPENAI_VOICE || 'marin' },
         gemini: { id: 'gemini', label: 'Gemini', model: process.env.UNBLOCK_VOICE_MODEL || 'gemini-3.8-live', keyRef: process.env.UNBLOCK_VOICE_KEY_REF || 'gemini-api-key', envName: 'GEMINI_API_KEY', voice: process.env.UNBLOCK_VOICE_NAME || 'Kore' },
         xai: { id: 'xai', label: 'Grok', model: process.env.UNBLOCK_XAI_MODEL || 'grok-voice-think-fast-2.0', keyRef: process.env.UNBLOCK_XAI_KEY_REF || 'xai-api-key', envName: 'XAI_API_KEY', voice: process.env.UNBLOCK_XAI_VOICE || 'eve' },
@@ -1090,7 +1091,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         voiceKeyCache.set(id, { ref: setting.keyRef, env: process.env[setting.envName], at: Date.now(), configured: result })
         return result
       }
-      const providerOrder = ['openai', 'xai', 'gemini']
+      const providerOrder = ['openai', 'live', 'xai', 'gemini']
       const preferred = providerOrder.includes(process.env.UNBLOCK_VOICE_PROVIDER) ? process.env.UNBLOCK_VOICE_PROVIDER : 'openai'
       const availableProviders = async () => Promise.all(providerOrder.map(configured))
       const defaultProvider = (available) => available[providerOrder.indexOf(preferred)] ? preferred : providerOrder.find((id, index) => available[index]) || preferred
@@ -1115,6 +1116,20 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         }
         return sendJson(res, 200, { ok, spend: ledger.status() })
       }
+      if (pathname === '/api/voice/live/connect' && req.method === 'POST') {
+        const body = await readJson(req)
+        const reserved = typeof body.session_id === 'string' ? ledger.get(body.session_id) : null
+        if (!reserved || reserved.settled || reserved.provider !== 'live' || typeof body.sdp !== 'string' || !body.sdp.trim() || body.sdp.length > 200_000 || typeof body.prompt !== 'string' || body.prompt.length > 20_000 || !Array.isArray(body.tools) || body.tools.length > 64) return sendJson(res, 400, { error: 'Invalid live call' })
+        try {
+          const { keyRef, voice, delegate } = settings.live
+          const session = buildLiveSession({ model: reserved.model, voice, delegate, prompt: body.prompt, tools: body.tools })
+          const connected = await connectLiveCall({ keyRef, sdp: body.sdp, session })
+          return sendJson(res, 200, { sdp: connected.sdp })
+        } catch (error) {
+          if (error.code === 'VOICE_NOT_CONFIGURED') return sendJson(res, 503, { error: 'Voice is not configured', code: 'VOICE_NOT_CONFIGURED' })
+          return sendJson(res, 502, { error: 'Voice token service unavailable' })
+        }
+      }
       if (pathname === '/api/voice/session' && req.method === 'POST') {
         const body = await readJson(req)
         const available = await availableProviders()
@@ -1130,7 +1145,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         try {
           const { keyRef, model, voice } = settings[provider]
           const scopeVoice = body.profile === 'scope' && provider === 'gemini' ? await import('./scope-voice.js') : null
-          const token = provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice, speed: body.speed, ...(scopeVoice ? { prompt: scopeVoice.SCOPE_VOICE_PROMPT, tools: scopeVoice.SCOPE_VOICE_TOOLS } : {}) }) : provider === 'openai' ? await mintOpenAiToken({ keyRef, model, voice }) : await mintXaiToken({ keyRef, model, voice })
+          const token = provider === 'live' ? { provider, token: '', model, voice, expires_at: new Date(Date.now() + 120_000).toISOString() } : provider === 'gemini' ? await mintVoiceToken({ keyRef, model, voice, speed: body.speed, ...(scopeVoice ? { prompt: scopeVoice.SCOPE_VOICE_PROMPT, tools: scopeVoice.SCOPE_VOICE_TOOLS } : {}) }) : provider === 'openai' ? await mintOpenAiToken({ keyRef, model, voice }) : await mintXaiToken({ keyRef, model, voice })
           return sendJson(res, 200, { ...token, ...reservation, spend: ledger.status() })
         } catch {
           ledger.settle(reservation.session_id, 0)
