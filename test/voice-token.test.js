@@ -214,6 +214,23 @@ test('daemon defaults to OpenAI and records sanitized settled session metrics on
     assert.ok(Number.isFinite(Date.parse(line.at)))
     assert.deepEqual({ ...line, at: undefined }, { at: undefined, session_id: session.body.session_id, provider: 'openai', model: 'gpt-realtime-2.1', seconds: 61, usd: 0.2, usd_per_minute: 0.1, first_audio_ms: 234, tool_calls: null, tool_ok: null, profile: 's'.repeat(40) })
     assert.equal(statSync(file).mode & 0o777, 0o600)
+    const live = await request('/api/voice/session', { provider: 'live' })
+    assert.equal(live.body.provider, 'live')
+    const connect = { session_id: live.body.session_id, sdp: 'fake-offer', prompt: 'Test prompt', tools: [] }
+    let connects = 0
+    globalThis.fetch = async () => {
+      connects++
+      return { ok: false }
+    }
+    assert.equal((await request('/api/voice/live/connect', connect)).status, 502)
+    globalThis.fetch = async () => {
+      connects++
+      return { ok: true, json: async () => ({ session: { id: 'fake-live-session' }, transport: { sdp: 'fake-answer' } }) }
+    }
+    assert.deepEqual(await request('/api/voice/live/connect', connect), { status: 200, body: { sdp: 'fake-answer' } })
+    assert.deepEqual(await request('/api/voice/live/connect', connect), { status: 409, body: { error: 'Voice session already connected' } })
+    assert.equal(connects, 2)
+
   } finally {
     globalThis.fetch = originalFetch
     if (daemon) await daemon.close()

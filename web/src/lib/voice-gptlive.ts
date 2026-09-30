@@ -13,6 +13,8 @@ export function connectGptLive(token: VoiceSessionToken, callbacks: VoiceAdapter
     let opened = false
     let closed = false
     let activeResponse = ''
+    let turnTimer: number | undefined
+    const delegatedResponses = new Set<string>()
     const tools = new Map<string, { calls: Promise<void>[]; done: boolean; responded: boolean }>()
     const send = (event: object) => { if (channel.readyState === 'open') channel.send(JSON.stringify(event)) }
     const controller = new AbortController()
@@ -21,6 +23,7 @@ export function connectGptLive(token: VoiceSessionToken, callbacks: VoiceAdapter
       send({ type: 'session.close' })
       closed = true
       window.clearTimeout(timer)
+      window.clearTimeout(turnTimer)
       controller.abort()
       options.signal?.removeEventListener('abort', abort)
       stream?.getTracks().forEach((track) => track.stop())
@@ -91,13 +94,22 @@ export function connectGptLive(token: VoiceSessionToken, callbacks: VoiceAdapter
           if (typeof event.delta === 'string') {
             callbacks.onSpeaking?.()
             callbacks.onTranscript('agent', event.delta, 'append')
+            window.clearTimeout(turnTimer)
+            turnTimer = window.setTimeout(() => {
+              if (!closed && !delegatedResponses.size) callbacks.onTurnDone()
+            }, 1200)
           }
+          break
+        case 'session.output_transcript.done':
+        case 'session.output_audio.done':
+          window.clearTimeout(turnTimer)
+          callbacks.onTurnDone()
           break
         case 'response.event': {
           const wrapped = event.event
           if (!wrapped || typeof wrapped !== 'object') break
           const id = String(wrapped.response?.id || wrapped.response_id || activeResponse || event.delegation_id || '')
-          if (wrapped.type === 'response.created') activeResponse = id
+          if (wrapped.type === 'response.created') { activeResponse = id; delegatedResponses.add(id) }
           if (wrapped.type === 'response.output_item.done' && wrapped.item?.type === 'function_call') {
             const item = wrapped.item
             let args: Record<string, unknown> = {}
@@ -111,6 +123,8 @@ export function connectGptLive(token: VoiceSessionToken, callbacks: VoiceAdapter
             finishTools(id)
           }
           if (wrapped.type === 'response.completed') {
+            delegatedResponses.delete(id)
+            window.clearTimeout(turnTimer)
             callbacks.onTurnDone()
             const response = tools.get(id)
             if (response) { response.done = true; finishTools(id) }

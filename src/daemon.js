@@ -361,6 +361,8 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   secretStore.backend().catch(() => {})
   const clients = new Set()
   const voiceKeyCache = new Map()
+  const connectedLiveSessions = new Set()
+  const connectingLiveSessions = new Set()
   // Listeners on ONE ask, keyed by ticket. The queue stream above says how many
   // asks are open; this one says what is happening inside a single ask while
   // the human fills it in, which is what an agent watching its own ask needs.
@@ -1120,15 +1122,18 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         const body = await readJson(req)
         const reserved = typeof body.session_id === 'string' ? ledger.get(body.session_id) : null
         if (!reserved || reserved.settled || reserved.provider !== 'live' || typeof body.sdp !== 'string' || !body.sdp.trim() || body.sdp.length > 200_000 || typeof body.prompt !== 'string' || body.prompt.length > 20_000 || !Array.isArray(body.tools) || body.tools.length > 64) return sendJson(res, 400, { error: 'Invalid live call' })
+        if (connectedLiveSessions.has(body.session_id) || connectingLiveSessions.has(body.session_id)) return sendJson(res, 409, { error: 'Voice session already connected' })
+        connectingLiveSessions.add(body.session_id)
         try {
           const { keyRef, voice, delegate } = settings.live
           const session = buildLiveSession({ model: reserved.model, voice, delegate, prompt: body.prompt, tools: body.tools })
           const connected = await connectLiveCall({ keyRef, sdp: body.sdp, session })
+          connectedLiveSessions.add(body.session_id)
           return sendJson(res, 200, { sdp: connected.sdp })
         } catch (error) {
           if (error.code === 'VOICE_NOT_CONFIGURED') return sendJson(res, 503, { error: 'Voice is not configured', code: 'VOICE_NOT_CONFIGURED' })
           return sendJson(res, 502, { error: 'Voice token service unavailable' })
-        }
+        } finally { connectingLiveSessions.delete(body.session_id) }
       }
       if (pathname === '/api/voice/session' && req.method === 'POST') {
         const body = await readJson(req)
