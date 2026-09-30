@@ -175,6 +175,7 @@ export function validateScope(scope) {
     check(['question', 'comment'].includes(thread.kind), 'invalid thread kind')
     check(['open', 'resolved', 'parked'].includes(thread.status), 'invalid thread status')
     check(['alex', 'agent'].includes(thread.author), 'invalid thread author')
+    if (thread.reaction !== undefined) check(object(thread.reaction) && thread.reaction.emoji === '👀' && thread.reaction.by === 'agent' && typeof thread.reaction.at === 'string', 'invalid reaction')
     if (thread.options !== undefined) check(thread.kind === 'question' && Array.isArray(thread.options) && thread.options.length >= 2 && thread.options.length <= 5 && thread.options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200) && typeof thread.recommendation === 'string' && thread.options[0] === thread.recommendation, 'invalid thread options')
     check(Array.isArray(thread.messages) && thread.messages.length > 0, 'invalid thread messages')
     check(thread.parked_client_id === undefined || (typeof thread.parked_client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.parked_client_id)), 'invalid parked_client_id')

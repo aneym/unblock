@@ -155,8 +155,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
         let retry = approvalUnavailable, held = false
         async function send(key, targetPane, text, mark) {
+          const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (process.env.UNBLOCK_SUPERVISED === '1' && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
+          const useLanePost = lanePost && !key.startsWith('approval:')
           let status
-          try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
+          if (!useLanePost) try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
           if (closed) return
           if (status === 'working' || status === 'blocked') {
             const first = job.holds.get(key) ?? Date.now()
@@ -169,7 +171,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             }
           }
           try {
-            await promptPane(['agent', 'prompt', targetPane, text])
+            if (useLanePost) await new Promise((resolve, reject) => {
+              execFile(lanePost, ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', 'task', '--topic', `scope-${slug}`, '--wake', 'auto', '--text', text], { timeout: 20_000 }, (error) => error ? reject(error) : resolve())
+            })
+            else await promptPane(['agent', 'prompt', targetPane, text])
             mark('delivered')
             job.holds.delete(key)
             job.failures.delete(key)
@@ -360,7 +365,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
-    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
+    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react'].includes(verb)
     if (!appWrite && !approvalWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
@@ -377,9 +382,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const error = new Error('lanes edit threads through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
+    if (verb === 'react' && human) return sendJson(res, 403, { error: 'lanes react through the CLI' })
     const body = await readJson(req)
     if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
+    if (verb === 'react' && body.emoji !== '👀' && body.emoji !== null) return sendJson(res, 400, { error: 'invalid emoji' })
     if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
       || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
     if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
@@ -412,6 +419,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       ...(body.via !== undefined ? { via: body.via } : {}), ...(body.client_id !== undefined ? { client_id: body.client_id } : {}) }
     if (approved(scope.approval)) for (const thread of scope.threads) {
       if (thread.status !== 'open') continue
+      delete thread.reaction
       thread.status = 'resolved'
       thread.resolution = { decision: thread.recommendation ?? 'Approved with the scope', alex_words: null, by: 'alex', how: 'approve', at, confirmed_at: at, revision: scope.revision }
       closed.push(thread.id)
@@ -533,7 +541,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } else {
       thread = scope.threads.find((t) => t.id === threadId)
       if (!thread) bad('no such thread', 404)
-      if (verb === 'edit') {
+      if (verb !== 'react') delete thread.reaction
+      if (verb === 'react') {
+        if (body.emoji === null) delete thread.reaction
+        else thread.reaction = { emoji: '👀', by: 'agent', at }
+      } else if (verb === 'edit') {
         if (body.section === undefined && body.quote === undefined && body.options === undefined && body.text === undefined) bad('edit needs section and quote, options or text')
         if (body.text !== undefined) {
           if (thread.messages[0].from === 'alex') bad("only the lane's own question can be reworded")
@@ -589,12 +601,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
-      } else return { thread }
+      }
       result = { thread }
     }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
-    if (!human) {
+    if (!human && verb !== 'react') {
       const { keep = [] } = body
       const changed = docWrite ? body.sections.filter((section) => {
         const stored = storedSections.find((old) => old.id === section.id)

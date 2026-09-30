@@ -75,6 +75,7 @@ export interface Thread {
   options?: string[]
   why?: string
   /** Set by Alex's No; cleared when the lane replies with a new recommendation. The thread stays open. */
+  reaction?: { emoji: '👀'; by: 'agent'; at: string }
   rejected_at?: string | null
   parked_at?: string | null
   /** First message is the question or comment itself. */

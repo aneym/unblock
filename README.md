@@ -283,6 +283,7 @@ Lanes use the CLI instead of editing that file. A No keeps a question open; a
 new option uses `scope reply <slug> T# --rec "option" [--why "reason"] "reply"`.
 ```bash
 unblock scope ask demo --section plan --quote "phones first" --rec "Phones first" --option "Phones first" --option "Desktop first" "Which screen ships first?"
+unblock scope react demo T4             # acknowledge; --clear removes it
 unblock scope reply demo T4 "Moved voice to round two."
 unblock scope doc demo --from plan.md
 unblock scope patch demo plan --from section.md

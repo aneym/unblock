@@ -472,8 +472,15 @@ async function uploadDocImages(slug, doc, source) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
+  if (sub === 'react') {
+    const { rest, opts } = flags(args, { '--clear': false })
+    const [, name, threadId, ...extra] = rest
+    if (!name || !THREAD_ID.test(threadId ?? '') || extra.length) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/threads/${threadId}/react`, { emoji: opts['--clear'] ? null : '👀' })
+    return output(data, `${opts['--clear'] ? 'cleared' : 'seen'} ${data.thread.id}`)
+  }
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
@@ -746,6 +753,7 @@ unblock scope [list|url|notes|threads]           scoping docs and anchored threa
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
+unblock scope react <slug> T# [--clear]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]

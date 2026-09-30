@@ -191,22 +191,22 @@ setInterval(() => {
     if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
-type CommentState = 'In the doc' | 'Waiting for the lane to pause' | 'With the lane' | 'Retrying' | 'Not sent' | 'No lane pane'
+type CommentState = 'Sent' | 'Seen 👀' | 'Answered' | 'Retrying' | 'Not sent' | 'No lane pane'
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
   const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
   const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
   if (!note) {
     const state = (thread as Thread & { delivery?: string })?.delivery
-    if (state === 'queued') return 'Waiting for the lane to pause'
-    if (state === 'in_doc') return 'In the doc'
-    if (state !== 'with_lane') return ''
+    if (state === 'in_doc') return 'Answered'
+    if (state !== 'with_lane' && state !== 'queued') return thread?.reaction?.emoji === '👀' ? 'Seen 👀' : ''
     const lastAlex = thread?.messages.filter(m => m.from === 'alex').at(-1)
     const taken = lastAlex && (thread?.messages.some(m => m.from !== 'alex' && m.at > lastAlex.at) || (section as DocSection & { updated_at?: string })?.updated_at! > lastAlex.at) || thread?.status === 'resolved' && thread.resolution?.confirmed_at
-    return taken ? 'In the doc' : 'With the lane'
+    return taken ? 'Answered' : thread?.reaction?.emoji === '👀' ? 'Seen 👀' : 'Sent'
   }
-  if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'In the doc'
-  return ({ held: 'Waiting for the lane to pause', delivered: 'With the lane', queued: 'With the lane', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
+  if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'Answered'
+  if (thread?.reaction?.emoji === '👀' && !['retrying', 'failed', 'no_pane'].includes(note.delivery)) return 'Seen 👀'
+  return ({ held: 'Sent', delivered: 'Sent', queued: 'Sent', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
 }
 function updateCommentStates() {
   for (const t of scope?.threads || []) {
@@ -215,7 +215,7 @@ function updateCommentStates() {
     if (previous?.state === state) continue
     if (previous?.timer) clearTimeout(previous.timer)
     const entry: { state: CommentState; takenAt?: number; timer?: number } = { state }
-    if (state === 'In the doc') {
+    if (state === 'Answered') {
       entry.takenAt = previous ? Date.now() : 0
       if (previous) entry.timer = window.setTimeout(render, 30_000)
     }
@@ -224,14 +224,14 @@ function updateCommentStates() {
 }
 function deliveryChip(id: string) {
   const entry = commentStates.get(id)
-  return entry && (entry.state !== 'In the doc' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${entry.state}</span>` : ''
+  return entry && (entry.state !== 'Answered' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${entry.state}</span>` : ''
 }
 function inflight() {
   const count = (state: CommentState) => scope!.threads.filter(t => delivery(t.id) === state).length
-  const waiting = count('Waiting for the lane to pause'), withLane = count('With the lane'), taken = count('In the doc')
-  if (!waiting && !withLane) return ''
-  const total = waiting + withLane + taken
-  return `${total} comment${total === 1 ? '' : 's'} · ` + [[taken, 'taken'], [waiting, 'waiting for the lane to pause'], [withLane, 'with the lane']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
+  const sent = count('Sent'), seen = count('Seen 👀'), answered = count('Answered')
+  if (!sent && !seen) return ''
+  const total = sent + seen + answered
+  return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [sent, 'Sent']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
 function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
@@ -687,7 +687,7 @@ function renderFeed() {
   if (feed.hidden) return
   const limit = phone() ? 2 : 6
   const visible = feedExpanded ? feedRows : feedRows.slice(-limit)
-  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(delivery(row.thread) === 'With the lane' || delivery(row.thread) === 'In the doc' ? 'Sent to the lane' : delivery(row.thread))}</span>` : ''}</button>`).join('')}</div>`
+  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(delivery(row.thread) === 'Sent' || delivery(row.thread) === 'Answered' ? 'Sent to the lane' : delivery(row.thread))}</span>` : ''}</button>`).join('')}</div>`
   feed.querySelector<HTMLButtonElement>('.voice-feed-toggle')?.addEventListener('click', () => { feedExpanded = !feedExpanded; renderFeed() })
   feed.querySelector<HTMLButtonElement>('.voice-feed-close')!.onclick = () => { feedClosed = true; renderFeed() }
   feed.querySelectorAll<HTMLButtonElement>('.voice-feed-row[data-thread]').forEach(row => row.onclick = () => {
