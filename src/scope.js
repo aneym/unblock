@@ -85,14 +85,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (next.ino === entry.meta.ino && next.mtime_ms === entry.meta.mtime_ms && next.size === entry.meta.size) return
         entry.meta = next
         const data = readScope(slug)
-        if (data) emit(slug, 'scope', { ...data, notes: store.scopeNotes(slug) })
+        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug) })
         if (store.pendingScopeNotes(slug).length || store.pendingScopeTargets(slug).length) schedule(slug)
       }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
       entry.timer.unref()
       listeners.set(slug, entry)
     }
     entry.clients.add(res)
-    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: store.scopeNotes(slug) })}\n\n`)
+    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: scopeNotes(slug) })}\n\n`)
     req.on('close', () => {
       entry.clients.delete(res)
       if (!entry.clients.size) {
@@ -152,6 +152,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             const words = note.words && note.words !== note.text && note.words !== 'Take the recommendation' ? ` His words: "${compact(note.words)}".` : ''
             return `${alex} resolved ${note.thread} (§${heading} "${quote}") as: ${text.replace(/\.$/, '')}.${words} Edit §${heading} to say so, then run: unblock scope resolve ${slug} ${note.thread}`
           }
+          if (note.event === 'delete') return `${alex} deleted his note ${note.thread} (§${heading} "${quote}"). No action needed.`
+          if (note.event === 'reopen' && !text) return `${alex} reopened ${note.thread} (§${heading} "${quote}").`
           return `${alex}${note.event === 'reopen' ? ' reopened' : ' on'} ${note.thread} (§${heading} "${quote}"): ${text}`
         })
         const joined = parts.map((part, index) => part + imagePaths(comments[index])).join(' | ')
@@ -344,13 +346,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       schedule(slug)
       return sendJson(res, 200, { note })
     }
-    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: store.scopeNotes(slug) })
+    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: scopeNotes(slug) })
     if (req.method === 'GET' && parts.length === 2 && action === 'events') return watch(slug, req, res)
     if (req.method === 'GET' && parts.length === 2 && action === 'notes') {
       const raw = url.searchParams.get('since') ?? '0'
       const author = url.searchParams.get('from')
       if (!/^\d+$/.test(raw) || (author && !['alex', 'agent'].includes(author))) return sendJson(res, 400, { error: 'invalid notes filter' })
-      return sendJson(res, 200, { notes: store.scopeNotes(slug, { since: Number(raw), author: author || undefined }) })
+      return sendJson(res, 200, { notes: scopeNotes(slug, { since: Number(raw), author: author || undefined }) })
     }
     if (action === 'assets') {
       const dir = join(root, slug, 'assets')
@@ -411,7 +413,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
-    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react'].includes(verb)
+    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'delete'].includes(verb)
     if (!appWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
@@ -432,6 +434,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
     if (verb === 'react' && human) return sendJson(res, 403, { error: 'lanes react through the CLI' })
+    if (['reopen', 'delete'].includes(verb)) {
+      if (!human) return sendJson(res, 403, { error: verb === 'reopen' ? 'only Alex reopens' : 'only Alex deletes' })
+      if (!relay) requireHumanPath(req)
+    }
     const body = await readJson(req)
     if (body?.images !== undefined && !human) return sendJson(res, 400, { error: 'invalid images' })
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
@@ -490,7 +496,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     emit(slug, 'note', note)
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
-    emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
+    emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
     schedule(slug)
     return { approval: scope.approval, closed, revision: scope.revision }
   }
@@ -532,6 +538,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     return [...targets]
   }
 
+  function scopeNotes(slug, filter) { return store.scopeNotes(slug, filter).map(note => ({ ...note, author: note.from })) }
+
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
   function changeScope(slug, { body, human, appWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
@@ -547,7 +555,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
       const entry = listeners.get(slug)
       if (entry) entry.meta = metadata(slug)
-      emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
       return { app: scope.app }
     }
     if (approvalWrite) return approveScope(slug, scope, body, human)
@@ -570,6 +578,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       })
     }
     if (body.client_id !== undefined) {
+      const note = store.scopeNoteByClientId(slug, body.client_id)
+      if (note && ['reopen', 'delete'].includes(note.event)) {
+        const existing = scope.threads.find(t => t.id === note.thread)
+        return { ...(existing ? { thread: existing } : { deleted: note.thread }), duplicate: true }
+      }
       const duplicate = scope.threads.find((thread) => thread.messages.some((message) => message.client_id === body.client_id)
         || thread.resolution?.client_id === body.client_id || thread.parked_client_id === body.client_id)
       if (duplicate) return { thread: duplicate, duplicate: true }
@@ -674,6 +687,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.rejected_at = at
         thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client, ...pictures })
         noteData = { event: 'reject', text: reason }
+      } else if (verb === 'reopen') {
+        if (!['resolved', 'parked'].includes(thread.status)) bad('only resolved or parked threads reopen')
+        thread.status = 'open'; delete thread.resolution; delete thread.parked_at
+        noteData = { event: 'reopen', text: '' }
+      } else if (verb === 'delete') {
+        if ((thread.author ?? thread.messages[0]?.from) !== 'alex') bad('only his own notes', 403)
+        scope.threads = scope.threads.filter(t => t.id !== thread.id)
+        noteData = { event: 'delete', text: '' }
       } else if (verb === 'park') {
         if (thread.status !== 'open') bad('only open threads can be parked')
         thread.status = 'parked'; thread.parked_at = at
@@ -702,7 +723,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
       }
-      result = { ...result, thread }
+      result = verb === 'delete' ? { deleted: thread.id } : { ...result, thread }
     }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
@@ -745,13 +766,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     if (noteData) {
-      const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...noteData })
+      const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
       emit(slug, 'note', note)
     }
     const state = readScope(slug)
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
-    emit(slug, 'scope', { ...state, notes: store.scopeNotes(slug) })
+    emit(slug, 'scope', { ...state, notes: scopeNotes(slug) })
     if (noteData) schedule(slug)
     return result
   }

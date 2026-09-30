@@ -359,7 +359,7 @@ least 32 characters. Send it in `X-Unblock-Relay` on loopback hosts only.
 The relay may read `GET /api/scope`, `GET /api/scope/<slug>` and
 `GET /api/scope/<slug>/assets/<id>`, create human
 comments with `POST /api/scope/<slug>/threads`, and use the four thread write
-verbs `reply`, `resolve`, `reject`, and `park`. Each write requires a unique
+verbs `reply`, `resolve`, `reject`, `park`, `reopen`, and `delete`. Each write requires a unique
 `client_id` (1–64 letters, digits, underscores or hyphens) so retries do not
 land twice. Writes are marked `via: admin`; that field may be omitted or set
 to `admin`, never another channel. No other daemon route accepts this credential.
@@ -387,3 +387,6 @@ Zero npm dependencies. The queue is one SQLite file at
 MIT
 
 Alex’s scoping comments can carry pictures; the lane gets a local path per image.
+
+`reopen` lets Alex or the Admin relay reopen a resolved or parked thread without changing the doc revision.
+`delete` lets Alex or the Admin relay delete a note Alex started and notifies the lane.

@@ -173,14 +173,13 @@ const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t
 const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
 const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
-function recent(t: Thread) { const at = Date.parse(t.resolution?.at || ''); return t.status === 'resolved' && at <= Date.now() && at > Date.now() - 86_400_000 }
 function unread(t: Thread) {
   const last = t.messages.at(-1), alex = t.messages.filter(m => m.from === 'alex').at(-1)
   return t.status === 'open' && !!alex && last?.from === 'agent' && Date.parse(last.at) > Date.parse(alex.at) && Date.parse(last.at) > Date.parse(storage.get(`scope:seen:${slug}:${t.id}`) || '1970-01-01')
 }
 function markSeen(id: string) { const t = scope?.threads.find(t => t.id === id); if (t && unread(t)) storage.set(`scope:seen:${slug}:${id}`, t.messages.at(-1)!.at) }
 function syncThreadClasses() {
-  for (const t of ordered()) for (const mark of marks(t.id)) { mark.classList.toggle('recent', recent(t)); mark.classList.toggle('unread', unread(t)) }
+  for (const t of ordered()) for (const mark of marks(t.id)) { mark.classList.toggle('unread', unread(t)) }
 }
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
@@ -352,17 +351,37 @@ function inflight() {
   const total = sent + seen + answered
   return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [sent, 'Sent']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
+const deleting = new Set<string>(), copiedLinks = new Set<string>()
+const moreButton = '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>'
+function threadMenu(t: Thread) {
+  if (!menus.has(t.id)) return ''
+  if (deleting.has(t.id)) return '<div class="menu" role="menu"><p>Delete this note?</p><button role="menuitem" data-action="confirm-delete">Delete</button><button role="menuitem" data-action="menu-cancel">Cancel</button></div>'
+  return `<div class="menu" role="menu"><button role="menuitem" data-action="menu-reply">Reply</button><button role="menuitem" data-action="${t.status === 'open' ? 'resolve' : 'reopen'}">${t.status === 'open' ? 'Resolve' : 'Reopen'}</button>${t.status === 'open' && t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}<button role="menuitem" data-action="copy-link">Copy link</button>${!missing.has(t.id) ? '<button role="menuitem" data-action="jump-text">Jump to text</button>' : ''}${(t.author ?? t.messages[0]?.from) === 'alex' ? '<button role="menuitem" data-action="delete">Delete</button>' : ''}</div>`
+}
+function closeMenus() { if (!menus.size) return; menus.clear(); deleting.clear(); renderCards() }
+function openMenu(id: string, point?: { x: number; y: number }) {
+  menus.clear(); deleting.clear(); menus.add(id); focus(id)
+  const menu = (phone() ? sheet : document).querySelector<HTMLElement>(`.card[data-t="${id}"] .menu`)
+  if (!menu) return
+  if (point && !phone()) {
+    const card = menu.closest<HTMLElement>('.card')!, rect = card.getBoundingClientRect(), bounds = menu.getBoundingClientRect()
+    const left = Math.max(rect.left, Math.min(point.x, rect.right - bounds.width, innerWidth - bounds.width - 8))
+    const top = Math.max(8, Math.min(point.y, innerHeight - bounds.height - 8))
+    menu.style.right = 'auto'; menu.style.left = `${left - rect.left}px`; menu.style.top = `${top - rect.top}px`
+  }
+  menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+}
 function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
-  if (t.status === 'resolved') {
+  if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span></div><div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
-  const menu = isOpen && menus.has(t.id) ? `<div class="menu" role="menu">${t.kind === 'question' ? '<button role="menuitem" data-action="menu-reply">Reply</button>' : ''}<button role="menuitem" data-action="resolve">Resolve</button>${t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}</div>` : ''
+  const menu = threadMenu(t)
   let body = ''
-  if (isOpen && compose) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
+  if (compose && (isOpen || mode === 'reply')) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') {
     const decision = askDecisions.get(t.id), suggested = askSuggestions.has(t.id) ? ' suggest' : ''
@@ -370,13 +389,13 @@ function cardHtml(t: Thread) {
     body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}</div>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  const state = [deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>' : ''}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
+  const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length && !askDecisions.has(t.id) ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<button${askSuggestions.get(t.id)?.option === i + 1 ? ' class="suggest"' : ''} data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
-  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+  ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
   const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${unread(t) ? ' unread' : ''}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
@@ -482,7 +501,7 @@ function renderCards() {
   syncFigureFocus()
   if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
   syncThreadClasses()
-  const visible = ordered().filter(t => t.status === 'open' || recent(t) || showResolved)
+  const visible = ordered().filter(t => t.status === 'open' || showResolved)
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -493,11 +512,11 @@ function renderCards() {
   const makeCard = (t: Thread) => kept?.dataset.t === t.id ? refreshCard(kept, card(t)) : card(t)
   const mainNodes: Node[] = visible.filter(t => !missing.has(t.id)).map(makeCard)
   if (composer?.parentElement === cards) mainNodes.push(composer)
-  if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t) mainNodes.push(kept)
+  if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) mainNodes.push(kept)
   replaceAround(cards, mainNodes, kept?.parentElement === cards ? kept : composer)
   const gone = visible.filter(t => missing.has(t.id))
   const detachedNodes: Node[] = gone.length ? [document.createTextNode('Detached · the text it was on changed'), ...gone.map(makeCard)] : []
-  if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept)) detachedNodes.push(kept)
+  if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept) && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) detachedNodes.push(kept)
   replaceAround(detached, detachedNodes, kept)
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
@@ -508,7 +527,11 @@ function renderCards() {
   document.body.classList.toggle('show-resolved', showResolved)
   const resolvedCount = ordered().filter(t => t.status !== 'open').length, resolvedLabel = `Resolved (${resolvedCount})`
   const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
-  if (!composing && phone() && document.body.classList.contains('sheet-open')) renderSheet()
+  if (!composing && phone() && document.body.classList.contains('sheet-open')) {
+    const thread = scope?.threads.find(t => t.id === focused)
+    if (thread && thread.status !== 'open' && !showResolved && !getDraft(thread.id).trim() && !getImages(thread.id).length && !uploading.get(thread.id)) closeSheet()
+    else renderSheet()
+  }
   updateCount(); layout(); disablePending()
 }
 function figureFor(mark: HTMLElement | undefined) { return mark?.closest('figcaption')?.closest<HTMLElement>('figure.fig') }
@@ -581,6 +604,7 @@ function layout() {
 function updateCount() {
   const list = open(), i = list.findIndex(t => t.id === focused)
   commentsBar.update({ open: list.length, index: i + 1, total: list.length, showResolved })
+  const resolvedToggle = document.querySelector<HTMLInputElement>('.side-head input[type="checkbox"]'); if (resolvedToggle) { resolvedToggle.id = 'showResolved'; const label = resolvedToggle.parentElement!; for (const node of [...label.childNodes]) if (node.nodeType === Node.TEXT_NODE) node.textContent = ` Resolved (${ordered().filter(t => t.status !== 'open').length})` }
   $('#openLabel').textContent = `${list.length} open`
 }
 // Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
@@ -684,6 +708,49 @@ document.addEventListener('keydown', e => {
   if (!selected) return
   e.preventDefault(); openSelectionComment(selected.anchor, selected.range)
 })
+
+function menuThread(target: EventTarget | null) {
+  if (!(target instanceof Element)) return null
+  const node = target.closest<HTMLElement>('.card[data-t],mark.hl[data-t]'), thread = scope?.threads.find(t => t.id === node?.dataset.t)
+  return thread && (thread.status === 'open' || showResolved || node?.classList.contains('card')) ? thread : null
+}
+document.addEventListener('contextmenu', e => {
+  if (e.defaultPrevented || phone() || !zoom.hidden) return
+  const thread = menuThread(e.target)
+  if (!thread) return
+  e.preventDefault(); openMenu(thread.id, { x: e.clientX, y: e.clientY })
+})
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && menus.size) { e.preventDefault(); closeMenus(); return }
+  const menu = (e.target as HTMLElement).closest('.menu')
+  if (!menu || !['ArrowUp', 'ArrowDown'].includes(e.key)) return
+  e.preventDefault()
+  const items = [...menu.querySelectorAll<HTMLButtonElement>('button')], i = items.indexOf(e.target as HTMLButtonElement)
+  items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+})
+let holdTimer = 0, holdPoint: { x: number; y: number } | null = null, suppressThreadClick = 0
+function cancelHold() { clearTimeout(holdTimer); holdPoint = null }
+function startHold(target: EventTarget | null, x: number, y: number) {
+  cancelHold()
+  if (!phone()) return
+  const thread = menuThread(target)
+  if (!thread || (target as Element).closest('button,textarea,input,a')) return
+  holdPoint = { x, y }; holdTimer = window.setTimeout(() => { suppressThreadClick = Date.now() + 1500; openMenu(thread.id) }, 500)
+}
+function moveHold(x: number, y: number) { if (holdPoint && Math.hypot(x - holdPoint.x, y - holdPoint.y) > 10) cancelHold() }
+document.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') startHold(e.target, e.clientX, e.clientY) })
+document.addEventListener('pointermove', e => moveHold(e.clientX, e.clientY))
+for (const event of ['pointerup', 'pointercancel', 'touchend', 'touchcancel']) document.addEventListener(event, cancelHold)
+document.addEventListener('touchstart', e => { const touch = e.touches[0]; if (touch) startHold(e.target, touch.clientX, touch.clientY) }, { passive: true })
+document.addEventListener('touchmove', e => { const touch = e.touches[0]; if (touch) moveHold(touch.clientX, touch.clientY) }, { passive: true })
+function focusHash() {
+  const id = location.hash.match(/^#thread=(T\d+)$/)?.[1], thread = scope?.threads.find(t => t.id === id)
+  if (!thread) return
+  if (thread.status !== 'open') { showResolved = true; storage.set('scope:showResolved', 'true') }
+  focus(thread.id, true)
+}
+window.addEventListener('hashchange', focusHash)
+
 function openGeneralComment() {
   const quote = scope?.doc.sections.find(s => s.id === 'title')?.heading.trim().slice(0, 300)
   if (!quote) return
@@ -723,6 +790,17 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
   const images = imageSnapshot ?? getImages(key).map(image => image.id), pictures = images.length ? { images } : {}
   const text = getDraft(key).trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
+  if (t && name === 'menu') { if (menus.has(t.id)) closeMenus(); else openMenu(t.id); return }
+  if (t && name === 'delete') { deleting.add(t.id); renderCards(); (phone() ? sheet : document).querySelector<HTMLButtonElement>(`.card[data-t="${t.id}"] .menu button`)?.focus(); return }
+  if (name === 'menu-cancel') { closeMenus(); return }
+  if (t && name === 'copy-link') {
+    closeMenus()
+    try { await navigator.clipboard.writeText(location.origin + location.pathname + location.search + '#thread=' + t.id); copiedLinks.add(t.id); renderCards(); window.setTimeout(() => { copiedLinks.delete(t.id); renderCards() }, 2000) }
+    catch (error) { errors.set(t.id, error instanceof Error ? error.message : 'Could not copy'); renderCards() }
+    return
+  }
+  if (t && name === 'jump-text') { closeMenus(); focus(t.id); marks(t.id)[0]?.scrollIntoView({ block: 'center' }); return }
+  if (t && target.closest('.menu') && name !== 'menu-reply') { menus.delete(t.id); deleting.delete(t.id); renderCards() }
   if (t && name === 'else' && t.recommendation && !text) { modes.set(t.id, 'else'); renderCards(); const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`); if (input) input.placeholder = 'Your answer'; focusBox(t.id); return }
   if (t && ['menu', 'menu-reply', ...(!t.recommendation ? ['else'] : [])].includes(name)) {
     if (name === 'menu') { if (menus.has(t.id)) menus.delete(t.id); else menus.add(t.id) }
@@ -744,6 +822,8 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
     else if (name === 'option' && t.options?.[Number(target.dataset.option)] != null) { const option = t.options[Number(target.dataset.option)]; await postResolve(t.id, { decision: option, alex_words: text || option, how: 'own', ...pictures }) }
     else if (name === 'resolve') await postResolve(t.id, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve', ...pictures })
     else if (name === 'park') await postPark(t.id)
+    else if (name === 'reopen') await write(`/${t.id}/reopen`, {}, t.id)
+    else if (name === 'confirm-delete') { await write(`/${t.id}/delete`, {}, t.id); closeSheet(); focused = open()[0]?.id || null }
     if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id); askSuggestions.delete(t.id)
     if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
     renderCards()
@@ -829,7 +909,9 @@ document.addEventListener('keydown', e => {
   if (button) void action(button.dataset.action!, button)
 })
 document.addEventListener('click', e => {
+  if (Date.now() < suppressThreadClick) { e.preventDefault(); return }
   const target = e.target as HTMLElement
+  if (!target.closest('.menu,[data-action="menu"]')) closeMenus()
   const thumbnail = target.closest<HTMLButtonElement>('button.thumb[data-action="view-image"]'); if (thumbnail) { lightboxOpener = thumbnail; lightboxItems = [...thumbnail.closest('.thumbs')!.querySelectorAll<HTMLButtonElement>('button.thumb')]; lightboxIndex = lightboxItems.indexOf(thumbnail); showLightboxImage(); lightbox.showModal(); return }
   if (lightbox.contains(target)) return
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
@@ -855,7 +937,7 @@ document.addEventListener('click', e => {
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
-  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || mark.classList.contains('recent') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
@@ -913,12 +995,13 @@ $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
 function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+  const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
   publishApproval()
-  const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]))
+  const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]).concat((payload.notes || []).map(note => note.client_id)))
   for (const [key, item] of sending) if (settled.has(item.clientId)) sending.delete(key)
-  for (const note of payload.notes || []) notes.set(note.id, note); render() }
+  for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
 let lastOk = 0, stale = false
 function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }
 function failedRead() { if (lastOk && !stale) { stale = true; chrome?.update({ updatedAt: lastOk, staleAfterMs: 60_000, onRefresh: () => void poll() }) } }

@@ -126,10 +126,9 @@ mark.hl { color: inherit; background: var(--hl-q); border-radius: 3px; padding: 
 mark.hl.comment { background: var(--hl-c); }
 mark.hl.on { background: var(--hl-q-on); box-shadow: 0 1.5px 0 var(--ask); }
 mark.hl.comment.on { background: var(--hl-c-on); box-shadow: 0 1.5px 0 var(--ac); }
-mark.hl.resolved { background: none; box-shadow: none; cursor: text; }
+mark.hl.resolved, mark.hl.resolved.on { background: none; box-shadow: none; cursor: text; }
 body.show-resolved mark.hl.resolved { background: var(--hl-r); cursor: pointer; }
-body.show-resolved mark.hl.resolved.on, mark.hl.resolved.recent.on { box-shadow: 0 1.5px 0 var(--tx2); }
-mark.hl.resolved.recent { background: var(--hl-r); cursor: pointer; }
+body.show-resolved mark.hl.resolved.on { box-shadow: 0 1.5px 0 var(--tx2); }
 mark.hl.unread { position: relative; }
 mark.hl.unread::after { content: ""; position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
 .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ac); flex: none; }
@@ -418,3 +417,6 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
   dialog.lightbox[open] { display: flex; align-items: center; justify-content: center; }
 }
 .title-anchor { display: none; }
+
+.menu p { margin: 6px 10px; font-size: 13.5px; }
+.menu button:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
