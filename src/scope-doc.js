@@ -147,6 +147,15 @@ export function validateScope(scope) {
         && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }
+  if (scope.approval !== undefined) {
+    const a = scope.approval
+    check(object(a) && ['approve', 'approve_with_changes', 'not_yet'].includes(a.mode) && a.by === 'alex'
+      && typeof a.who === 'string' && typeof a.at === 'string' && Number.isFinite(Date.parse(a.at)) && typeof a.at_et === 'string'
+      && Number.isInteger(a.revision) && a.revision >= 1 && typeof a.comment === 'string' && a.comment.length <= 4000
+      && !/[\x00-\x09\x0b-\x1f\x7f]/.test(a.comment) && (a.mode === 'approve' || !!a.comment.trim())
+      && (a.via === undefined || ['voice', 'admin'].includes(a.via))
+      && (a.client_id === undefined || (typeof a.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(a.client_id))), 'invalid approval')
+  }
   check(Array.isArray(scope.threads), 'invalid threads')
   const ids = new Set()
   for (const thread of Array.isArray(scope.threads) ? scope.threads : []) {
@@ -162,7 +171,7 @@ export function validateScope(scope) {
     check(thread.parked_client_id === undefined || (typeof thread.parked_client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.parked_client_id)), 'invalid parked_client_id')
     for (const key of ['rejected_at', 'parked_at']) check(thread[key] == null || typeof thread[key] === 'string', `invalid ${key}`)
     for (const message of Array.isArray(thread.messages) ? thread.messages : []) check(object(message) && ['alex', 'agent'].includes(message.from) && typeof message.text === 'string' && (!!message.text.trim() || message.kind === 'reject') && typeof message.at === 'string' && (message.via === undefined || ['voice', 'admin'].includes(message.via)) && (message.client_id === undefined || (typeof message.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(message.client_id))) && (message.kind === undefined || ['reject', 'option'].includes(message.kind)) && (message.recommendation === undefined || typeof message.recommendation === 'string'), 'invalid thread message')
-    if (thread.resolution !== undefined) check(object(thread.resolution) && (thread.resolution.client_id === undefined || (typeof thread.resolution.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.resolution.client_id))) && typeof thread.resolution.decision === 'string' && ['alex', 'agent'].includes(thread.resolution.by) && (thread.resolution.alex_words === null || typeof thread.resolution.alex_words === 'string') && (thread.resolution.how === undefined || ['take', 'own', 'resolve'].includes(thread.resolution.how)) && typeof thread.resolution.at === 'string' && (thread.resolution.confirmed_at === null || typeof thread.resolution.confirmed_at === 'string') && (thread.resolution.revision === null || (Number.isInteger(thread.resolution.revision) && thread.resolution.revision >= 1)), 'invalid resolution')
+    if (thread.resolution !== undefined) check(object(thread.resolution) && (thread.resolution.client_id === undefined || (typeof thread.resolution.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.resolution.client_id))) && typeof thread.resolution.decision === 'string' && ['alex', 'agent'].includes(thread.resolution.by) && (thread.resolution.alex_words === null || typeof thread.resolution.alex_words === 'string') && (thread.resolution.how === undefined || ['take', 'own', 'resolve', 'approve'].includes(thread.resolution.how)) && typeof thread.resolution.at === 'string' && (thread.resolution.confirmed_at === null || typeof thread.resolution.confirmed_at === 'string') && (thread.resolution.revision === null || (Number.isInteger(thread.resolution.revision) && thread.resolution.revision >= 1)), 'invalid resolution')
   }
   return problems
 }

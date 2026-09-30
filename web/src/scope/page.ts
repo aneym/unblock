@@ -1,5 +1,5 @@
 import './scope.css'
-import { orderThreads, type ScopeV2, type Thread, type DocSection } from '../../../src/scope-doc.js'
+import { orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval } from '../../../src/scope-doc.js'
 import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
@@ -35,6 +35,81 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`); return result
 }
 const endpoint = `${apiBase}/${encodeURIComponent(slug)}`
+type QueuedApproval = { clientId: string; comment: string; mode: string; failed: boolean; timer?: number }
+let queuedApproval: QueuedApproval | null = null
+function isApproved() { return scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
+function approvalBanner() {
+  if (queuedApproval) return `<div class="approval" data-cm-skip role="status"><strong>${queuedApproval.failed ? "Couldn't approve. Try again." : 'Sending…'}</strong>${queuedApproval.comment ? `<div class="approval-note">${esc(queuedApproval.comment)}</div>` : ''}</div>`
+  const a = scope?.approval
+  if (!a) return ''
+  const label = a.mode === 'approve' ? 'Approved, building' : a.mode === 'approve_with_changes' ? 'Approved with changes, building after the lane folds your note in' : 'Not yet'
+  return `<div class="approval" data-cm-skip><strong>${label}</strong> · ${esc(a.at_et)}${a.comment ? `<div class="approval-note">${esc(a.comment)}</div>` : ''}</div>`
+}
+const approveDialog = document.createElement('dialog')
+approveDialog.className = 'approve'
+approveDialog.innerHTML = `<h2>Approve this scope</h2><p class="approve-count"></p><fieldset><legend>What happens next?</legend><label><input type="radio" name="approve-mode" value="approve" checked>Approve</label><label><input type="radio" name="approve-mode" value="approve_with_changes">Approve with changes: the lane folds your note in first</label><label><input type="radio" name="approve-mode" value="not_yet">Not yet: just send the note</label></fieldset><label class="approve-note-label" for="approve-note">Final note</label><textarea id="approve-note" placeholder="Anything the builder should know?" maxlength="4000" rows="5"></textarea><p class="error" role="alert"></p><div class="actions"><button type="button" class="btn" data-action="approve-cancel">Cancel</button><button type="button" class="btn primary" data-action="approve-submit">Approve and build</button></div>`
+document.body.append(approveDialog)
+let approving = false
+const approveMode = () => $<HTMLInputElement>('input[name="approve-mode"]:checked', approveDialog).value
+function updateApproveDialog() {
+  const mode = approveMode(), count = scope?.threads.filter(t => t.status === 'open').length || 0
+  $('.approve-count', approveDialog).textContent = mode === 'not_yet' ? 'Threads stay open.' : count === 0 ? 'No open threads.' : `${count} open thread${count === 1 ? ' closes' : 's close'} with the lane's recommendation.`
+  const button = $<HTMLButtonElement>('[data-action="approve-submit"]', approveDialog)
+  button.textContent = mode === 'approve' ? 'Approve and build' : mode === 'approve_with_changes' ? 'Approve with changes' : 'Send, not yet'
+  button.disabled = approving || mode !== 'approve' && !$<HTMLTextAreaElement>('textarea', approveDialog).value.trim()
+}
+function openApproveDialog() {
+  if (!scope || isApproved() || queuedApproval && !queuedApproval.failed || approveDialog.open) return
+  $<HTMLInputElement>(`input[value="${queuedApproval?.failed ? queuedApproval.mode : 'approve'}"]`, approveDialog).checked = true
+  $<HTMLTextAreaElement>('textarea', approveDialog).value = queuedApproval?.failed ? queuedApproval.comment : ''
+  $('.error', approveDialog).textContent = ''
+  updateApproveDialog(); approveDialog.showModal(); $<HTMLTextAreaElement>('textarea', approveDialog).focus()
+}
+async function submitApproval() {
+  if ($<HTMLButtonElement>('[data-action="approve-submit"]', approveDialog).disabled) return
+  approving = true; updateApproveDialog(); $('.error', approveDialog).textContent = ''
+  try {
+    const client_id = clientId(), mode = approveMode(), comment = $<HTMLTextAreaElement>('textarea', approveDialog).value
+    const result = await api<{ approval?: ScopeApproval; queued?: boolean; client_id?: string }>(`${endpoint}/approve`, { mode, comment, client_id })
+    approveDialog.close()
+    if (queuedApproval?.timer) clearTimeout(queuedApproval.timer)
+    queuedApproval = null
+    if (result.queued === true) {
+      const item: QueuedApproval = { clientId: result.client_id || client_id, mode, comment, failed: false }
+      queuedApproval = item
+      settleQueuedApproval()
+      if (queuedApproval === item) item.timer = window.setTimeout(() => {
+        if (queuedApproval !== item) return
+        item.failed = true; render()
+      }, 30_000)
+      render()
+    } else if (scope && result.approval) { scope.approval = result.approval; render(); publishApproval() }
+    try { accept(await api(endpoint)) } catch {}
+  } catch (error) { $('.error', approveDialog).textContent = error instanceof Error ? error.message : 'Approval failed' }
+  finally { approving = false; updateApproveDialog() }
+}
+approveDialog.addEventListener('input', updateApproveDialog)
+approveDialog.addEventListener('change', updateApproveDialog)
+approveDialog.addEventListener('click', e => {
+  const action = (e.target as HTMLElement).closest<HTMLElement>('[data-action]')?.dataset.action
+  if (action === 'approve-cancel') approveDialog.close()
+  if (action === 'approve-submit') void submitApproval()
+})
+approveDialog.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.stopPropagation(); void submitApproval() } })
+document.addEventListener('click', e => { if ((e.target as HTMLElement).closest('[data-action="approve-scope"]')) openApproveDialog() })
+window.addEventListener('scope:approve-open', openApproveDialog)
+function settleQueuedApproval() {
+  if (!queuedApproval || scope?.approval?.client_id !== queuedApproval.clientId) return
+  if (queuedApproval.timer) clearTimeout(queuedApproval.timer)
+  queuedApproval = null
+}
+let approvalSignature: string | undefined
+function publishApproval() {
+  const approval = scope?.approval || null, signature = JSON.stringify(approval)
+  if (signature === approvalSignature) return
+  approvalSignature = signature
+  window.dispatchEvent(new CustomEvent('scope:approval', { detail: approval }))
+}
 function upsert(thread: Thread) {
   if (!scope) return
   const i = scope.threads.findIndex(t => t.id === thread.id)
@@ -78,7 +153,7 @@ setInterval(() => {
 type CommentState = 'In the doc' | 'Waiting for the lane to pause' | 'With the lane' | 'Retrying' | 'Not sent' | 'No lane pane'
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
-  const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && n.event !== 'lane_note').sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
+  const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
   const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
   if (!note) {
     const state = (thread as Thread & { delivery?: string })?.delivery
@@ -132,7 +207,7 @@ function cardHtml(t: Thread) {
   ${isOpen && t.kind === 'question' && t.options?.length ? `<div class="other-options only-on"><span class="lbl">Other options</span>${t.options.slice(1).map((option, i) => `<button data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</div>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div></div>`).join('')}</div>` : ''}
-  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>Resolved:</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+  ${t.status === 'parked' ? '<div class="settled"><b>Parked.</b> Not answered; the lane leaves it for later.</div>' : t.status === 'resolved' ? `<div class="settled"><b>${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved:'}</b> ${esc(t.resolution?.decision)}${!t.resolution?.confirmed_at ? '<span class="wait">Sent to the lane. It will update the doc to say so.</span>' : ''}</div>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
   const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
@@ -161,7 +236,7 @@ function contentSignature(s: DocSection) {
   return JSON.stringify([s.heading, s.body_md, (s as DocSection & { updated_at?: string }).updated_at, assets])
 }
 function signature(s: DocSection, line: string) {
-  return JSON.stringify([contentSignature(s), s.id === 'title' ? [scope!.revision, scope!.updated_at, line] : null])
+  return JSON.stringify([contentSignature(s), s.id === 'title' ? [scope!.revision, scope!.updated_at, line, scope!.approval, queuedApproval] : null])
 }
 function render() {
   if (!scope) return
@@ -183,7 +258,7 @@ function render() {
   for (const s of scope.doc.sections) {
     let node = [...doc.children].find(n => n.id === s.id) as HTMLElement | undefined
     if (!node || !unchanged(s.id)) {
-      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}<${s.id === 'title' ? 'h1' : 'h2'}>${esc(s.heading)}</${s.id === 'title' ? 'h1' : 'h2'}><div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
+      const replacement = document.createElement('div'); replacement.innerHTML = `<section id="${esc(s.id)}" data-section>${s.id === 'ask' ? `<details class="ask-fold"${askOpen ? ' open' : ''}><summary><svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><h2>${esc(s.heading)}</h2></summary><div class="body">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div></details>` : `${s.id === 'title' ? '<p class="eyebrow" data-cm-skip>Scoping</p>' : ''}${s.id === 'title' ? `<div class="title-row"><h1>${esc(s.heading)}</h1>${boot.approve !== 'host' && !isApproved() && (!queuedApproval || queuedApproval.failed) ? '<button type="button" class="btn primary" data-action="approve-scope" data-cm-skip>Approve scope</button>' : ''}</div>${approvalBanner()}` : `<h2>${esc(s.heading)}</h2>`}<div class="body ${s.id === 'title' ? 'lede' : ''}">${markdown(s.body_md, scope!.doc.assets, `${endpoint}/assets`)}</div>${s.id === 'title' ? `<p class="meta" data-cm-skip>Revision ${scope!.revision} · Updated ${time(scope!.updated_at)}${boot.voice === false && boot.voiceUrl && /^https?:\/\//i.test(boot.voiceUrl) ? ` · <a href="${esc(boot.voiceUrl)}" target="_blank" rel="noopener">Open with voice</a>` : ''}</p><p class="inflight" data-cm-skip${line ? '' : ' hidden'}>${esc(line)}</p>` : ''}`}</section>`
       const next = replacement.firstElementChild as HTMLElement
       if (node) node.replaceWith(next)
       node = next; redrawn.push(node)
@@ -507,6 +582,8 @@ $('#talk').onclick = async () => { if (boot.voice === false) return; try { const
 let lastPayload = ''
 function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   scope = payload.scope
+  settleQueuedApproval()
+  publishApproval()
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]))
   for (const [key, item] of sending) if (settled.has(item.clientId)) sending.delete(key)
   for (const note of payload.notes || []) notes.set(note.id, note); render() }

@@ -12,6 +12,9 @@ import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nex
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
+const APPROVAL_MODES = ['approve', 'approve_with_changes', 'not_yet']
+const approved = (approval) => ['approve', 'approve_with_changes'].includes(approval?.mode)
+const eastern = (at) => `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(at))} ET`
 const compact = (text) => text.replace(/\s+/g, ' ').trim()
 const delay = (value, fallback) => Number(value) > 0 ? Number(value) : fallback
 
@@ -119,7 +122,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       const scope = readScope(slug)?.scope
       const laneNotes = notes.filter(note => note.event === 'lane_note')
-      const comments = notes.filter(note => note.event !== 'lane_note')
+      const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
+      const comments = notes.filter(note => note.event !== 'lane_note' && !APPROVAL_MODES.includes(note.event))
       const joined = comments.map((note) => {
         const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
         const heading = headingOf(scope, note.anchor?.section ?? 'title')
@@ -138,7 +142,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         return `${alex}${note.event === 'reopen' ? ' reopened' : ' on'} ${note.thread} (§${heading} "${quote}"): ${text}`
       }).join(' | ')
       let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
-      if (line.length > 700) line = `[scoping ${slug}] Alex sent ${notes.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${notes[0].id - 1}`
+      if (line.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}`
       let retry = false, held = false
       async function send(key, targetPane, text, mark) {
         let status
@@ -175,6 +179,26 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       for (const note of laneNotes) await send(`lane:${note.id}`, pane, `[scoping ${slug}] Note from Alex's voice call (not a comment): ${note.text}`, (status) => {
         if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
       })
+      // Approval prompts remain separate, even when other feedback is waiting on the pane.
+      if (!held && !retry) for (const note of approvalNotes) {
+        const approval = scope.approval
+        const alex = `Alex${note.via === 'admin' ? ' in Admin' : note.via === 'voice' ? ' by voice' : ''}`
+        const text = compact(note.text)
+        const atEt = approval.mode === note.event && approval.comment === note.text ? approval.at_et : eastern(note.at)
+        const revision = approval.revision
+        const count = scope.threads.filter((thread) => thread.resolution?.how === 'approve' && thread.resolution.at === approval.at).length
+        const closedLine = count ? ` ${count} open thread${count === 1 ? '' : 's'} closed with your recommendation${count === 1 ? '' : 's'}.` : ''
+        const noteLine = !text ? '' : text.length > 600
+          ? ` Alex's note (long, in full at ${join(root, slug, 'APPROVAL.md')}): "${text.slice(0, 300)}…"`
+          : ` Alex's note: "${text}"`
+        const line = note.event === 'not_yet'
+          ? `[scoping ${slug}] NOT YET from ${alex} (r${revision})${text.length > 600 ? `.${noteLine}` : `: "${text}"`} Keep scoping; answer it on the doc.`
+          : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
+        await send(`approval:${note.id}`, pane, line, (status) => {
+          if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+        })
+        if (held || retry) break
+      }
       const batches = new Map()
       for (const target of targets) {
         if (!batches.has(target.pane)) batches.set(target.pane, [])
@@ -293,13 +317,18 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       return sendJson(res, 404, { error: 'not found' })
     }
+    const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit'].includes(verb)
-    if (!docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!approvalWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
+    if (approvalWrite && !relay) {
+      if (!human) return sendJson(res, 403, { error: 'only Alex approves' })
+      requireHumanPath(req)
+    }
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (docWrite && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
@@ -311,6 +340,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const body = await readJson(req)
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
+    if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
+      || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
     if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
       || typeof body.body_md !== 'string' || (body.heading !== undefined && typeof body.heading !== 'string'))) return sendJson(res, 400, { error: 'invalid section patch' })
     if (body.via !== undefined && body.via !== (relay ? 'admin' : 'voice')) return sendJson(res, 400, { error: 'invalid via' })
@@ -318,12 +349,67 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, docWrite, sectionWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
+      if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision) })
       return sendJson(res, result.error === 'unslop' ? 422 : newThread && !result.duplicate ? 201 : 200, result)
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
+  }
+
+  async function moveApprovedTab(slug, revision) {
+    try {
+      const pane = readScope(slug)?.scope?.pane
+      const tab = JSON.parse(await promptPane(['pane', 'get', pane])).result?.pane?.tab_id
+      if (!tab) return
+      const label = JSON.parse(await promptPane(['tab', 'get', tab])).result?.tab?.label
+      if (typeof label === 'string' && label.startsWith('[scoping]')) await promptPane(['tab', 'rename', tab, label.slice(9).trim()])
+      await new Promise((resolve, reject) => execFile(process.env.UNBLOCK_HERDR_LANE || join(homedir(), '.local/bin/herdr-lane'), ['section', tab, 'inflight', '--by', 'alex', '--note', `scope approved r${revision}`], { timeout: 10000 }, (error) => error ? reject(error) : resolve()))
+    } catch { /* Moving the tab is best effort; the approval is already durable. */ }
+  }
+
+  function approveScope(slug, scope, body, human) {
+    const comment = (body.comment ?? '').replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
+    if (comment.length > 4000 || (body.mode !== 'approve' && !comment)) bad('invalid comment')
+    if (body.client_id && body.client_id === scope.approval?.client_id) return { approval: scope.approval, duplicate: true }
+    if (approved(scope.approval)) bad('already approved', 409)
+    const at = new Date().toISOString(), at_et = eastern(at), closed = []
+    scope.approval = { mode: body.mode, by: 'alex', who: human.login, at, at_et, revision: scope.revision, comment,
+      ...(body.via !== undefined ? { via: body.via } : {}), ...(body.client_id !== undefined ? { client_id: body.client_id } : {}) }
+    if (approved(scope.approval)) for (const thread of scope.threads) {
+      if (thread.status !== 'open') continue
+      thread.status = 'resolved'
+      thread.resolution = { decision: thread.recommendation ?? 'Approved with the scope', alex_words: null, by: 'alex', how: 'approve', at, confirmed_at: at, revision: scope.revision }
+      closed.push(thread.id)
+    }
+    scope.updated_at = at
+    const problems = validateScope(scope)
+    if (problems.length) bad(problems[0])
+    const dir = join(root, slug)
+    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nMode: ${body.mode}\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${human.login}\nVia: ${body.via ?? 'page'}\n\n${comment}\n`)
+    const index = join(root, 'INDEX.md')
+    const previous = existsSync(index) ? readFileSync(index, 'utf8') : ''
+    const text = compact(comment)
+    const log = `- ${at_et} · ${slug} r${scope.revision} · ${body.mode === 'approve' ? 'approved' : body.mode === 'approve_with_changes' ? 'approved with changes' : 'not yet'} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
+    const heading = /^## Approvals[ \t]*$/m.exec(previous)
+    let updated
+    if (heading) {
+      const start = previous.indexOf('\n', heading.index)
+      const next = start < 0 ? -1 : previous.slice(start + 1).search(/^## /m)
+      const end = next < 0 ? previous.length : start + 1 + next
+      updated = previous.slice(0, end) + (end && previous[end - 1] !== '\n' ? '\n' : '') + log + previous.slice(end)
+    } else updated = previous + (previous && !previous.endsWith('\n') ? '\n' : '') + '\n## Approvals\n' + log
+    writeFileSync(index, updated)
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: body.mode, text: comment, who: human.login, via: body.via })
+    emit(slug, 'note', note)
+    const entry = listeners.get(slug)
+    if (entry) entry.meta = metadata(slug)
+    emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
+    schedule(slug)
+    return { approval: scope.approval, closed, revision: scope.revision }
   }
 
   function tagTargets(scope, text) {
@@ -340,11 +426,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, docWrite, sectionWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, approvalWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
+    if (approvalWrite) return approveScope(slug, scope, body, human)
     const storedSections = scope.doc.sections
     if (sectionWrite) {
       if (!storedSections.some((section) => section.id === threadId)) bad('no such section', 404)

@@ -363,3 +363,27 @@ body.zoom-open { overflow: hidden; }
 .video-stage video { display: block; max-width: 100%; height: auto; max-height: 70vh; }
 .fig-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
 .fig-actions a { font-size: 13px; color: var(--ac); text-underline-offset: 2px; }
+
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.title-row h1 { flex: 1; min-width: 0; }
+.title-row > .btn { flex-shrink: 0; }
+body.embed .title-row h1 { display: none; }
+.approval { padding: 14px 16px; margin: 12px 0 20px; border: 1px solid var(--hairline); border-radius: var(--radius-small); background: var(--fill-1); font-size: 14px; }
+.approval-note { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
+dialog.approve { width: min(540px, calc(100% - 32px)); box-sizing: border-box; border: 1px solid var(--hairline); border-radius: var(--radius-panel); background: var(--raised); color: var(--ink); padding: 24px; box-shadow: var(--shadow-2); }
+dialog.approve::backdrop { background: rgb(0 0 0 / .35); }
+dialog.approve h2 { margin: 0 0 12px; }
+dialog.approve .approve-count { color: var(--muted); font-size: 14px; }
+dialog.approve fieldset { border: 0; padding: 0; margin: 20px 0; }
+dialog.approve legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+dialog.approve fieldset label { display: flex; align-items: baseline; gap: 8px; font-size: 14px; margin: 12px 0; }
+dialog.approve input { flex-shrink: 0; }
+dialog.approve .approve-note-label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+dialog.approve textarea { width: 100%; box-sizing: border-box; background: var(--ground); color: var(--ink); border: 1px solid var(--control); border-radius: var(--radius-small); padding: 12px; font: inherit; resize: vertical; }
+dialog.approve .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+dialog.approve .btn:disabled { opacity: .5; cursor: default; }
+@media (max-width: 599px) {
+  .title-row { gap: 8px; margin-bottom: 12px; }
+  .title-row h1 { flex-basis: 100%; }
+  dialog.approve { width: 100%; max-width: 100%; max-height: 90dvh; margin: auto 0 0; border-radius: var(--radius-panel) var(--radius-panel) 0 0; padding: 20px; }
+}

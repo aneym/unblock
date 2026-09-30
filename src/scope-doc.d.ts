@@ -48,7 +48,7 @@ export interface Resolution {
    * How Alex settled it: 'take' (took the recommendation), 'own' (his own answer, "Something else"),
    * 'resolve' (the ⋯ menu's Resolve). Absent when the lane resolved it.
    */
-  how?: 'take' | 'own' | 'resolve'
+  how?: 'take' | 'own' | 'resolve' | 'approve'
   at: string
   /** Set when the lane confirms a resolution Alex made (after rewriting the doc). */
   confirmed_at: string | null
@@ -89,6 +89,18 @@ export type DocAsset = { type: 'image'; width: number | null; height: number | n
   | { type: 'video' | 'html'; width?: number | null; height?: number | null }
   | { type: 'mock'; width: number | null; height: number | null; light: string; dark: string | null; html: string; frame: 'desktop' | 'phone' }
 
+export interface ScopeApproval {
+  mode: 'approve' | 'approve_with_changes' | 'not_yet'
+  by: 'alex'
+  who: string
+  at: string
+  at_et: string
+  revision: number
+  comment: string
+  via?: 'voice' | 'admin'
+  client_id?: string
+}
+
 export interface ScopeV2 {
   version: 2
   slug: string
@@ -98,6 +110,7 @@ export interface ScopeV2 {
   revision: number
   updated_at: string
   doc: { sections: DocSection[]; assets?: Record<string, DocAsset> }
+  approval?: ScopeApproval
   threads: Thread[]
 }
 

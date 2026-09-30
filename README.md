@@ -287,6 +287,8 @@ unblock scope resolve demo T4
 unblock scope threads demo --open
 ```
 
+Approve scope on the page with an optional final note; the lane receives APPROVED and the note, then moves to build (with changes: fold the note into the doc first).
+
 Use a fence with opening line `` ```demo ``, then `src: demo.html` (or an https URL) and closing line `` ``` ``; optional keys are `height`, `frame` and `allow`, and local `src` files are uploaded.
 Use `` ```video `` with `src: recording.mp4` and optional `poster: cover.png`, then `` ``` ``; local `src`/`poster` files are uploaded, and a following `Figure:` caption anchors threads.
 
