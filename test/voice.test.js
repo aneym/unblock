@@ -23,7 +23,7 @@ test('deck sorts and sends approvals, unanswered secrets and pastes to the scree
   ]
   const deck = voiceDeck(items)
   assert.deepEqual(deck.voice.map((item) => item.ticket), ['ub_voice', 'ub_answered'])
-  assert.deepEqual(deck.screen.map(({ reason }) => reason), ['paste', 'approval', 'secret'])
+  assert.deepEqual(deck.screen.map(({ reason }) => reason), ['approval', 'paste', 'secret'])
 })
 
 test('preview guards the exact panel payload and a changed or absent preview never posts', async () => {

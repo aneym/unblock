@@ -215,7 +215,9 @@ test('15. show everything clears focus and restores global numbering', async () 
   await session.handle('show_queue', { project: 'Recruiter' })
   assert.equal((await session.handle('ask_read', { n: 1 })).ticket, b.ticket)
   assert.deepEqual((await session.handle('show_queue', { all: true })).ui, { do: 'show_list', all: true })
-  assert.equal((await session.handle('ask_read', { n: 1 })).ticket, a.ticket)
+  // Recruiter ranks above an unlisted project in the owner's project order.
+  assert.equal((await session.handle('ask_read', { n: 1 })).ticket, b.ticket)
+  assert.equal((await session.handle('ask_read', { n: 2 })).ticket, a.ticket)
 })
 
 test('16. file issue returns the dry route result and includes the shown ticket', async () => {

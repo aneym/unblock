@@ -20,6 +20,7 @@ const raw = (overrides = {}) => ({
   only_you: 'credential',
   tried: ['Checked the CLI and API; neither can reach the vault for this value.'],
   fields: [{ name: 'hostname', type: 'text', label: 'Hostname' }],
+  links: [{ url: 'https://dash.example.com/settings/staging/hosts', label: 'Hosts' }],
   ...overrides,
 })
 
