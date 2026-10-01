@@ -35,7 +35,8 @@ export function sectionPlain(section) {
 }
 export function anchorInSection(section, quote) {
   const text = sectionPlain(section)
-  const found = locateAnchor(text, { quote, prefix: '', suffix: '' })
+  const plain = plainText(quote)
+  const found = locateAnchor(text, { quote, prefix: '', suffix: '' }) ?? (plain !== quote ? locateAnchor(text, { quote: plain, prefix: '', suffix: '' }) : null)
   return found ? makeAnchor(section.id, text, found.start, found.end) : null
 }
 export function headingOf(scope, id) { return scope.doc.sections.find((s) => s.id === id)?.heading ?? id }

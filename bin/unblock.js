@@ -608,6 +608,21 @@ async function scope(args) {
       return output(data, `edited ${data.thread.id}`)
     }
     if (sub === 'ask') {
+      const from = words.indexOf('--from')
+      if (from >= 0) {
+        const file = words[from + 1]
+        if (file === undefined || opts['--section'] || opts['--quote'] || opts['--rec'] || opts['--why'] || opts['--option'] || words.filter((_, index) => index !== from && index !== from + 1).length) fail(usage)
+        let parsed
+        try { parsed = JSON.parse(readFileSync(file, 'utf8')) } catch (error) { fail(error.message) }
+        const list = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.questions : null
+        if (!Array.isArray(list)) fail('invalid questions')
+        const questions = list.map((item, index) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.section !== 'string' || !item.section.trim() || typeof item.quote !== 'string' || !item.quote.trim() || typeof item.question !== 'string' || !item.question.trim()) fail(`question ${index + 1}: missing section, quote or question`)
+          return { section: item.section, quote: item.quote, text: item.question, ...(item.rec !== undefined ? { recommendation: item.rec } : {}), ...(item.why !== undefined ? { why: item.why } : {}), ...(item.options !== undefined ? { options: item.options } : {}) }
+        })
+        const data = await request(`${base}/threads/batch`, { questions, ...keep })
+        return output(data, data.threads.map((thread) => `asked ${thread.id} on §${thread.anchor.section}`).join('\n'))
+      }
       if (!opts['--section'] || !opts['--quote'] || !words.length) fail(usage)
       const data = await request(`${base}/threads`, { section: opts['--section'], quote: opts['--quote'], text: words.join(' '), ...options, ...(opts['--rec'] !== undefined ? { recommendation: opts['--rec'] } : {}), ...(opts['--why'] !== undefined ? { why: opts['--why'] } : {}) })
       return output(data, `asked ${data.thread.id} on §${opts['--section']}`)

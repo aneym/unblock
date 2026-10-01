@@ -476,10 +476,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
+    const batchThread = req.method === 'POST' && parts.length === 3 && action === 'threads' && threadId === 'batch'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'delete'].includes(verb)
-    if (!appWrite && !kpiWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!appWrite && !kpiWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
+    if (batchThread && human) return sendJson(res, 403, { error: 'lanes ask through the CLI' })
     if (shipWrite) {
       if (!proxyIdentity(req) || relay) return sendJson(res, 403, { error: 'only Alex ships' })
       requireHumanPath(req)
@@ -523,12 +525,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay && body.via === undefined) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
       if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision) })
-      return sendJson(res, result.error === 'unslop' ? 422 : newThread && !result.duplicate ? 201 : 200, result)
+      return sendJson(res, result.error === 'unslop' ? 422 : ((newThread || batchThread) && !result.duplicate) ? 201 : 200, result)
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
@@ -673,7 +675,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -742,13 +744,32 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!cleaned.trim() && !(images.length && (newThread || verb === 'reply'))) bad('invalid text')
       return cleaned
     }
-    const setOptions = (thread) => {
+    const setOptions = (thread, source = body) => {
       if (thread.kind !== 'question') bad('only questions have options')
-      const options = body.options
-      if (!Array.isArray(options) || (options.length !== 0 && (options.length < 2 || options.length > 5)) || !options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200)) bad('invalid options')
-      if (options.length && (!thread.recommendation || options[0] !== thread.recommendation)) bad('options[0] must equal the recommendation')
+      let options = source.options
+      if (!Array.isArray(options) || !options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200)) bad('invalid options')
+      const fresh = source !== body || newThread || batchThread || body.recommendation !== undefined
+      if (fresh && options.length && thread.recommendation) options = [thread.recommendation, ...options.filter((option) => option !== thread.recommendation)]
+      if (options.length !== 0 && (options.length < 2 || options.length > 5 || options.some((option) => option.length > 200))) bad('invalid options')
+      if (!fresh && options.length && (!thread.recommendation || options[0] !== thread.recommendation)) bad('options[0] must equal the recommendation')
       if (options.length) thread.options = options
       else delete thread.options
+    }
+    const addAgentQuestion = (source) => {
+      const section = scope.doc.sections.find((s) => s.id === source.section)
+      const anchor = section && typeof source.quote === 'string' ? anchorInSection(section, source.quote) : null
+      if (!anchor) bad(`quote not found in §${source.section}`)
+      const kind = source.kind ?? 'question'
+      if (!['question', 'comment'].includes(kind) || (kind === 'comment' && (source.recommendation !== undefined || source.why !== undefined))) bad('invalid kind')
+      const thread = { id: nextThreadId(scope), anchor, author: 'agent', kind, status: 'open', messages: [{ from: 'agent', text: text(source.text), at, ...via, ...client, ...pictures }], created_at: at }
+      if (source.recommendation !== undefined) thread.recommendation = text(source.recommendation, 600)
+      if (source.why !== undefined) thread.why = text(source.why, 600)
+      if (source.options !== undefined) {
+        if (!thread.recommendation) bad('options require an agent recommendation')
+        setOptions(thread, source)
+      }
+      scope.threads.push(thread)
+      return thread
     }
     let thread, noteData = null, result
     if (docWrite) {
@@ -764,28 +785,31 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       scope.revision++
       result = { revision: scope.revision }
     } else if (newThread) {
-      let anchor
       if (human) {
-        anchor = normalizeAnchor(body.anchor)
+        const anchor = normalizeAnchor(body.anchor)
         const section = scope.doc.sections.find((s) => s.id === anchor?.section)
         if (!section || !locateAnchor(sectionPlain(section), anchor)) bad('invalid anchor')
-      } else {
-        const section = scope.doc.sections.find((s) => s.id === body.section)
-        anchor = section && typeof body.quote === 'string' ? anchorInSection(section, body.quote) : null
-        if (!anchor) bad(`quote not found in §${body.section}`)
-      }
-      const kind = human ? 'comment' : body.kind ?? 'question'
-      if (!['question', 'comment'].includes(kind) || (kind === 'comment' && (body.recommendation !== undefined || body.why !== undefined))) bad('invalid kind')
-      thread = { id: nextThreadId(scope), anchor, author: human ? 'alex' : 'agent', kind, status: 'open', messages: [{ from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
-      if (!human && body.recommendation !== undefined) thread.recommendation = text(body.recommendation, 600)
-      if (!human && body.why !== undefined) thread.why = text(body.why, 600)
-      if (body.options !== undefined) {
-        if (human || !thread.recommendation) bad('options require an agent recommendation')
-        setOptions(thread)
-      }
-      scope.threads.push(thread)
-      if (human) noteData = { event: 'new', text: thread.messages[0].text }
+        if (body.recommendation !== undefined || body.why !== undefined) bad('invalid kind')
+        thread = { id: nextThreadId(scope), anchor, author: 'alex', kind: 'comment', status: 'open', messages: [{ from: 'alex', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
+        if (body.options !== undefined) bad('options require an agent recommendation')
+        scope.threads.push(thread)
+        noteData = { event: 'new', text: thread.messages[0].text }
+      } else thread = addAgentQuestion(body)
       result = { thread }
+    } else if (batchThread) {
+      if (!Array.isArray(body.questions) || body.questions.length < 1 || body.questions.length > 20) bad('invalid questions')
+      const threads = []
+      for (let i = 0; i < body.questions.length; i++) {
+        const question = body.questions[i]
+        try {
+          if (!question || typeof question !== 'object' || Array.isArray(question)) bad('invalid question')
+          threads.push(addAgentQuestion({ ...question, kind: 'question' }))
+        } catch (error) {
+          error.message = `question ${i + 1}: ${error.message}`
+          throw error
+        }
+      }
+      result = { threads }
     } else {
       thread = scope.threads.find((t) => t.id === threadId)
       if (!thread) bad('no such thread', 404)
@@ -878,14 +902,16 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         return !stored || stored.heading !== section.heading || stored.body_md !== section.body_md
       }) : []
       const lint = docWrite ? lintDoc(changed, { keep }) : { findings: [], warnings: [] }
-      if (!docWrite) {
+      const lintSource = (source, name) => {
         for (const field of ['text', 'recommendation', 'why', 'decision']) {
-          if (typeof body[field] === 'string') lint.findings.push(...lintText(body[field], { keep }).map((finding) => ({ field, ...finding })))
+          if (typeof source[field] === 'string') lint.findings.push(...lintText(source[field], { keep }).map((finding) => ({ field: name ? `${name}.${field}` : field, ...finding })))
         }
-        for (const [index, option] of (Array.isArray(body.options) ? body.options : []).entries()) {
-          lint.findings.push(...lintText(option, { keep }).map((finding) => ({ field: `options[${index}]`, ...finding })))
+        for (const [index, option] of (Array.isArray(source.options) ? source.options : []).entries()) {
+          if (typeof option === 'string') lint.findings.push(...lintText(option, { keep }).map((finding) => ({ field: `${name ? `${name}.` : ''}options[${index}]`, ...finding })))
         }
       }
+      if (batchThread) body.questions.forEach((question, index) => lintSource(question, `questions[${index}]`))
+      else if (!docWrite) lintSource(body, '')
       if (lint.findings.length) return { error: 'unslop', findings: lint.findings }
       if (docWrite) result.warnings = lint.warnings
     }
