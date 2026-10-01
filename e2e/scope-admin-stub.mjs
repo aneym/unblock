@@ -3,7 +3,7 @@
 // scope is missing in Admin. This stub stands in for Rails Admin's mirrored scopes the way prod serves them:
 //   mode admin: boot events:false (the page polls every 2 s), approve:'host' and comment:'host' on every page, like Admin's boot.js.
 //   POST /w/api/live-scopes/demo/threads/T<n>/pick answers by /__pick?mode=missing (404, Admin before this fix) | fail (500) |
-//     slow (a sure 'take', 9 s late) | take | unsure; default missing.
+//     slow (a sure 'take', 9 s late) | slowno (a sure 'no', 7 s late) | take | unsure; default missing.
 //   /__envelope changes only the envelope (generated_at, received_at), the way each scopes push does; the scope is unchanged.
 //   /__ask[?id=T6] adds an open lane question (default T5, recommendation 'Yes').
 //   GET /frame/demo[?host=1] is a same-origin host page framing /scope/demo; with host=1 its iframe carries data-approve-host="1"
@@ -212,6 +212,7 @@ http.createServer((req, res) => {
       if (pickMode === 'fail') return send(500, { error: 'boom' })
       if (pickMode === 'unsure') return send(200, { choice: null, confidence: null, sure: false })
       if (pickMode === 'slow') return void setTimeout(() => send(200, sure), 9000)
+      if (pickMode === 'slowno') return void setTimeout(() => send(200, { choice: { action: 'no', label: 'No' }, confidence: 0.9, sure: true }), 7000)
       return send(200, sure)
     }
     if (m && req.method === 'POST' && m[1]) {

@@ -9,13 +9,16 @@ Serves web/dist-scope from e2e/scope-admin-stub.mjs in admin mode (events off, t
 port 4619. At 1280 and 390 it proves:
   1) ⌘Enter with a note on a lane question shows "Reading your note…" at once, with Take it / No / Something else
      disabled, while the picker works;
-  2) a picker slower than 6 s falls back to his rule: Took it, with Undo; the late answer changes nothing, and after the
-     10 s Undo window exactly one resolve goes out (how take, his note as alex_words);
-  3) a picker Admin doesn't have (404) takes it with Undo within 1.5 s, and the resolve goes out;
+  2) there is no client deadline (p6 12:05 ET, reversing the 6 s take fallback): a picker that answers 'no' after 7 s
+     is still reading at 6.5 s, then applies like an on-time answer (Said no, with Undo); after the 10 s Undo window
+     exactly one reject goes out with his note;
+  3) a failed pick never decides: "No, do not ship this" plus a 500 (and a note plus a 404, Admin before this fix)
+     resolves nothing, rejects nothing, keeps his draft, and shows "Couldn't read your note. Choose a button.";
   4) a real unsure answer sends nothing and asks him to pick (the buttons are hinted, enabled);
+  4b) ⌘Enter with no note still takes it with Undo, and the take goes out after 10 s;
   5) an envelope-only change (each scopes push) does not redraw the doc or steal his reply box; a real lane edit still lands;
   6) Approve scope shows on a host-mode page that no host draws for: unframed, or framed by a page whose iframe lacks
-     data-approve-host="1"; it does not show when the frame carries data-approve-host="1" (w.mjs draws it).
+     data-approve-host="1"; it does not show when the frame carries data-approve-host="1".
 usage: e2e/scope-admin-cmdenter.e2e.py [worktree] [--no-build]
 """
 import json, os, shutil, subprocess, sys, time, urllib.request
@@ -74,25 +77,40 @@ def cmd_enter(t, text):
 def scenario(phone, label):
     decided = lambda t: "const d = where(%s)?.querySelector('.decided'); " % json.dumps(t)
     steps = [{'wait_for': 'mark.hl[data-t="T1"]'}, {'wait': 400}]
-    # 1, 2: a slow picker.
-    steps += [*hook('pick?mode=slow', 200), *open_thread('T1', phone), *cmd_enter('T1', 'yes, go with Executor'), {'wait': 300},
+    couldnt = lambda t, note: (H + decided(t) + " const b = choices(%s); const p = where(%s)?.querySelector('.picking'); "
+        "const line = [...(where(%s)?.querySelectorAll('p, [role=alert], [role=status]') || [])].find((e) => vis(e) && e.textContent.includes('read your note. Choose a button.')); "
+        "return {ok: !d && !vis(p) && !!line && box(%s)?.value === %s && b.length === 3 && b.every((x) => !x.disabled), decided: !!d, picking: vis(p), line: line?.textContent, draft: box(%s)?.value, b: b.map((x) => x.disabled)}"
+        % (json.dumps(t), json.dumps(t), json.dumps(t), json.dumps(t), json.dumps(note), json.dumps(t)))
+    # 1, 2: a picker that answers 'no' after 7 s.
+    steps += [*hook('pick?mode=slowno', 200), *open_thread('T1', phone), *cmd_enter('T1', 'no, not Executor'), {'wait': 300},
               C(f'{label}: ⌘Enter shows "Reading your note…" at once', H + " const p = where('T1')?.querySelector('.picking'); return {ok: vis(p) && p.textContent.includes('Reading your note…'), text: p?.textContent}"),
               C(f'{label}: while reading, Take it / No / Something else are disabled', H + " const b = choices('T1'); return {ok: b.length === 3 && b.every((x) => x.disabled), n: b.length, disabled: b.map((x) => x.disabled)}"),
               {'shot': f'{label}-reading'},
-              {'wait': 6500},
-              C(f'{label}: a picker slower than 6 s falls back to Took it, with Undo', H + decided('T1') + " return {ok: vis(d) && d.textContent.includes('Took it') && d.textContent.includes('yes, go with Executor') && !!d.querySelector('[data-action=\"undo\"]'), text: d?.textContent}"),
-              {'shot': f'{label}-took-it'},
-              {'wait': 11500},
+              {'wait': 6200},
+              C(f'{label}: at 6.5 s it is still reading his note; nothing decided', H + decided('T1') + " const p = where('T1')?.querySelector('.picking'); return {ok: !d && vis(p), decided: d?.textContent, picking: vis(p)}"),
+              {'wait': 1500},
+              C(f'{label}: the late "no" applies like an on-time answer: Said no, with Undo', H + decided('T1') + " return {ok: vis(d) && d.textContent.includes('Said no') && d.textContent.includes('no, not Executor') && !!d.querySelector('[data-action=\"undo\"]'), text: d?.textContent}"),
+              {'shot': f'{label}-said-no'},
+              {'wait': 11000},
               *close(phone)]
-    # 3: Admin without a pick route.
-    steps += [*hook('ask?id=T5'), *hook('pick?mode=missing', 200), *open_thread('T5', phone), *cmd_enter('T5', 'sounds right'), {'wait': 1500},
-              C(f'{label}: with no picker route, ⌘Enter takes it with Undo within 1.5 s', H + decided('T5') + " return {ok: vis(d) && d.textContent.includes('Took it'), text: d?.textContent}"),
+    # 3: a failed pick never decides (500, then 404).
+    steps += [*hook('ask?id=T5'), *hook('pick?mode=fail', 200), *open_thread('T5', phone), *cmd_enter('T5', 'No, do not ship this'), {'wait': 1500},
+              C(f'{label}: a 500 from the picker decides nothing, keeps his draft and says so', couldnt('T5', 'No, do not ship this')),
+              {'shot': f'{label}-couldnt-read'},
+              *close(phone),
+              *hook('ask?id=T7'), *hook('pick?mode=missing', 200), *open_thread('T7', phone), *cmd_enter('T7', 'sounds right'), {'wait': 1500},
+              C(f'{label}: a 404 from the picker decides nothing, keeps his draft and says so', couldnt('T7', 'sounds right')),
               {'wait': 11000},
               *close(phone)]
     # 4: a real unsure answer.
     steps += [*hook('ask?id=T6'), *hook('pick?mode=unsure', 200), *open_thread('T6', phone), *cmd_enter('T6', 'hmm'), {'wait': 1500},
               C(f'{label}: an unsure answer sends nothing and asks him to pick', H + decided('T6') + " const b = choices('T6'); const p = where('T6')?.querySelector('.picking'); "
                 "return {ok: !d && !vis(p) && b.length === 3 && b.every((x) => !x.disabled && x.classList.contains('suggest')), decided: !!d, picking: vis(p), b: b.map((x) => [x.disabled, x.className])}"),
+              *close(phone)]
+    # 4b: no note is still take, with Undo.
+    steps += [*hook('ask?id=T8'), *open_thread('T8', phone), *cmd_enter('T8', ''), {'wait': 600},
+              C(f'{label}: ⌘Enter with no note takes it, with Undo', H + decided('T8') + " return {ok: vis(d) && d.textContent.includes('Took it') && !!d.querySelector('[data-action=\"undo\"]'), text: d?.textContent}"),
+              {'wait': 11000},
               *close(phone)]
     # 5: an envelope-only push.
     if phone:
@@ -190,11 +208,11 @@ def run():
             page_shot('/scope/demo', scenario(width < 600, label), width, 'light', label)
             posts = [e for e in entries(log) if e['method'] == 'POST' and e['path'].startswith('/w/api/live-scopes/demo/threads')]
             picks = [e['path'].rsplit('/', 2)[1] for e in posts if e['path'].endswith('/pick')]
-            check(f'{label}: ⌘Enter with a note asked the picker for T1, T5 and T6', picks == ['T1', 'T5', 'T6'], picks)
+            check(f'{label}: ⌘Enter with a note asked the picker for T1, T5, T7 and T6 (not T8, which had no note)', picks == ['T1', 'T5', 'T7', 'T6'], picks)
             writes = [e for e in posts if not e['path'].endswith('/pick') and '/T2/' not in e['path']]
-            got = [(e['path'].rsplit('/', 2)[1], e['path'].rsplit('/', 1)[1], (e.get('body') or {}).get('how'), (e.get('body') or {}).get('alex_words')) for e in writes]
-            check(f'{label}: exactly one take each for T1 and T5, his note as his words; nothing for T6',
-                  got == [('T1', 'resolve', 'take', 'yes, go with Executor'), ('T5', 'resolve', 'take', 'sounds right')], got)
+            got = [(e['path'].rsplit('/', 2)[1], e['path'].rsplit('/', 1)[1], (e.get('body') or {}).get('how'), (e.get('body') or {}).get('alex_words') or (e.get('body') or {}).get('text')) for e in writes]
+            check(f'{label}: one reject for T1 with his note, one take for T8; nothing for T5, T7 (failed picks) or T6 (unsure)',
+                  got == [('T1', 'reject', None, 'no, not Executor'), ('T8', 'resolve', 'take', 'Take the recommendation')], got)
             check(f'{label}: nothing was written to T2 by the envelope push', not [e for e in posts if '/T2/' in e['path']])
             for name, route, framed, host in (('unframed', '/scope/demo', False, False), ('framed-no-host', '/frame/demo', True, False), ('framed-host', '/frame/demo?host=1', True, True)):
                 reset(log)
