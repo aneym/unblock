@@ -174,7 +174,7 @@ mark.hl.flash { animation: flash .9s ease-out; }
 .rec { background: var(--fill-1); border-radius: 10px; padding: 9px 11px; display: grid; gap: 2px; }
 .other-options button { display: block; width: 100%; margin-top: 6px; }
 .btn.suggest, .other-options button.suggest { background: var(--ac-soft); border: 1px solid var(--ac); }
-.decided, .pick-hint { font-size: 13px; color: var(--tx2); }
+.decided, .pick-hint, .picking { font-size: 13px; color: var(--tx2); }
 .decided button { border: 0; background: none; color: var(--ac); padding: 0 4px; font-size: inherit; }
 .other-options button { text-align: left; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); font-size: 13.5px; line-height: 1.4; }
 .other-options button:hover { border-color: var(--control); background: var(--fill-1); }

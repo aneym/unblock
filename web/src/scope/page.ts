@@ -26,10 +26,11 @@ let showResolved = storage.get('scope:showResolved') === 'true'
 const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 0, showResolved, onPrev: () => step(-1), onNext: () => step(1), onShowResolved: checked => { showResolved = checked; storage.set('scope:showResolved', String(checked)); renderCards() } })
 let chrome: ReturnType<typeof mountPage> | null = null, chromeSignature = ''
 const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rails Admin' }
+function hostDrawsApprove() { try { return window.frameElement?.getAttribute('data-approve-host') === '1' } catch { return false } }
 function chromeSpec() {
   const actions: PageAction[] = []
   if (boot.comment !== 'host') actions.push({ id: 'comment', label: 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: 'Comment on the whole doc.' } } })
-  if (boot.approve !== 'host' && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
+  if ((boot.approve !== 'host' || !hostDrawsApprove()) && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
   if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: embed ? 'Talk' : 'Talk it through by voice', kind: 'screen-only', placement: embed ? 'title' : 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
   return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const, forwardKeys: true }
 }
@@ -386,7 +387,8 @@ function cardHtml(t: Thread) {
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') {
     const decision = askDecisions.get(t.id), suggested = askSuggestions.has(t.id) ? ' suggest' : ''
-    const choices = decision ? `<p class="decided">${esc(decision.choice.action === 'take' ? 'Took it' : decision.choice.action === 'option' ? `Chose: ${decision.choice.label}` : decision.choice.action === 'no' ? 'Said no' : 'Something else')}${decision.note ? ` · ${esc(decision.note)}` : ''} <button data-action="undo">Undo</button></p>` : `<div class="choices"><button class="btn${suggested}" data-action="take">Take it</button><button class="btn${suggested}" data-action="no">No</button><button class="btn${suggested}" data-action="else">Something else</button></div>${suggested ? '<p class="pick-hint">Pick one; your note goes with it.</p>' : ''}`
+    const reading = picking.has(t.id), off = reading ? ' disabled' : ''
+    const choices = decision ? `<p class="decided">${esc(decision.choice.action === 'take' ? 'Took it' : decision.choice.action === 'option' ? `Chose: ${decision.choice.label}` : decision.choice.action === 'no' ? 'Said no' : 'Something else')}${decision.note ? ` · ${esc(decision.note)}` : ''} <button data-action="undo">Undo</button></p>` : `<div class="choices"><button class="btn${suggested}" data-action="take"${off}>Take it</button><button class="btn${suggested}" data-action="no"${off}>No</button><button class="btn${suggested}" data-action="else"${off}>Something else</button></div>${reading ? '<p class="picking" role="status">Reading your note…</p>' : suggested ? '<p class="pick-hint">Pick one; your note goes with it.</p>' : ''}`
     body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}</div>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
@@ -836,9 +838,22 @@ async function pickAsk(t: Thread) {
   const note = getDraft(t.id).trim(), images = getImages(t.id).map(image => image.id)
   focus(t.id, false, false)
   picking.add(t.id)
+  if (note) renderCards()
   let result: { choice: AskChoice | null; sure: boolean } = { choice: { action: 'take', label: t.recommendation! }, sure: true }
   try {
-    if (note) { try { result = await api(`${endpoint}/threads/${t.id}/pick`, { text: note }) } catch { result = { choice: null, sure: false } } }
+    if (note) {
+      let settled = false
+      try {
+        const picked = await new Promise<{ choice: AskChoice | null; sure: boolean } | undefined>((resolve, reject) => {
+          const timer = window.setTimeout(() => { settled = true; resolve(undefined) }, 6000)
+          api<{ choice: AskChoice | null; sure: boolean }>(`${endpoint}/threads/${t.id}/pick`, { text: note }).then(
+            value => { clearTimeout(timer); if (settled) return; resolve(value) },
+            error => { clearTimeout(timer); if (settled) return; reject(error) }
+          )
+        })
+        if (picked) result = picked
+      } catch { result = { choice: { action: 'take', label: t.recommendation! }, sure: true } }
+    }
     if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
     if (!result.sure || !result.choice) { askSuggestions.set(t.id, result.choice); renderCards(); return }
     const choice = result.choice
@@ -851,7 +866,7 @@ async function pickAsk(t: Thread) {
       void action(choice.action, target, images)
     }, 10_000)
     askDecisions.set(t.id, { choice, note, timer }); renderCards()
-  } finally { picking.delete(t.id) }
+  } finally { picking.delete(t.id); renderCards() }
 }
 const zoom = document.createElement('div')
 zoom.className = 'zoom'; zoom.hidden = true; zoom.setAttribute('role', 'dialog'); zoom.setAttribute('aria-modal', 'true')
@@ -995,7 +1010,7 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
