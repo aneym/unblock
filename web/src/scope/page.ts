@@ -840,22 +840,18 @@ async function pickAsk(t: Thread) {
   if (pending.has(t.id) || sending.has(t.id) || picking.has(t.id) || askDecisions.has(t.id) || uploading.get(t.id)) return
   const note = getDraft(t.id).trim(), images = getImages(t.id).map(image => image.id)
   focus(t.id, false, false)
-  picking.add(t.id)
+  picking.add(t.id); errors.delete(t.id)
   if (note) renderCards()
   let result: { choice: AskChoice | null; sure: boolean } = { choice: { action: 'take', label: t.recommendation! }, sure: true }
   try {
     if (note) {
-      let settled = false
       try {
-        const picked = await new Promise<{ choice: AskChoice | null; sure: boolean } | undefined>((resolve, reject) => {
-          const timer = window.setTimeout(() => { settled = true; resolve(undefined) }, 6000)
-          api<{ choice: AskChoice | null; sure: boolean }>(`${endpoint}/threads/${t.id}/pick`, { text: note }).then(
-            value => { clearTimeout(timer); if (settled) return; resolve(value) },
-            error => { clearTimeout(timer); if (settled) return; reject(error) }
-          )
-        })
-        if (picked) result = picked
-      } catch { result = { choice: { action: 'take', label: t.recommendation! }, sure: true } }
+        result = await api<{ choice: AskChoice | null; sure: boolean }>(`${endpoint}/threads/${t.id}/pick`, { text: note })
+      } catch {
+        if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
+        errors.set(t.id, "Couldn't read your note. Choose a button.")
+        return
+      }
     }
     if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
     if (!result.sure || !result.choice) { askSuggestions.set(t.id, result.choice); renderCards(); return }
