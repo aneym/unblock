@@ -14,6 +14,7 @@ import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
 import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS } from '../src/scope-doc.js'
+import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const [command = 'list', ...input] = process.argv.slice(2)
@@ -792,6 +793,121 @@ async function daemonCmd(args) {
     output({ running: false, base: null, pid: null, backend: null, public_origin: null }, 'not running')
   }
 }
+const MCP_PROTOCOL = '2025-06-18'
+
+function mcpErrorCode(body, status, token) {
+  const raw = typeof body?.error === 'string'
+    ? body.error
+    : body?.error?.message || body?.error?.code || `HTTP_${status}`
+  const text = String(raw).split('\n')[0]
+  if ((token && text.includes(token)) || railsSecretIn(text)) return 'error'
+  return text || 'error'
+}
+
+function parseMcpBody(type, text) {
+  if (!text) return null
+  if (String(type || '').includes('text/event-stream')) {
+    const events = []
+    let data = []
+    for (const line of text.split(/\r?\n/)) {
+      if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+      else if (line === '' && data.length) { events.push(data.join('\n')); data = [] }
+    }
+    if (data.length) events.push(data.join('\n'))
+    const last = events.at(-1)
+    return last ? JSON.parse(last) : null
+  }
+  return JSON.parse(text)
+}
+
+function openAsks(result) {
+  const piles = [result?.structuredContent, result]
+  for (const pile of piles) {
+    if (pile && typeof pile.open === 'number') return pile.open
+  }
+  const text = Array.isArray(result?.content) ? result.content.map((part) => part?.text || '').join('\n') : ''
+  if (text) {
+    try {
+      const parsed = JSON.parse(text)
+      if (typeof parsed.open === 'number') return parsed.open
+    } catch { /* plain text */ }
+    const match = text.match(/(\d+)\s+open asks/)
+    if (match) return Number(match[1])
+  }
+  const error = new Error('summary_unavailable')
+  error.code = 'summary_unavailable'
+  throw error
+}
+
+async function mcpPost(resource, token, message, sessionId) {
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${token}`,
+  }
+  if (sessionId) {
+    headers['mcp-session-id'] = sessionId
+    headers['mcp-protocol-version'] = MCP_PROTOCOL
+  }
+  const response = await fetch(resource, {
+    method: 'POST', headers, body: JSON.stringify(message), redirect: 'error', signal: AbortSignal.timeout(15_000),
+  })
+  const text = await response.text()
+  let body
+  try { body = parseMcpBody(response.headers.get('content-type'), text) } catch { body = null }
+  if (!response.ok || body?.error) {
+    const error = new Error(mcpErrorCode(body, response.status, token))
+    error.code = error.message
+    throw error
+  }
+  return { body, sessionId: response.headers.get('mcp-session-id') || sessionId }
+}
+
+async function hostedOpenAsks(resource, token) {
+  const initialized = await mcpPost(resource, token, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: MCP_PROTOCOL, capabilities: {}, clientInfo: { name: 'unblock', version: '0.1.0' } },
+  })
+  await mcpPost(resource, token, { jsonrpc: '2.0', method: 'notifications/initialized' }, initialized.sessionId).catch((error) => {
+    if (error.code === 'HTTP_400' || error.message === 'HTTP_400') return null
+    throw error
+  })
+  const called = await mcpPost(resource, token, {
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: 'queue.summary', arguments: {} },
+  }, initialized.sessionId)
+  const result = called.body?.result
+  if (result?.isError) {
+    const error = new Error('tool_error')
+    error.code = 'tool_error'
+    throw error
+  }
+  return openAsks(result)
+}
+
+async function rails(args) {
+  const { rest } = flags(args, {})
+  const [sub] = rest
+  if (rest.length !== 1 || !['connect', 'status'].includes(sub)) fail('usage: unblock rails connect|status')
+  if (sub === 'connect') {
+    const result = await railsConnect()
+    return output({ client_id: result.client_id }, `Connected as client ${result.client_id.slice(0, 8)}…`)
+  }
+  const token = await railsAccessToken()
+  const open = await hostedOpenAsks(await railsResource(), token)
+  output({ open }, `Hosted Unblock: connected, ${open} open asks`)
+}
+
+// Rails errors can carry server text; only a plain code reaches stderr.
+function railsErrorCode(error) {
+  const code = String(error?.code || error?.message || '')
+  return /^[a-z_]{1,40}$/.test(code) ? code : 'rails_error'
+}
+
 function help() {
   console.log(`unblock [list] [--aside] [--all] [--project P] [--json]   what is waiting, grouped by project
 unblock show <ticket> [--json]                   one ask in full (never secret values)
@@ -825,6 +941,8 @@ unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
   --from uploads local image lines and renders HTML mocks ("phone" = 390px).
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
+unblock rails connect                            approve once on rails.so
+unblock rails status                             hosted Unblock connection and open asks
 unblock mcp                                      run the MCP server
 
 --json works on every command except reveal, ui and mcp.
@@ -847,9 +965,10 @@ try {
   else if (command === 'mirror') await mirror(input)
   else if (command === 'scope') await scope(input)
   else if (command === 'daemon') await daemonCmd(input)
+  else if (command === 'rails') await rails(input)
   else if (command === 'ui' || command === 'mcp') {
     if (input.includes('--json')) fail(`${command} does not support --json`)
     const path = command === 'ui' ? join(ROOT, 'plugin', 'tui.js') : join(ROOT, 'src', 'mcp.js')
     spawn(process.execPath, [path, ...input], { stdio: 'inherit' }).on('exit', (code) => process.exit(code ?? 0))
   } else fail(`unknown command: ${command}\nTry: unblock help`)
-} catch (error) { fail(error.message, 1) }
+} catch (error) { fail(command === 'rails' ? railsErrorCode(error) : error.message, 1) }
