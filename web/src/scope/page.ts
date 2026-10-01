@@ -4,6 +4,7 @@ import './page-chrome.css'
 import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
 import { appOf, orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval, type CommentImage } from '../../../src/scope-doc.js'
 import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
+import { demoNote, demoPins, readDemoMessage, type DemoNoteMessage, type DemoReadyMessage } from '../../../src/demo-host.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
@@ -89,6 +90,13 @@ function updateImageBox(key: string) {
     const send = reply.querySelector<HTMLButtonElement>('.btn.primary'); if (send) { send.disabled = !!uploading.get(key) || pending.has(key) || sending.has(key); if (send.dataset.action === 'reply' && getImages(key).length) send.hidden = false }
   })
 }
+async function uploadPicture(bytes: Blob, type: string): Promise<CommentImage> {
+  const res = await fetch(`${endpoint}/assets`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes })
+  const result = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`)
+  if (typeof result.id !== 'string' || !(result.width > 0) || !(result.height > 0)) throw new Error('Could not upload picture')
+  return { id: result.id, width: result.width, height: result.height }
+}
 async function addImages(box: HTMLTextAreaElement, files: File[]) {
   const key = box.dataset.draft!
   for (const file of files) {
@@ -105,9 +113,7 @@ async function addImages(box: HTMLTextAreaElement, files: File[]) {
         canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close()
         bytes = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not read that image')), 'image/jpeg', 0.9))
       }
-      const response = await fetch(`${endpoint}/assets`, { method: 'POST', headers: { 'Content-Type': file.type }, body: bytes })
-      if (response.status === 404 || response.status === 405) throw new Error('Pictures need the newer Admin.')
-      const image = await response.json(); if (!response.ok) throw new Error(image.error || `HTTP ${response.status}`)
+      const image = await uploadPicture(bytes, file.type)
       saveImages(key, [...getImages(key), { id: image.id, width: image.width, height: image.height }])
     } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not upload picture') }
     finally { uploading.set(key, Math.max(0, (uploading.get(key) || 1) - 1)); updateImageBox(key) }
@@ -279,7 +285,7 @@ function clientId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 async function write(route: string, body: Record<string, unknown>, id?: string) {
-  const client_id = clientId()
+  const client_id = typeof body.client_id === 'string' && body.client_id ? body.client_id : clientId()
   const res = await fetch(`${endpoint}/threads${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, client_id }) })
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`)
   if (res.status === 202 || result.queued === true) {
@@ -295,7 +301,7 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
   }
   return result
 }
-async function postThread(body: { anchor: Anchor; text: string; via?: 'voice'; images?: string[] }) { return write('', body) }
+async function postThread(body: { anchor: Anchor; text: string; via?: 'voice'; images?: string[]; client_id?: string }) { return write('', body) }
 async function postReply(id: string, body: { text: string; via?: 'voice'; images?: string[] }) { return write(`/${id}/reply`, body, id) }
 async function postResolve(id: string, body: { decision: string; alex_words?: string; how?: 'take' | 'own' | 'resolve'; via?: 'voice'; images?: string[] }) { return write(`/${id}/resolve`, body, id) }
 async function postReject(id: string, body: { text: string; via?: 'voice'; images?: string[] }) { return write(`/${id}/reject`, body, id) }
@@ -500,6 +506,8 @@ function render() {
     if (range && sel) sel.setBaseAndExtent(backward ? range.endContainer : range.startContainer, backward ? range.endOffset : range.startOffset, backward ? range.startContainer : range.endContainer, backward ? range.startOffset : range.endOffset)
   }
   if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); if (target && document.activeElement !== target) target.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
+  watchAutoplay()
+  postDemoPins()
 }
 function renderCards() {
   syncFigureFocus()
@@ -614,8 +622,11 @@ function updateCount() {
 // Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
 function seekMoment(id: string) {
   const anchor = scope?.threads.find(t => t.id === id)?.anchor as Anchor | undefined
-  const video = figureFor(marks(id)[0])?.querySelector<HTMLVideoElement>('video')
+  const figure = figureFor(marks(id)[0])
+  const video = figure?.querySelector<HTMLVideoElement>('video')
   if (video && anchor?.t != null) video.currentTime = anchor.t
+  const frame = figure?.querySelector('iframe')
+  if (frame?.contentWindow && anchor?.t != null) frame.contentWindow.postMessage({ type: 'rails-demo/seek', v: 1, t: anchor.t, region: anchor.region ?? null, pause: true }, '*')
 }
 function threadTarget(id: string) {
   const thread = scope?.threads.find(t => t.id === id)
@@ -921,6 +932,99 @@ document.addEventListener('keydown', e => {
   const button = target.closest('.reply')?.querySelector<HTMLElement>('.btn.primary[data-action]')
   if (button) void action(button.dataset.action!, button)
 })
+function captionAnchorOf(figure: HTMLElement): Anchor | null {
+  const caption = figure.querySelector('figcaption')
+  if (!caption) return null
+  const range = document.createRange(); range.selectNodeContents(caption)
+  const anchor = anchorFromRange(range)
+  if (!anchor) return null
+  const video = figure.querySelector('video')
+  if (video && video.currentTime >= .5) anchor.t = Math.round(video.currentTime * 10) / 10
+  return anchor
+}
+const demoFrames = new WeakMap<Window, HTMLElement>()
+type DemoFigure = HTMLElement & { demoReady?: DemoReadyMessage }
+function mountDemo(stage: HTMLElement) {
+  if (stage.querySelector('iframe')) return
+  const frame = document.createElement('iframe')
+  frame.src = stage.dataset.src || ''
+  frame.setAttribute('sandbox', stage.dataset.sandbox || '')
+  if (stage.dataset.allow) frame.setAttribute('allow', stage.dataset.allow)
+  frame.referrerPolicy = 'no-referrer'
+  frame.title = stage.dataset.title || 'Demo'
+  frame.loading = 'lazy'
+  stage.replaceChildren(frame)
+  const figure = stage.closest('figure')
+  if (frame.contentWindow && figure) demoFrames.set(frame.contentWindow, figure)
+  layout()
+}
+const autoplayStages = new Set<HTMLElement>()
+const demoObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue
+    const stage = entry.target as HTMLElement
+    demoObserver.unobserve(stage)
+    autoplayStages.delete(stage)
+    mountDemo(stage)
+  }
+}, { rootMargin: '200px' })
+function watchAutoplay() {
+  const live = new Set(doc.querySelectorAll<HTMLElement>('.demo-stage[data-autoplay="1"]'))
+  for (const stage of autoplayStages) if (!live.has(stage)) { demoObserver.unobserve(stage); autoplayStages.delete(stage) }
+  for (const stage of live) {
+    if (stage.querySelector('iframe') || autoplayStages.has(stage)) continue
+    autoplayStages.add(stage)
+    demoObserver.observe(stage)
+  }
+}
+function postPins(figure: HTMLElement, frame: HTMLIFrameElement) {
+  const anchor = captionAnchorOf(figure)
+  if (!anchor || !scope || !frame.contentWindow) return
+  frame.contentWindow.postMessage(demoPins(scope.threads, anchor), '*')
+}
+function postDemoPins() {
+  if (!scope) return
+  for (const frame of doc.querySelectorAll<HTMLIFrameElement>('.demo-stage iframe')) {
+    const figure = frame.closest('figure')
+    if (!figure || !frame.contentWindow || !demoFrames.has(frame.contentWindow)) continue
+    postPins(figure, frame)
+  }
+}
+function shotBlob(dataUrl: string) {
+  const binary = atob(dataUrl.slice(dataUrl.indexOf(',') + 1))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: 'image/png' })
+}
+function demoAck(frame: HTMLIFrameElement, id: string, ok: boolean, error?: string) {
+  frame.contentWindow?.postMessage({ type: 'rails-demo/ack', v: 1, id, ok, ...(error ? { error } : {}) }, '*')
+}
+async function fileDemoNote(figure: HTMLElement, frame: HTMLIFrameElement, msg: DemoNoteMessage) {
+  try {
+    const caption = captionAnchorOf(figure)
+    const note = caption && demoNote(msg, caption)
+    if (!note?.anchor) { demoAck(frame, msg.id, false, 'No caption'); return }
+    let shotId = ''
+    if (msg.shot) shotId = (await uploadPicture(shotBlob(msg.shot), 'image/png')).id
+    await postThread({ anchor: note.anchor, text: note.text, images: shotId ? [shotId] : [], client_id: `demo-${msg.id}` })
+    demoAck(frame, msg.id, true)
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : 'Could not file the note').replace(/\s+/g, ' ').trim().slice(0, 120) || 'Could not file the note'
+    demoAck(frame, msg.id, false, reason)
+  }
+}
+window.addEventListener('message', event => {
+  const source = event.source
+  if (!source || source === window) return
+  const figure = demoFrames.get(source as Window)
+  if (!figure?.isConnected || !scope) return
+  const msg = readDemoMessage(event.data)
+  if (!msg) return
+  const frame = figure.querySelector('iframe')
+  if (!frame || frame.contentWindow !== source) return
+  if (msg.type === 'rails-demo/ready') { (figure as DemoFigure).demoReady = msg; postPins(figure, frame) }
+  else if (msg.type === 'rails-demo/note') void fileDemoNote(figure, frame, msg)
+})
 document.addEventListener('click', e => {
   if (Date.now() < suppressThreadClick) { e.preventDefault(); return }
   const target = e.target as HTMLElement
@@ -930,20 +1034,12 @@ document.addEventListener('click', e => {
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
   if (!zoom.hidden) return
   const demo = target.closest<HTMLButtonElement>('button.demo-try')
-  if (demo) {
-    const stage = demo.closest<HTMLElement>('.demo-stage')!, frame = document.createElement('iframe')
-    frame.src = stage.dataset.src!; frame.setAttribute('sandbox', stage.dataset.sandbox!); if (stage.dataset.allow) frame.setAttribute('allow', stage.dataset.allow)
-    frame.referrerPolicy = 'no-referrer'; frame.title = stage.dataset.title || 'Demo'; frame.loading = 'lazy'
-    stage.replaceChildren(frame); layout(); return
-  }
+  if (demo) { const stage = demo.closest<HTMLElement>('.demo-stage'); if (stage) mountDemo(stage); return }
   const figureButton = target.closest<HTMLButtonElement>('button.fig-comment')
   if (figureButton) {
-    const figure = figureButton.closest('figure')!, caption = figure.querySelector('figcaption')!
-    const range = document.createRange(); range.selectNodeContents(caption)
-    const anchor = anchorFromRange(range) as Anchor | null
-    if (!anchor) return
-    const video = figure.querySelector('video')
-    if (video && video.currentTime >= .5) anchor.t = Math.round(video.currentTime * 10) / 10
+    const figure = figureButton.closest('figure')
+    const anchor = figure && captionAnchorOf(figure)
+    if (!figure || !anchor) return
     composing = anchor; selection = null; selectionTop = figure.getBoundingClientRect().top + scrollY
     renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return
   }

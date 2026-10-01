@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
       generateBundle() {
         this.emitFile({ type: 'asset', fileName: 'boot.js', source: '// Rails Admin may replace this file with scope boot configuration.\n' })
       },
-      writeBundle() { renameSync(resolve(dir, 'dist-scope/scope.html'), resolve(dir, 'dist-scope/index.html')) },
+      writeBundle(output) { const out = output.dir || resolve(dir, 'dist-scope'); renameSync(resolve(out, 'scope.html'), resolve(out, 'index.html')) },
     } satisfies Plugin] : [])],
   }
 })

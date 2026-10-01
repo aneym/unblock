@@ -4,6 +4,23 @@ const collapse = (text) => String(text).replace(/\s+/g, ' ').trim()
 const anchorText = (text) => collapse(typeof text === 'string' ? text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '') : '')
 const fold = (text) => text.split('').map((ch) => ch.toLowerCase().length === 1 ? ch.toLowerCase() : ch).join('')
 
+const round3 = (n) => Math.round(n * 1000) / 1000
+
+/** A demo highlight, fractions of the stage. Null when it is not four finite numbers or the box is empty. */
+export function cleanRegion(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+  const proto = Object.getPrototypeOf(input)
+  if (proto !== Object.prototype && proto !== null) return null
+  const { x, y, w, h } = input
+  if (![x, y, w, h].every((n) => typeof n === 'number' && Number.isFinite(n))) return null
+  const cx = Math.min(1, Math.max(0, x))
+  const cy = Math.min(1, Math.max(0, y))
+  const cw = Math.min(Math.max(0, 1 - cx), Math.max(0, w))
+  const ch = Math.min(Math.max(0, 1 - cy), Math.max(0, h))
+  if (cw <= 0 || ch <= 0) return null
+  return { x: round3(cx), y: round3(cy), w: round3(cw), h: round3(ch) }
+}
+
 export function normalizeAnchor(input) {
   if (!input || typeof input !== 'object' || typeof input.section !== 'string' || !ANCHOR_SECTION.test(input.section) || typeof input.quote !== 'string') return null
   const quote = anchorText(input.quote).slice(0, 300).trim()
@@ -13,6 +30,9 @@ export function normalizeAnchor(input) {
   if (Number.isFinite(input.t) && input.t >= 0 && input.t <= 86400) {
     anchor.t = Math.round(input.t * 10) / 10
     if (Number.isFinite(input.t_end) && input.t_end > input.t && input.t_end <= 86400) anchor.t_end = Math.round(input.t_end * 10) / 10
+    if (Number.isInteger(input.step) && input.step >= 0 && input.step <= 999) anchor.step = input.step
+    const region = cleanRegion(input.region)
+    if (region) anchor.region = region
   }
   return anchor
 }

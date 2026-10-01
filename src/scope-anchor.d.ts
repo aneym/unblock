@@ -20,9 +20,22 @@ export interface Anchor {
   /** Up to 40 chars of text just after the quote (collapsed, trimmed), may be ''. */
   suffix: string
   general?: true
+  /** Seconds into a recording or demo, one decimal, from 0 to 86400. */
   t?: number
+  /** End of a span on a recording, one decimal, after `t`. */
   t_end?: number
+  /** Demo step index, an integer from 0 to 999. Kept only together with `t`. */
+  step?: number
+  /**
+   * Highlighted region of a demo frame, as fractions of the stage.
+   * `x` and `y` are in [0, 1]; `w` and `h` are clamped to the remainder and rounded to 3 decimals.
+   * Kept only together with `t`, and only when `w` and `h` are above 0 after clamping.
+   */
+  region?: { x: number; y: number; w: number; h: number }
 }
+
+/** Box on a demo frame. Null when `input` is not a plain object of four finite numbers, or when `w` or `h` is 0 after clamping. */
+export function cleanRegion(input: unknown): { x: number; y: number; w: number; h: number } | null
 
 /** Matches a valid AnchorSection: /^([a-z][a-z0-9-]{0,39}|q:Q\d{1,3})$/ */
 export const ANCHOR_SECTION: RegExp

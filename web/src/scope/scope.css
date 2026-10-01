@@ -366,6 +366,7 @@ body.zoom-open { overflow: hidden; }
 .demo-stage { display: grid; place-items: center; position: relative; }
 .demo[data-frame="phone"] .demo-stage { width: min(390px, 100%); margin: 0 auto; }
 .demo-stage iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; }
+.demo-stage .type-hint { margin: 0; color: var(--muted); font-size: 13px; }
 .video-stage { display: flex; justify-content: center; }
 .video-stage video { display: block; max-width: 100%; height: auto; max-height: 70vh; }
 .fig-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
