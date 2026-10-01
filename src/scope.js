@@ -169,7 +169,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         let line = `[scoping ${slug}] ${joined} (reply: unblock scope reply ${slug} <T#> "<one line>")`
         if (`[scoping ${slug}] ${parts.join(' | ')} (reply: unblock scope reply ${slug} <T#> "<one line>")`.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}${comments.map(imagePaths).join('')}`
         let retry = approvalUnavailable, held = false
-        async function send(key, targetPane, text, mark) {
+        async function send(key, targetPane, text, mark, options = {}) {
+          const kind = options.kind ?? 'task'
+          const wake = options.wake ?? 'auto'
+          const ref = options.ref
           const supervised = process.env.UNBLOCK_SUPERVISED === '1'
           const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (supervised && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
           const useLanePost = Boolean(lanePost)
@@ -188,13 +191,26 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           }
           try {
             if (useLanePost) {
+              if (ref) {
+                const posted = bulletinWithRef(ref, targetPane)
+                if (posted) {
+                  console.error(`unblock: lane-post skipped slug=${slug} pane=${targetPane} ref=${ref} bulletin=${posted.id} (already posted)`)
+                  mark('delivered', { bulletin: posted.id, pane: targetPane })
+                  job.holds.delete(key)
+                  job.failures.delete(key)
+                  return
+                }
+              }
+              const args = ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', kind, '--topic', `scope-${slug}`, '--wake', wake]
+              if (ref) args.push('--ref', ref)
+              args.push('--text', text)
               const bulletin = await new Promise((resolve, reject) => {
-                execFile(lanePost, ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', 'task', '--topic', `scope-${slug}`, '--wake', 'auto', '--text', text], { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
+                execFile(lanePost, args, { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
                   const id = String(stdout ?? '').match(/\bb-\d{14}-[0-9a-f]{4}\b/)?.[0] ?? null
                   const exit = error ? typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error' : 0
                   const errText = String(stderr ?? '').replace(/\r\n|\r|\n/g, ' ').trim().slice(0, 80)
                   const noteText = String(text ?? '').replace(/\r\n|\r|\n/g, ' ').slice(0, 80)
-                  console.error(`unblock: lane-post slug=${slug} pane=${targetPane} exit=${exit} bulletin=${id ?? '-'} stderr=${errText} text=${noteText}`)
+                  console.error(`unblock: lane-post slug=${slug} pane=${targetPane} exit=${exit} bulletin=${id ?? '-'} stderr=${errText} text=${noteText}${ref ? ` ref=${ref}` : ''}`)
                   if (error) reject(error)
                   else resolve(id)
                 })
@@ -240,14 +256,16 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           const noteLine = !text ? '' : text.length > 600
             ? ` Alex's note (long, in full at ${join(root, slug, 'APPROVAL.md')}): "${cutUnits(text, 300)}…"`
             : ` Alex's note: "${text}"`
+          const late = typeof approval.recorded_at === 'string' && Date.parse(approval.recorded_at) - Date.parse(approval.at) > 15 * 60 * 1000
           const line = note.event === 'not_yet'
             ? `[scoping ${slug}] NOT YET from ${alex} (r${revision})${text.length > 600 ? `.${noteLine}` : `: "${text}"`} Keep scoping; answer it on the doc.`
             : note.event === 'approve_to_try'
               ? `[scoping ${slug}] APPROVED TO TRY by ${alex} (r${revision}, ${atEt}).${noteLine} Build it on the project branch, start a try copy, label the PR try-build and don't queue it: it ships only when Alex presses Ship it.${closedLine}`
-            : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
+            : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? (late ? 'Recorded late by a PM relay; no action if you are already building.' : 'Move to build.') : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
+          const ref = note.event === 'not_yet' ? `scope:${slug}:not_yet:n${note.id}` : `scope:${slug}:${note.event}:r${approval.revision}`
           await send(`approval:${note.id}`, pane, line, (status, extra) => {
             if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
-          })
+          }, { kind: late ? 'info' : 'task', wake: late ? 'never' : 'auto', ref })
           if (held || retry) break
         }
         if (!held && !retry) for (const note of shipNotes) {
@@ -581,6 +599,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (entry) entry.meta = metadata(slug)
       emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
     } catch { /* The approval is already on disk. */ }
+    schedule(slug)
     return { approval: scope.approval, revision: scope.revision }
   }
 
@@ -924,17 +943,32 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     for (const line of text.split('\n')) takeBulletinLine(line)
   }
 
+  function bulletinWithRef(ref, pane) {
+    const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin.jsonl')
+    let text
+    try { text = readFileSync(file, 'utf8') } catch { return null }
+    for (const line of text.split('\n')) {
+      if (!line) continue
+      let row
+      try { row = JSON.parse(line) } catch { continue }
+      if (!row || row.ref !== ref || typeof row.id !== 'string') continue
+      const to = row.to
+      if (to === pane || (Array.isArray(to) && to.includes(pane))) return row
+    }
+    return null
+  }
+
   async function scanBulletinReads() {
     if (closed || scanningReads) return
-    const scanAt = new Date().toISOString()
-    const pending = store.unreadBulletinNotes()
-    if (!pending.length) return
-    const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin-delivered.jsonl')
-    let size
-    try { size = statSync(file).size } catch { return }
-    if (size === bulletinSize && !pending.some((note) => (note.delivered_at ?? '') > bulletinScanAt)) return
     scanningReads = true
     try {
+      const scanAt = new Date().toISOString()
+      const pending = store.unreadBulletinNotes()
+      if (!pending.length) return
+      const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin-delivered.jsonl')
+      let size
+      try { size = statSync(file).size } catch { return }
+      if (size === bulletinSize && !pending.some((note) => (note.delivered_at ?? '') > bulletinScanAt)) return
       if (size < bulletinOffset) {
         bulletinOffset = 0
         bulletinTail = Buffer.alloc(0)
@@ -978,6 +1012,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const data = readScope(slug)
         if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug) })
       }
+    } catch (error) {
+      console.error(`unblock: bulletin read scan failed: ${error.message}`)
     } finally { scanningReads = false }
   }
 
