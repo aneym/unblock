@@ -46,7 +46,7 @@ def scenario(label):
     steps += hook('note?thread=T2&delivery=delivered&read_by=Scope%20PM')
     steps.append(C(f'{label}: read reads "Read by Scope PM"', CHIP + " return {ok: text === 'Read by Scope PM', text}"))
     steps.append(C(f'{label}: the in-flight summary counts it as read',
-                   "const t = document.body.textContent; return {ok: /\\b1 Read\\b/.test(t), sample: t.match(/\\d+ comments? ·[^\\n]{0,80}/)?.[0]}"))
+                   "const t = document.querySelector('p.inflight')?.textContent || ''; return {ok: /(^| )1 Read( ·|$)/.test(t), t}"))
     steps.append(C(f'{label}: no page error', "const e = window.__errs || []; return {ok: e.length === 0, e}"))
     return steps
 
