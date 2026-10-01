@@ -169,10 +169,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (`[scoping ${slug}] ${parts.join(' | ')} (reply: unblock scope reply ${slug} <T#> "<one line>")`.length > 700) line = `[scoping ${slug}] Alex sent ${comments.length} note(s), too long for one line. Read them: unblock scope notes ${slug} --since ${comments[0].id - 1}${comments.map(imagePaths).join('')}`
         let retry = approvalUnavailable, held = false
         async function send(key, targetPane, text, mark) {
-          const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (process.env.UNBLOCK_SUPERVISED === '1' && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
-          const useLanePost = lanePost && !key.startsWith('approval:')
+          const supervised = process.env.UNBLOCK_SUPERVISED === '1'
+          const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (supervised && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
+          const useLanePost = Boolean(lanePost)
           let status
-          if (!useLanePost) try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
+          if (!useLanePost && !supervised) try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
           if (closed) return
           if (status === 'working' || status === 'blocked') {
             const first = job.holds.get(key) ?? Date.now()
@@ -198,6 +199,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
                 })
               })
               mark('delivered', { bulletin, pane: targetPane })
+            } else if (supervised) {
+              throw new Error('lane-post missing')
             } else {
               await promptPane(['agent', 'prompt', targetPane, text])
               mark('delivered')
@@ -220,8 +223,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         for (const note of laneNotes) {
           let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
           if (line.length > 700) line = `${cutUnits(line, 699)}…`
-          await send(`lane:${note.id}`, pane, line, (status) => {
-            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          await send(`lane:${note.id}`, pane, line, (status, extra) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
           })
         }
         // Approval prompts remain separate, even when other feedback is waiting on the pane.
@@ -241,14 +244,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             : note.event === 'approve_to_try'
               ? `[scoping ${slug}] APPROVED TO TRY by ${alex} (r${revision}, ${atEt}).${noteLine} Build it on the project branch, start a try copy, label the PR try-build and don't queue it: it ships only when Alex presses Ship it.${closedLine}`
             : `[scoping ${slug}] ${note.event === 'approve' ? 'APPROVED' : 'APPROVED WITH CHANGES'} by ${alex} (r${revision}, ${atEt}).${noteLine} ${note.event === 'approve' ? 'Move to build.' : 'Fold his note into the doc first (unblock scope patch), then move to build.'}${closedLine}`
-          await send(`approval:${note.id}`, pane, line, (status) => {
-            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          await send(`approval:${note.id}`, pane, line, (status, extra) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
           })
           if (held || retry) break
         }
         if (!held && !retry) for (const note of shipNotes) {
-          await send(`approval:ship:${note.id}`, pane, note.text, (status) => {
-            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null))
+          await send(`approval:ship:${note.id}`, pane, note.text, (status, extra) => {
+            if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
           })
           if (held || retry) break
         }
