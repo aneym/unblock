@@ -33,6 +33,9 @@ export interface PageSpec {
   /** Framed pages with initialize omitted or false send rails/page and ui/update-model-context at once.
    * With initialize, they wait for the host's answer or 1.5 s before sending them. */
   initialize?: { app: string; version?: string; search?: unknown } | false;
+  /** For a framed page, set this to forward the host's ⌘/Ctrl shortcuts as rails/key, or to keep them.
+   * When omitted, keys forward only while initialize is a plain object. initialize: false still leaves the handshake to another bridge and forwards nothing. */
+  forwardKeys?: boolean;
   hostOrigins?: string[];
 }
 export interface MountOptions { now?(): number }
@@ -44,7 +47,7 @@ export interface PageHandle {
 }
 export interface CommentsState { open: number; index: number; total: number; showResolved: boolean }
 export interface CommentsOptions extends CommentsState { onPrev?(): void; onNext?(): void; onShowResolved?(checked: boolean): void }
-export declare const VERSION: 'page-chrome@1.1';
+export declare const VERSION: 'page-chrome@1.2';
 export declare function validatePageMessage(params: unknown): { ok: boolean; errors: string[] };
 export declare function pageMessage(spec: PageSpec): PageMessage;
 export declare function statusLine(updatedAt: number | Date | string | undefined, staleAfterMs: number | undefined, now?: number): string;

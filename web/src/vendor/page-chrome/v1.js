@@ -1,6 +1,6 @@
 import { applyHostContext } from '../embed.js';
 
-export const VERSION = 'page-chrome@1.1';
+export const VERSION = 'page-chrome@1.2';
 const HREF = /^(?:\/(?![\/\\])[\x21-\x5b\x5d-\x7e]*|https:\/\/[\x21\x22\x24-\x2e\x30-\x3e\x41-\x5b\x5d-\x7e]+(?:[\/?#][\x21-\x5b\x5d-\x7e]*)?)$/;
 const ID = /^[a-z][a-z0-9_-]{0,39}$/;
 const KEYS = /^(Meta\+|Control\+|Shift\+|Alt\+){0,3}[A-Za-z0-9,./\[\]]$/;
@@ -100,9 +100,10 @@ export function mountPage(root, initialSpec, options = {}) {
   spec = validate(initialSpec);
   let hostOrigin;
   try {
-    const origin = new URL(doc.referrer).origin;
+    // The parent's origin survives in-frame navigation; the referrer does not (Admin sends no-referrer).
+    const origin = win.location.ancestorOrigins?.[0] ?? new URL(doc.referrer).origin;
     if (origin === win.location.origin || origin === 'https://app.rails.so' || /^https:\/\/[a-z0-9-]+\.rails\.so$/.test(origin) || spec.hostOrigins?.includes(origin)) hostOrigin = origin;
-  } catch { /* A missing or invalid referrer cannot identify a trusted host. */ }
+  } catch { /* A missing or invalid parent origin cannot identify a trusted host. */ }
   const framed = win.parent !== win && Boolean(hostOrigin);
   const previousFlag = doc.documentElement.dataset.pcFramed;
   if (framed) doc.documentElement.dataset.pcFramed = 'true';
@@ -255,7 +256,8 @@ export function mountPage(root, initialSpec, options = {}) {
       if (sheet) { event.preventDefault(); closeSheet(true); }
       return;
     }
-    if (!(framed && plain(spec.initialize)) || event.defaultPrevented || !(event.metaKey || event.ctrlKey)
+    const forwardKeys = spec.forwardKeys !== undefined ? spec.forwardKeys : plain(spec.initialize);
+    if (!(framed && forwardKeys) || event.defaultPrevented || !(event.metaKey || event.ctrlKey)
         || !/^(?:[0-9]|k|b|j|,|\\)$/i.test(event.key)
         || event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
     post({ method: 'rails/key', params: { key: event.key, meta: event.metaKey, ctrl: event.ctrlKey, shift: event.shiftKey, alt: event.altKey } });
