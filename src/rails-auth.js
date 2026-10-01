@@ -347,17 +347,17 @@ async function tokenRequest(endpoint, params) {
   }
 }
 
-function listen(server) {
+function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port, '127.0.0.1', () => {
       server.removeListener('error', reject)
       resolve(server.address().port)
     })
   })
 }
 
-function waitForCode(expectedState, timeoutMs) {
+function waitForCode(expectedState, timeoutMs, callbackPath = '/callback') {
   let settle
   let timer
   let settled = false
@@ -375,7 +375,7 @@ function waitForCode(expectedState, timeoutMs) {
       res.end('bad request')
       return
     }
-    if (url.pathname !== '/callback') {
+    if (url.pathname !== callbackPath) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
       res.end('not found')
       return
@@ -575,6 +575,16 @@ async function refreshAccess(secretName) {
   }
 }
 
+// A fixed redirect is an https address that forwards to 127.0.0.1:port on this machine, such as a
+// tailscale serve URL, so the person can approve from another device. It is checked before any request.
+function fixedCallback(redirectUri, port) {
+  let url
+  try { url = new URL(redirectUri) } catch { throw coded('invalid_redirect') }
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw coded('invalid_redirect')
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw coded('invalid_redirect')
+  return url
+}
+
 export async function connect({
   issuer = 'https://rails.so',
   resource = 'https://unblock.rails.so/mcp',
@@ -583,17 +593,20 @@ export async function connect({
   scope = 'runs:start actions:submit installations:read',
   openUrl,
   timeoutMs = 600000,
+  redirectUri: fixedRedirect,
+  port,
 } = {}) {
   assertIssuer(issuer)
+  const fixed = fixedRedirect === undefined ? null : fixedCallback(fixedRedirect, port)
   const metadata = await discover(issuer)
   const state = randomBytes(32).toString('base64url')
   const verifier = randomBytes(32).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
-  const { server, done, cancel } = waitForCode(state, timeoutMs)
+  const { server, done, cancel } = waitForCode(state, timeoutMs, fixed ? fixed.pathname : '/callback')
   const approval = done.catch((error) => error)
   try {
-    const port = await listen(server)
-    const redirectUri = `http://127.0.0.1:${port}/callback`
+    const bound = await listen(server, fixed ? port : 0)
+    const redirectUri = fixed ? fixed.href : `http://127.0.0.1:${bound}/callback`
     const clientId = await registerClient(metadata.registration_endpoint, {
       client_name: clientName,
       redirect_uris: [redirectUri],

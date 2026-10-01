@@ -889,12 +889,42 @@ async function hostedOpenAsks(resource, token) {
   return openAsks(result)
 }
 
+// Approving from the Book or a phone needs a callback those devices can reach: tailscale serve on
+// Studio forwards this https address to the loopback port connect listens on.
+const TAILNET_CALLBACK = 'https://studio.tailf266ac.ts.net:8490/callback'
+const TAILNET_PORT = 4490
+
+function tailnetConnect(opts) {
+  const hours = opts['--timeout-hours'] === undefined ? 24 : Number(opts['--timeout-hours'])
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 72) fail('--timeout-hours must be more than 0 and at most 72')
+  const portText = process.env.UNBLOCK_RAILS_CALLBACK_PORT
+  const port = portText === undefined ? TAILNET_PORT : Number(portText)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) fail('UNBLOCK_RAILS_CALLBACK_PORT must be a port number')
+  return railsConnect({
+    redirectUri: process.env.UNBLOCK_RAILS_CALLBACK || TAILNET_CALLBACK,
+    port,
+    timeoutMs: Math.round(hours * 3_600_000),
+    // The URL holds a state value and a PKCE challenge, no secret; the file lets another tab hand it on.
+    openUrl: (url) => {
+      console.error('Open this URL and approve:')
+      console.error(url)
+      const dir = stateDir()
+      mkdirSync(dir, { recursive: true, mode: 0o700 })
+      const file = join(dir, 'rails-connect-url')
+      rmSync(file, { force: true })
+      writeFileSync(file, `${url}\n`, { mode: 0o600, flag: 'wx' })
+    },
+  })
+}
+
 async function rails(args) {
-  const { rest } = flags(args, {})
+  const { rest, opts } = flags(args, { '--tailnet': false, '--timeout-hours': true })
   const [sub] = rest
-  if (rest.length !== 1 || !['connect', 'status'].includes(sub)) fail('usage: unblock rails connect|status')
+  if (rest.length !== 1 || !['connect', 'status'].includes(sub)) fail('usage: unblock rails connect [--tailnet [--timeout-hours N]]|status')
+  if ((opts['--tailnet'] || opts['--timeout-hours'] !== undefined) && sub !== 'connect') fail('--tailnet is for rails connect')
+  if (opts['--timeout-hours'] !== undefined && !opts['--tailnet']) fail('--timeout-hours needs --tailnet')
   if (sub === 'connect') {
-    const result = await railsConnect()
+    const result = await (opts['--tailnet'] ? tailnetConnect(opts) : railsConnect())
     return output({ client_id: result.client_id }, `Connected as client ${result.client_id.slice(0, 8)}…`)
   }
   const token = await railsAccessToken()
@@ -942,6 +972,7 @@ unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
 unblock rails connect                            approve once on rails.so
+unblock rails connect --tailnet [--timeout-hours N]   approve from another device via Studio's tailnet callback
 unblock rails status                             hosted Unblock connection and open asks
 unblock mcp                                      run the MCP server
 
