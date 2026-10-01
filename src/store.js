@@ -226,7 +226,7 @@ export class Store {
         PRIMARY KEY (note_id, pane)
       );
     `)
-    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT'], ['images', 'TEXT']]) this.#addColumn('scope_notes', name, type)
+    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT'], ['images', 'TEXT'], ['bulletin', 'TEXT'], ['bulletin_pane', 'TEXT'], ['read_at', 'TEXT'], ['read_by', 'TEXT']]) this.#addColumn('scope_notes', name, type)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
@@ -273,6 +273,7 @@ export class Store {
       id: row.id, slug: row.slug, from: row.author, kind: row.kind,
       qid: row.qid, text: row.text, images: row.images ? JSON.parse(row.images) : [], at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
+      bulletin: row.bulletin ?? null, read_at: row.read_at ?? null, read_by: row.read_by ?? null,
       anchor: row.anchor ? JSON.parse(row.anchor) : null, reply_to: row.reply_to ?? null, via: ['voice', 'admin'].includes(row.via) ? row.via : null,
       thread: row.thread ?? null, event: row.event ?? null, words: row.words ?? null, client_id: row.client_id ?? null,
     }
@@ -313,12 +314,31 @@ export class Store {
     this.#db.prepare('UPDATE scope_note_targets SET delivery = ? WHERE note_id = ? AND pane = ?').run(delivery, id, pane)
   }
 
-  markScopeNotes(ids, delivery, deliveredAt = null) {
+  markScopeNotes(ids, delivery, deliveredAt = null, extra = {}) {
     if (!ids.length) return []
-    const update = this.#db.prepare('UPDATE scope_notes SET delivery = ?, delivered_at = ? WHERE id = ?')
+    const update = this.#db.prepare(extra.bulletin
+      ? 'UPDATE scope_notes SET delivery = ?, delivered_at = ?, bulletin = ?, bulletin_pane = ? WHERE id = ?'
+      : 'UPDATE scope_notes SET delivery = ?, delivered_at = ? WHERE id = ?')
     const read = this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?')
     return this.transaction(() => ids.map((id) => {
-      update.run(delivery, deliveredAt, id)
+      if (extra.bulletin) update.run(delivery, deliveredAt, extra.bulletin, extra.pane ?? null, id)
+      else update.run(delivery, deliveredAt, id)
+      return this.#scopeNote(read.get(id))
+    }).filter(Boolean))
+  }
+
+  unreadBulletinNotes() {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    return this.#db.prepare(`SELECT * FROM scope_notes WHERE bulletin IS NOT NULL AND read_at IS NULL AND delivered_at >= ? ORDER BY id ASC`)
+      .all(since).map((row) => ({ ...this.#scopeNote(row), bulletin_pane: row.bulletin_pane ?? null }))
+  }
+
+  markScopeNotesRead(ids, readAt, readBy) {
+    if (!ids.length) return []
+    const update = this.#db.prepare('UPDATE scope_notes SET read_at = ?, read_by = ? WHERE id = ?')
+    const read = this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?')
+    return this.transaction(() => ids.map((id) => {
+      update.run(readAt, readBy, id)
       return this.#scopeNote(read.get(id))
     }).filter(Boolean))
   }

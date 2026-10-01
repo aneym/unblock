@@ -310,7 +310,7 @@ setInterval(() => {
     if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
-type CommentState = 'Sent' | 'Seen 👀' | 'Answered' | 'Retrying' | 'Not sent' | 'No lane pane'
+type CommentState = 'Sending…' | 'Sent' | `Read by ${string}` | 'Seen 👀' | 'Answered' | 'Retrying' | 'Not sent' | 'No lane pane'
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
   const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
@@ -321,11 +321,12 @@ function delivery(id: string): CommentState | '' {
     if (state !== 'with_lane' && state !== 'queued') return thread?.reaction?.emoji === '👀' ? 'Seen 👀' : ''
     const lastAlex = thread?.messages.filter(m => m.from === 'alex').at(-1)
     const taken = lastAlex && (thread?.messages.some(m => m.from !== 'alex' && m.at > lastAlex.at) || (section as DocSection & { updated_at?: string })?.updated_at! > lastAlex.at) || thread?.status === 'resolved' && thread.resolution?.confirmed_at
-    return taken ? 'Answered' : thread?.reaction?.emoji === '👀' ? 'Seen 👀' : 'Sent'
+    return taken ? 'Answered' : thread?.reaction?.emoji === '👀' ? 'Seen 👀' : state === 'queued' ? 'Sending…' : 'Sent'
   }
   if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'Answered'
   if (thread?.reaction?.emoji === '👀' && !['retrying', 'failed', 'no_pane'].includes(note.delivery)) return 'Seen 👀'
-  return ({ held: 'Sent', delivered: 'Sent', queued: 'Sent', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
+  if (note.delivery === 'delivered' && note.read_at && note.read_by) return `Read by ${note.read_by}`
+  return ({ held: 'Sending…', delivered: 'Sent', queued: 'Sending…', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
 }
 function updateCommentStates() {
   for (const t of scope?.threads || []) {
@@ -343,14 +344,16 @@ function updateCommentStates() {
 }
 function deliveryChip(id: string) {
   const entry = commentStates.get(id)
-  return entry && (entry.state !== 'Answered' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${entry.state}</span>` : ''
+  return entry && (entry.state !== 'Answered' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${esc(entry.state)}</span>` : ''
 }
 function inflight() {
-  const count = (state: CommentState) => scope!.threads.filter(t => delivery(t.id) === state).length
-  const sent = count('Sent'), seen = count('Seen 👀'), answered = count('Answered')
-  if (!sent && !seen) return ''
-  const total = sent + seen + answered
-  return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [sent, 'Sent']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
+  const states = scope!.threads.map(t => delivery(t.id))
+  const count = (state: CommentState) => states.filter(s => s === state).length
+  const read = states.filter(s => s.startsWith('Read by ')).length
+  const sending = count('Sending…'), sent = count('Sent'), seen = count('Seen 👀'), answered = count('Answered')
+  if (!read && !sending && !sent && !seen) return ''
+  const total = read + sending + sent + seen + answered
+  return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [read, 'Read'], [sent, 'Sent'], [sending, 'Sending…']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
 const deleting = new Set<string>(), copiedLinks = new Set<string>()
 const checkButton = '<button type="button" class="check" data-action="resolve" aria-label="Resolve" title="Resolve"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button>'
@@ -996,7 +999,7 @@ function renderFeed() {
   if (feed.hidden) return
   const limit = phone() ? 2 : 6
   const visible = feedExpanded ? feedRows : feedRows.slice(-limit)
-  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(delivery(row.thread) === 'Sent' || delivery(row.thread) === 'Answered' ? 'Sent to the lane' : delivery(row.thread))}</span>` : ''}</button>`).join('')}</div>`
+  feed.innerHTML = `<div class="voice-feed-controls"><span class="voice-feed-heading">Voice activity</span>${feedRows.length > limit ? `<button class="voice-feed-toggle">${feedExpanded ? 'Show less' : `Show all (${feedRows.length})`}</button>` : ''}<button class="voice-feed-close" aria-label="Close voice activity">×</button></div><div class="voice-feed-list${feedExpanded ? ' expanded' : ''}">${visible.map(row => `<button class="voice-feed-row" data-ok="${row.ok}"${row.write ? ' data-write' : ''}${row.thread ? ` data-thread="${esc(row.thread)}"` : ''} title="${esc(row.at.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' }) + ' ET')}"><span class="voice-feed-dot" aria-hidden="true"></span><span class="voice-feed-label">${esc(row.label)}</span>${row.write && row.thread ? `<span class="voice-feed-delivery">${esc(((s) => s === 'Sent' || s === 'Answered' || s.startsWith('Read by ') ? 'Sent to the lane' : s)(delivery(row.thread)))}</span>` : ''}</button>`).join('')}</div>`
   feed.querySelector<HTMLButtonElement>('.voice-feed-toggle')?.addEventListener('click', () => { feedExpanded = !feedExpanded; renderFeed() })
   feed.querySelector<HTMLButtonElement>('.voice-feed-close')!.onclick = () => { feedClosed = true; renderFeed() }
   feed.querySelectorAll<HTMLButtonElement>('.voice-feed-row[data-thread]').forEach(row => row.onclick = () => {

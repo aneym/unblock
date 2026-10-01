@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync, writeFileSync, renameSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync, renameSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +25,15 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   const listeners = new Map()
   const delivering = new Map()
   const writes = new Map()
+  const paneNames = new Map()
   let closed = false
+  let readTimer = null
+  let scanningReads = false
+  let bulletinOffset = 0
+  let bulletinSize = -1
+  let bulletinScanAt = ''
+  let bulletinTail = Buffer.alloc(0)
+  const bulletinReads = new Map()
 
   function metadata(slug) {
     try {
@@ -177,11 +185,23 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             }
           }
           try {
-            if (useLanePost) await new Promise((resolve, reject) => {
-              execFile(lanePost, ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', 'task', '--topic', `scope-${slug}`, '--wake', 'auto', '--text', text], { timeout: 20_000 }, (error) => error ? reject(error) : resolve())
-            })
-            else await promptPane(['agent', 'prompt', targetPane, text])
-            mark('delivered')
+            if (useLanePost) {
+              const bulletin = await new Promise((resolve, reject) => {
+                execFile(lanePost, ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', 'task', '--topic', `scope-${slug}`, '--wake', 'auto', '--text', text], { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
+                  const id = String(stdout ?? '').match(/\bb-\d{14}-[0-9a-f]{4}\b/)?.[0] ?? null
+                  const exit = error ? typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error' : 0
+                  const errText = String(stderr ?? '').replace(/\r\n|\r|\n/g, ' ').trim().slice(0, 80)
+                  const noteText = String(text ?? '').replace(/\r\n|\r|\n/g, ' ').slice(0, 80)
+                  console.error(`unblock: lane-post slug=${slug} pane=${targetPane} exit=${exit} bulletin=${id ?? '-'} stderr=${errText} text=${noteText}`)
+                  if (error) reject(error)
+                  else resolve(id)
+                })
+              })
+              mark('delivered', { bulletin, pane: targetPane })
+            } else {
+              await promptPane(['agent', 'prompt', targetPane, text])
+              mark('delivered')
+            }
             job.holds.delete(key)
             job.failures.delete(key)
           } catch {
@@ -192,10 +212,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             else { mark('retrying'); retry = true }
           }
         }
-        if (comments.length) await send('own', pane, line, (status) => {
+        if (comments.length) await send('own', pane, line, (status, extra) => {
           // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
           const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
-          emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null))
+          emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
         })
         for (const note of laneNotes) {
           let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
@@ -777,6 +797,106 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     return result
   }
 
+  async function readerName(pane) {
+    const cached = paneNames.get(pane)
+    if (cached && cached.until > Date.now()) return cached.name
+    let name = ''
+    try {
+      const agent = JSON.parse(await promptPane(['agent', 'get', pane]))?.result?.agent
+      name = typeof agent?.name === 'string' ? agent.name.trim() : ''
+      if (!name && agent?.tab_id) {
+        const tab = JSON.parse(await promptPane(['tab', 'get', agent.tab_id]))?.result?.tab
+        name = typeof tab?.label === 'string' ? tab.label.trim() : ''
+      }
+    } catch { name = '' }
+    if (!name) name = pane
+    paneNames.set(pane, { name, until: Date.now() + 60_000 })
+    return name
+  }
+
+  function takeBulletinLine(line) {
+    if (!line) return
+    let row
+    try { row = JSON.parse(line) } catch { return }
+    if (!row || typeof row.id !== 'string' || !row.id.startsWith('b-') || typeof row.pane !== 'string' || typeof row.ts !== 'string') return
+    const key = `${row.id}\0${row.pane}`
+    if (bulletinReads.has(key)) return
+    if (bulletinReads.size >= 20_000) bulletinReads.delete(bulletinReads.keys().next().value)
+    bulletinReads.set(key, row.ts)
+  }
+
+  function ingestBulletin(chunk) {
+    const data = bulletinTail.length ? Buffer.concat([bulletinTail, chunk]) : chunk
+    const end = data.lastIndexOf(10)
+    if (end < 0) {
+      bulletinTail = data
+      return
+    }
+    const text = data.subarray(0, end).toString('utf8')
+    bulletinTail = data.subarray(end + 1)
+    for (const line of text.split('\n')) takeBulletinLine(line)
+  }
+
+  async function scanBulletinReads() {
+    if (closed || scanningReads) return
+    const scanAt = new Date().toISOString()
+    const pending = store.unreadBulletinNotes()
+    if (!pending.length) return
+    const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin-delivered.jsonl')
+    let size
+    try { size = statSync(file).size } catch { return }
+    if (size === bulletinSize && !pending.some((note) => (note.delivered_at ?? '') > bulletinScanAt)) return
+    scanningReads = true
+    try {
+      if (size < bulletinOffset) {
+        bulletinOffset = 0
+        bulletinTail = Buffer.alloc(0)
+        bulletinReads.clear()
+      }
+      if (size > bulletinOffset) {
+        const length = size - bulletinOffset
+        const buf = Buffer.alloc(length)
+        const fd = openSync(file, 'r')
+        let got = 0
+        try {
+          while (got < length) {
+            const n = readSync(fd, buf, got, length - got, bulletinOffset + got)
+            if (n === 0) break
+            got += n
+          }
+        } finally { closeSync(fd) }
+        ingestBulletin(buf.subarray(0, got))
+        bulletinOffset += got
+        if (got < length) size = bulletinOffset
+      }
+      bulletinSize = size
+      bulletinScanAt = scanAt
+      const hits = []
+      for (const note of pending) {
+        const ts = bulletinReads.get(`${note.bulletin}\0${note.bulletin_pane}`)
+        if (ts) hits.push({ note, row: { pane: note.bulletin_pane, ts } })
+      }
+      if (!hits.length || closed) return
+      const names = new Map()
+      for (const pane of new Set(hits.map((hit) => hit.row.pane))) names.set(pane, await readerName(pane))
+      if (closed) return
+      const notes = []
+      const slugs = new Set()
+      for (const { note, row } of hits) {
+        notes.push(...store.markScopeNotesRead([note.id], row.ts, names.get(row.pane)))
+        slugs.add(note.slug)
+      }
+      if (notes.length) emitNotes(notes)
+      for (const slug of slugs) {
+        const data = readScope(slug)
+        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug) })
+      }
+    } finally { scanningReads = false }
+  }
+
+  readTimer = setInterval(() => { void scanBulletinReads() }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
+  readTimer.unref()
+
   // Queued notes survive a daemon restart even if scope.json is mid-write.
   try {
     for (const dir of readdirSync(root, { withFileTypes: true })) {
@@ -786,6 +906,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   async function close() {
     closed = true
+    clearInterval(readTimer)
     for (const entry of listeners.values()) {
       clearInterval(entry.timer)
       for (const client of entry.clients) client.end()
