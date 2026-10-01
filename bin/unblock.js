@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, extname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync } from 'node:fs'
 import { IMAGE_LINE } from '../src/scope-assets.js'
 import { filerPid } from '../src/origin-process.js'
 import { lintDoc } from '../src/scope-lint.js'
@@ -13,7 +13,7 @@ import { lintDoc } from '../src/scope-lint.js'
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
-import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS } from '../src/scope-doc.js'
+import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope } from '../src/scope-doc.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -491,8 +491,63 @@ async function scopeLinks(health, slug) {
   return { url, studio_url }
 }
 
+const SCOPE_USAGE = `unblock scope [list|url|notes|threads]           scoping docs and anchored threads
+unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"]
+unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
+unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
+unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
+unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
+unblock scope react <slug> T# [--clear]
+unblock scope resolve <slug> T# [--decision "text"]
+unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
+unblock scope unapprove <slug> --reason "<why>"
+unblock scope app <slug> recruiter|closer|rails-admin
+unblock scope kpi <slug> set --from <file.json>
+unblock scope kpi <slug> list [--json]
+unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
+unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
+unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]`
+
+function scopeNew(args, usage) {
+  const slugRe = /^[a-z0-9][a-z0-9-]{0,63}$/
+  const paneRe = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
+  let pane, app, title
+  const words = []
+  for (let i = 1; i < args.length; i++) {
+    const word = args[i]
+    if (word === '--json') { json = true; continue }
+    if (word === '--pane' || word === '--app' || word === '--title') {
+      const value = args[++i]
+      if (value === undefined) fail(usage)
+      if (word === '--pane') pane = value
+      else if (word === '--app') app = value
+      else title = value
+    } else if (word.startsWith('-')) fail(usage)
+    else words.push(word)
+  }
+  const slug = words[0]
+  if (words.length !== 1 || !slugRe.test(slug ?? '') || !paneRe.test(pane ?? '') || (app !== undefined && !APPS.includes(app))) fail(usage)
+  const root = process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
+  const dir = join(root, slug)
+  const path = join(dir, 'scope.json')
+  if (existsSync(path)) fail(`${path} exists`, 4)
+  const heading = title ?? slug
+  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
+  const problems = validateScope(scope)
+  if (problems.length) fail(problems.join('\n'), 1)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+  renameSync(join(dir, 'scope.json.tmp'), path)
+  output({ slug, path }, `created ${slug} at ${path}`)
+}
+
 async function scope(args) {
-  const usage = 'usage: unblock scope list | app <slug> <app> | kpi <slug> set --from <file.json> | kpi <slug> list [--json] | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | approve <slug> --by alex --quote "<verbatim>" [--at <iso>] | unapprove <slug> --reason "<why>" | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = SCOPE_USAGE
+  if (!args.length || ['--help', '-h', 'help'].includes(args[0])) {
+    console.log(usage)
+    return
+  }
+  if (args[0] === 'new') return scopeNew(args, usage)
   const [sub = 'list', slug, ...words] = args
   if (sub === 'react') {
     const { rest, opts } = flags(args, { '--clear': false })
@@ -644,15 +699,17 @@ async function scope(args) {
         const response = await fetch(`${base}/api/scope/${encodeURIComponent(name)}`, {
           headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(5000),
         })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const { scope } = await response.json()
-        const stored = scope.doc.sections
-        // Publishing turns local image refs into asset: refs, and image lines are never linted.
-        const text = (md) => String(md).split('\n').filter((line) => !IMAGE_LINE.test(line)).join('\n')
-        sections = sections.filter((section) => {
-          const old = stored.find((item) => item.id === section.id)
-          return !old || old.heading !== section.heading || text(old.body_md) !== text(section.body_md)
-        })
+        if (response.status !== 404) {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          const { scope } = await response.json()
+          const stored = scope.doc.sections
+          // Publishing turns local image refs into asset: refs, and image lines are never linted.
+          const text = (md) => String(md).split('\n').filter((line) => !IMAGE_LINE.test(line)).join('\n')
+          sections = sections.filter((section) => {
+            const old = stored.find((item) => item.id === section.id)
+            return !old || old.heading !== section.heading || text(old.body_md) !== text(section.body_md)
+          })
+        }
       } catch { console.error('Could not read the current scope; linting every section.') }
       const result = lintDoc(sections, { keep: opts['--keep'] })
       lintOutput(result)
@@ -953,20 +1010,7 @@ unblock link <ticket> [--share]                  the stable queue link; --share 
 unblock peek <ticket>                            what they have typed so far
 unblock reveal <ticket> <field>                  print a stored secret (this machine only)
 unblock mirror [path]                            write BLOCKERS.md from the queue
-unblock scope [list|url|notes|threads]           scoping docs and anchored threads
-unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
-unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
-unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
-unblock scope react <slug> T# [--clear]
-unblock scope resolve <slug> T# [--decision "text"]
-unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
-unblock scope unapprove <slug> --reason "<why>"
-unblock scope app <slug> recruiter|closer|rails-admin
-unblock scope kpi <slug> set --from <file.json>
-unblock scope kpi <slug> list [--json]
-unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
-unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
-unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
+${SCOPE_USAGE}
   ask, reply, edit and resolve also accept --keep "term" (repeatable).
   --from uploads local image lines and renders HTML mocks ("phone" = 390px).
 unblock ui                                       interactive queue in the terminal
