@@ -8,7 +8,7 @@ import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
-import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
+import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -470,13 +470,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       } finally { if (writes.get(slug) === pending) writes.delete(slug) }
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
+    const kpiWrite = req.method === 'PUT' && parts.length === 2 && action === 'kpis'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const shipWrite = req.method === 'POST' && parts.length === 2 && action === 'ship'
     const sectionWrite = req.method === 'PUT' && parts.length === 3 && action === 'sections'
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'delete'].includes(verb)
-    if (!appWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!appWrite && !kpiWrite && !approvalWrite && !shipWrite && !docWrite && !newThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
     if (shipWrite) {
@@ -487,7 +488,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!human) return sendJson(res, 403, { error: 'only Alex approves' })
       requireHumanPath(req)
     }
-    if ((docWrite || appWrite) && human) {
+    if ((docWrite || appWrite || kpiWrite) && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
@@ -504,6 +505,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body?.images !== undefined && !human) return sendJson(res, 400, { error: 'invalid images' })
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
+    if (kpiWrite) {
+      const normalized = normalizeKpis(body?.kpis)
+      if (normalized.error) return sendJson(res, 400, { error: normalized.error })
+    }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'invalid body' })
     if (verb === 'react' && body.emoji !== '👀' && body.emoji !== null) return sendJson(res, 400, { error: 'invalid emoji' })
     if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
@@ -518,7 +523,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay && body.via === undefined) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -668,7 +673,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, appWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
+  function changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -683,6 +688,19 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (entry) entry.meta = metadata(slug)
       emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
       return { app: scope.app }
+    }
+    if (kpiWrite) {
+      const normalized = normalizeKpis(body.kpis)
+      if (normalized.error) bad(normalized.error)
+      scope.kpis = normalized.kpis
+      const problems = validateScope(scope)
+      if (problems.length) bad(problems[0])
+      writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+      renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+      return { kpis: scope.kpis, revision: scope.revision }
     }
     if (approvalWrite) return approveScope(slug, scope, body, human)
     if (shipWrite) return shipScope(slug, scope, body, human)

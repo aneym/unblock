@@ -2,6 +2,9 @@ import { locateAnchor, makeAnchor, normalizeAnchor, plainText } from './scope-an
 
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
 export const THREAD_ID = /^T\d{1,4}$/
+export const KPI_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+const KPI_SOURCE = /^[a-z][a-z-]{0,31}(:[A-Za-z0-9_.:\/-]{1,64})?$/
+const KPI_KEYS = ['id', 'name', 'source', 'target', 'direction', 'window_days']
 export const APPS = ['recruiter', 'closer', 'rails-admin']
 export function appOf(scope) {
   if (APPS.includes(scope.app)) return scope.app
@@ -124,6 +127,28 @@ export function migrateV1(input, now = '1970-01-01T00:00:00.000Z') {
   return scope
 }
 
+export function normalizeKpis(list) {
+  if (!Array.isArray(list) || list.length < 1 || list.length > 3) return { error: 'kpis: 1 to 3 KPIs' }
+  const kpis = []
+  const ids = new Set()
+  for (const item of list) {
+    if (!object(item)) return { error: 'kpis: invalid KPI' }
+    const id = typeof item.id === 'string' && KPI_ID.test(item.id) ? item.id : ''
+    if (!id) return { error: 'kpi: invalid id' }
+    if (ids.has(id)) return { error: `kpi ${id}: duplicate id` }
+    ids.add(id)
+    if (Object.keys(item).some((key) => !KPI_KEYS.includes(key))) return { error: `kpi ${id}: unexpected field` }
+    if (typeof item.name !== 'string' || item.name.length < 1 || item.name.length > 80) return { error: `kpi ${id}: name must be a non-empty string of at most 80 characters` }
+    if (typeof item.source !== 'string' || !KPI_SOURCE.test(item.source)) return { error: `kpi ${id}: invalid source` }
+    if (typeof item.target !== 'number' || !Number.isFinite(item.target)) return { error: `kpi ${id}: target must be a number` }
+    if (item.direction !== 'at_least' && item.direction !== 'at_most') return { error: `kpi ${id}: direction must be at_least or at_most` }
+    const window_days = item.window_days === undefined ? 14 : item.window_days
+    if (!Number.isInteger(window_days) || window_days < 1 || window_days > 365) return { error: `kpi ${id}: window_days must be an integer from 1 to 365` }
+    kpis.push({ id, name: item.name, source: item.source, target: item.target, direction: item.direction, window_days })
+  }
+  return { kpis }
+}
+
 export function validateScope(scope) {
   const problems = []
   const check = (ok, message) => { if (!ok) problems.push(message) }
@@ -179,6 +204,11 @@ export function validateScope(scope) {
       && (a.open === undefined || (Number.isInteger(a.open) && a.open >= 0))
       && (a.recorded_at === undefined || (typeof a.recorded_at === 'string' && Number.isFinite(Date.parse(a.recorded_at))))
       && (a.client_id === undefined || (typeof a.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(a.client_id))), 'invalid approval')
+  }
+  if (scope.kpis !== undefined) {
+    const normalized = normalizeKpis(scope.kpis)
+    const filled = Array.isArray(scope.kpis) && scope.kpis.every((kpi) => object(kpi) && kpi.window_days !== undefined)
+    check(!normalized.error && filled, 'invalid kpis')
   }
   check(Array.isArray(scope.threads), 'invalid threads')
   const validImages = images => images === undefined || (Array.isArray(images) && images.length >= 1 && images.length <= 6 && images.every(image => object(image) && typeof image.id === 'string' && /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/.test(image.id) && Number.isFinite(image.width) && image.width > 0 && Number.isFinite(image.height) && image.height > 0))

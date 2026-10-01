@@ -491,7 +491,7 @@ async function scopeLinks(health, slug) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | approve <slug> --by alex --quote "<verbatim>" [--at <iso>] | unapprove <slug> --reason "<why>" | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | app <slug> <app> | kpi <slug> set --from <file.json> | kpi <slug> list [--json] | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | approve <slug> --by alex --quote "<verbatim>" [--at <iso>] | unapprove <slug> --reason "<why>" | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (sub === 'react') {
     const { rest, opts } = flags(args, { '--clear': false })
@@ -584,6 +584,23 @@ async function scope(args) {
     if (!name || extra.length !== 1 || Object.keys(opts).length) fail(usage)
     const data = await request(`/api/scope/${encodeURIComponent(name)}/app`, { app: extra[0] }, { method: 'PUT' })
     return output(data, `app ${data.app}`)
+  }
+  if (verb === 'kpi') {
+    const line = (kpi) => `${kpi.id}  ${kpi.name}  ${kpi.direction} ${kpi.target}  ${kpi.source}  ${kpi.window_days}d`
+    const action = extra[0]
+    if (!name || extra.length !== 1 || !['set', 'list'].includes(action)) fail(usage)
+    if (action === 'list') {
+      if (Object.keys(opts).length) fail(usage)
+      const { scope: current } = await request(`/api/scope/${encodeURIComponent(name)}`)
+      const kpis = current.kpis ?? []
+      return output({ kpis }, kpis.map(line).join('\n'))
+    }
+    if (!opts['--from'] || opts['--since'] !== undefined || opts['--open'] || opts['--keep']) fail(usage)
+    let parsed
+    try { parsed = JSON.parse(readFileSync(opts['--from'], 'utf8')) } catch (error) { fail(error.message, 1) }
+    const kpis = Array.isArray(parsed) ? parsed : parsed?.kpis
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/kpis`, { kpis }, { method: 'PUT' })
+    return output(data, data.kpis.map(line).join('\n'))
   }
   if (verb === 'patch') {
     if (!name || extra.length !== 1 || !opts['--from'] || opts['--since'] || opts['--open']) fail(usage)
@@ -799,6 +816,8 @@ unblock scope resolve <slug> T# [--decision "text"]
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
 unblock scope unapprove <slug> --reason "<why>"
 unblock scope app <slug> recruiter|closer|rails-admin
+unblock scope kpi <slug> set --from <file.json>
+unblock scope kpi <slug> list [--json]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
