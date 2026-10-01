@@ -9,7 +9,7 @@
 // The view carries notes (the unblock daemon's delivery notes) as well as thread.delivery (the Rails relay's field).
 // A new thread keeps anchor.general when it is on the title, as the unblock daemon does after r21 (Rails needs the same).
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
-// /__note?thread=T1&delivery=held, /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
+// /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
 // /__remove_later (the Later section is deleted)
 import http from 'node:http'
@@ -118,7 +118,9 @@ http.createServer((req, res) => {
     if (url.pathname === '/__delivery') { threads.find((t) => t.id === q.get('thread')).delivery = q.get('state'); bump(); return send(200, { seq }) }
     if (url.pathname === '/__note') {
       const id = `N-${q.get('thread')}`, at = stamp()
-      notes = notes.filter((n) => n.id !== id).concat([{ id, thread: q.get('thread'), from: 'alex', event: 'comment', at, delivery: q.get('delivery'), delivered_at: at }])
+      // read_by (scope-sending-stale): the lane's hook took the note's bulletin; the daemon names who read it.
+      const read = q.get('read_by') ? { read_by: q.get('read_by'), read_at: at } : {}
+      notes = notes.filter((n) => n.id !== id).concat([{ id, thread: q.get('thread'), from: 'alex', event: 'comment', at, delivery: q.get('delivery'), delivered_at: q.get('delivery') === 'delivered' ? at : null, ...read }])
       bump(); return send(200, { seq })
     }
     if (url.pathname === '/__rename_title') { sections.title.heading = doc.title = 'Phone scope'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
