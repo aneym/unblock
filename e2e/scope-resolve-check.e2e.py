@@ -14,7 +14,7 @@ usage: e2e/scope-resolve-check.e2e.py <worktree> [--no-build]
 import json, os, re, shutil, subprocess, sys, time, urllib.request
 
 E = os.path.dirname(os.path.abspath(__file__))
-WT = os.path.abspath(sys.argv[1])
+WT = os.path.abspath(next((a for a in sys.argv[1:] if not a.startswith("--")), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 DIST = os.path.join(WT, 'web', 'dist-scope')
 OUT = os.environ.get('E2E_OUT') or os.path.join(os.environ.get('TMPDIR', '/tmp'), 'unblock-e2e')
 W = os.path.join(OUT, f'work-{os.path.basename(__file__)}')
