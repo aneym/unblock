@@ -30,7 +30,7 @@ function chromeSpec() {
   const actions: PageAction[] = []
   if (boot.comment !== 'host') actions.push({ id: 'comment', label: 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: 'Comment on the whole doc.' } } })
   if (boot.approve !== 'host' && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
-  if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: 'Talk it through by voice', kind: 'screen-only', placement: 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
+  if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: embed ? 'Talk' : 'Talk it through by voice', kind: 'screen-only', placement: embed ? 'title' : 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
   return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const }
 }
 function syncChrome() {
@@ -970,7 +970,7 @@ feed.className = 'voice-feed'; feed.setAttribute('aria-live', 'polite'); feed.se
 if (boot.voice !== false) document.body.append(feed)
 function positionFeed() {
   const capsule = document.querySelector<HTMLElement>('.voice-capsule')
-  const bottom = capsule ? innerHeight - capsule.getBoundingClientRect().top + 8 : embed ? innerHeight - $('#talk').getBoundingClientRect().top + 12 : phone() ? 84 : 24
+  const bottom = capsule ? innerHeight - capsule.getBoundingClientRect().top + 8 : phone() ? 84 : 24
   feed.style.bottom = `${bottom}px`
 }
 const capsuleObserver = new ResizeObserver(positionFeed)

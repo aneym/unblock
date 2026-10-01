@@ -291,6 +291,7 @@ body > .talk.active { display: none; }
   body.sheet-open > .talk { display: none; }
 }
 html:has(body.embed) { scroll-padding-top: 24px; }
+body.embed > .talk { display: none; }
 
 .voice-feed { position: fixed; z-index: 20; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(16px) saturate(1.4); box-shadow: var(--shadow-2); padding: 5px; font-size: 13px; }
 .voice-feed[hidden] { display: none; }
