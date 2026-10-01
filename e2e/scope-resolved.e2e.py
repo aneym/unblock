@@ -196,7 +196,11 @@ def page_shot(route, steps, width, theme, label):
     except json.JSONDecodeError:
         check(f'{label}: page-shot ran', False, (p.stdout + p.stderr)[-1500:])
         return
+    check(f'{label}: page-shot exited 0', p.returncode == 0, (p.stderr or '')[-600:])
+    check(f'{label}: page-shot took a shot', bool(out.get('shots')))
+    want = sum(1 for step in steps if 'eval' in step)
     for shot in out.get('shots', []):
+        check(f'{label}: every eval step returned', len(shot.get('evals', [])) == want, f"{len(shot.get('evals', []))}/{want}")
         for ev in shot.get('evals', []):
             v = ev['value']
             if isinstance(v, dict) and 'check' in v:

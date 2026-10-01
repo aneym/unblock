@@ -12,8 +12,9 @@ function rulesFor(selector) {
   const re = /([^{}]+)\{([^{}]*)\}/g;
   let m;
   while ((m = re.exec(css))) {
-    const selectors = m[1].split(',').map((s) => s.trim());
-    if (selectors.includes(selector)) out.push(m[2]);
+    // Any rule whose subject is the bare figure counts, in any context (`.doc .fig`, `main > .fig`).
+    const subjects = m[1].split(',').map((s) => s.trim().split(/[\s>+~]+/).at(-1));
+    if (subjects.includes(selector)) out.push(m[2]);
   }
   return out;
 }
