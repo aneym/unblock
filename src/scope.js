@@ -13,6 +13,7 @@ import { migrateV1, validateScope, sectionPlain, anchorInSection, headingOf, nex
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
+const RELAY_PANE = /^w[A-Za-z0-9]+:p[A-Za-z0-9]+$/
 const APPROVAL_MODES = ['approve', 'approve_to_try', 'approve_with_changes', 'not_yet']
 const approved = (approval) => ['approve', 'approve_to_try', 'approve_with_changes'].includes(approval?.mode)
 const eastern = (at) => `${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(at))} ET`
@@ -430,6 +431,26 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       } catch { return sendJson(res, 200, fallback) }
       finally { if (dir) rmSync(dir, { recursive: true, force: true }) }
     }
+    if (req.method === 'POST' && parts.length === 2 && (action === 'pm-approve' || action === 'unapprove')) {
+      if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'lanes relay approvals; Alex approves on the page' })
+      const body = await readJson(req)
+      const keys = action === 'pm-approve' ? ['by', 'quote', 'at', 'pane'] : ['reason', 'pane']
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !keys.includes(key))) return sendJson(res, 400, { error: 'invalid approval' })
+      if (body.pane !== undefined && (typeof body.pane !== 'string' || !RELAY_PANE.test(body.pane))) return sendJson(res, 400, { error: 'invalid pane' })
+      if (action === 'pm-approve') {
+        if (body.by !== 'alex') return sendJson(res, 400, { error: 'invalid approval' })
+        if (typeof body.quote !== 'string') return sendJson(res, 400, { error: 'invalid quote' })
+        if (body.at !== undefined && typeof body.at !== 'string') return sendJson(res, 400, { error: 'invalid at' })
+      } else if (typeof body.reason !== 'string') return sendJson(res, 400, { error: 'invalid reason' })
+      const previous = writes.get(slug) ?? Promise.resolve()
+      const pending = previous.catch(() => {}).then(() => action === 'pm-approve' ? relayApproval(slug, body) : unapproveScope(slug, body))
+      writes.set(slug, pending)
+      try {
+        const result = await pending
+        if (action === 'pm-approve') res.once('finish', () => { void moveApprovedTab(slug, result.revision, true) })
+        return sendJson(res, 200, result)
+      } finally { if (writes.get(slug) === pending) writes.delete(slug) }
+    }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const shipWrite = req.method === 'POST' && parts.length === 2 && action === 'ship'
@@ -488,8 +509,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
-  async function moveApprovedTab(slug, revision) {
-    await moveTabToInflight({ pane: readScope(slug)?.scope?.pane, revision })
+  async function moveApprovedTab(slug, revision, onlyFromScoping = false) {
+    await moveTabToInflight({ pane: readScope(slug)?.scope?.pane, revision, onlyFromScoping })
   }
 
   function approveScope(slug, scope, body, human) {
@@ -522,6 +543,69 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
     schedule(slug)
     return { approval: scope.approval, closed, revision: scope.revision }
+  }
+
+  function readDisk(slug) {
+    const dir = join(root, slug)
+    let disk
+    try { disk = JSON.parse(readFileSync(join(dir, 'scope.json'), 'utf8')) } catch { bad('scope.json is being rewritten') }
+    return { dir, scope: disk.version === 2 ? disk : migrateV1(disk, disk.updated_at) }
+  }
+
+  function relayApproval(slug, body) {
+    const { dir, scope } = readDisk(slug)
+    const quote = body.quote.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
+    if (!quote || quote.length > 4000) bad('invalid quote')
+    const now = Date.now()
+    let atMs = now
+    if (body.at !== undefined) {
+      atMs = Date.parse(body.at)
+      if (!Number.isFinite(atMs) || atMs > now + 5 * 60 * 1000 || atMs < now - 30 * 24 * 60 * 60 * 1000) bad('invalid at')
+    }
+    if (approved(scope.approval)) bad('already approved', 409)
+    const at = new Date(atMs).toISOString(), recorded_at = new Date(now).toISOString(), at_et = eastern(at)
+    const who = `pm-relay${body.pane ? `:${body.pane}` : ''}`
+    const open = scope.threads.filter((thread) => thread.status === 'open').length
+    scope.approval = { mode: 'approve', by: 'alex', who, at, at_et, revision: scope.revision, comment: quote, quote, via: 'pm-relay', open, recorded_at }
+    scope.updated_at = recorded_at
+    const problems = validateScope(scope)
+    if (problems.length) bad(problems[0])
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nMode: approve\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${who}\nVia: pm-relay\nOpen threads: ${open} open\n\n${quote}\n`)
+    appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'approve', comment: quote, at_et })
+    try {
+      const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'approve', text: quote, who, via: 'pm-relay' })
+      emit(slug, 'note', note)
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+    } catch { /* The approval is already on disk. */ }
+    return { approval: scope.approval, revision: scope.revision }
+  }
+
+  function unapproveScope(slug, body) {
+    const { dir, scope } = readDisk(slug)
+    const reason = body.reason.trim()
+    if (!reason || reason.length > 1000) bad('invalid reason')
+    if (!approved(scope.approval)) bad('not approved', 409)
+    const was = scope.approval
+    const now = new Date().toISOString(), at_et = eastern(now)
+    const who = `pm-relay${body.pane ? `:${body.pane}` : ''}`
+    delete scope.approval
+    scope.updated_at = now
+    const problems = validateScope(scope)
+    if (problems.length) bad(problems[0])
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nUnapproved: ${at_et}\nRevision: ${scope.revision}\nWho: ${who}\nWas: ${was.at_et} via ${was.via || 'page'}\n\nReason: ${reason}\n`)
+    appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'unapproved', comment: reason, at_et })
+    try {
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+    } catch { /* The unapproval is already on disk. */ }
+    return { revision: scope.revision }
   }
 
   function shipScope(slug, scope, body, human) {

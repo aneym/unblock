@@ -173,7 +173,11 @@ export function validateScope(scope) {
       && typeof a.who === 'string' && typeof a.at === 'string' && Number.isFinite(Date.parse(a.at)) && typeof a.at_et === 'string'
       && Number.isInteger(a.revision) && a.revision >= 1 && typeof a.comment === 'string' && a.comment.length <= 4000
       && !/[\x00-\x09\x0b-\x1f\x7f]/.test(a.comment) && (['approve', 'approve_to_try'].includes(a.mode) || !!a.comment.trim())
-      && (a.via === undefined || ['voice', 'admin'].includes(a.via))
+      && (a.via === undefined || ['voice', 'admin', 'pm-relay'].includes(a.via))
+      && (a.quote === undefined || (typeof a.quote === 'string' && a.quote.length <= 4000))
+      && (a.via !== 'pm-relay' || (typeof a.quote === 'string' && !!a.quote.trim()))
+      && (a.open === undefined || (Number.isInteger(a.open) && a.open >= 0))
+      && (a.recorded_at === undefined || (typeof a.recorded_at === 'string' && Number.isFinite(Date.parse(a.recorded_at))))
       && (a.client_id === undefined || (typeof a.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(a.client_id))), 'invalid approval')
   }
   check(Array.isArray(scope.threads), 'invalid threads')

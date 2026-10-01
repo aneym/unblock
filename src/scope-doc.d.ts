@@ -102,7 +102,10 @@ export interface ScopeApproval {
   at_et: string
   revision: number
   comment: string
-  via?: 'voice' | 'admin'
+  via?: 'voice' | 'admin' | 'pm-relay'
+  quote?: string
+  open?: number
+  recorded_at?: string
   client_id?: string
 }
 

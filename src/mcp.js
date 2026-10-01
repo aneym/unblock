@@ -274,6 +274,26 @@ const TOOLS = [
       required: ['ticket'],
     },
   },
+  {
+    name: 'unblock_scope_approve',
+    description: 'relay an approval Alex gave in chat; quote is his exact words, never a paraphrase; at is when he said it',
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' }, quote: { type: 'string' }, at: { type: 'string' } },
+      required: ['slug', 'quote'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'unblock_scope_unapprove',
+    description: 'Take back a scope approval the PM relayed from chat.',
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' }, reason: { type: 'string' } },
+      required: ['slug', 'reason'],
+      additionalProperties: false,
+    },
+  },
 ]
 
 function textResult(text, data) {
@@ -559,6 +579,23 @@ export class McpConnection {
         }
         await sleep(3000)
       }
+    }
+
+    if (name === 'unblock_scope_approve') {
+      if (typeof args.quote !== 'string' || !args.quote.trim()) throw new Error('quote is required')
+      const payload = { by: 'alex', quote: args.quote }
+      if (args.at !== undefined) payload.at = args.at
+      if (process.env.HERDR_PANE_ID) payload.pane = process.env.HERDR_PANE_ID
+      const body = await daemonFetch(`/scope/${encodeURIComponent(args.slug)}/pm-approve`, { method: 'POST', body: JSON.stringify(payload) })
+      return textResult(`approved ${args.slug} r${body.revision} (${body.approval.at_et}, ${body.approval.open} open)`, { approval: body.approval })
+    }
+
+    if (name === 'unblock_scope_unapprove') {
+      if (typeof args.reason !== 'string' || !args.reason.trim()) throw new Error('reason is required')
+      const payload = { reason: args.reason }
+      if (process.env.HERDR_PANE_ID) payload.pane = process.env.HERDR_PANE_ID
+      const body = await daemonFetch(`/scope/${encodeURIComponent(args.slug)}/unapprove`, { method: 'POST', body: JSON.stringify(payload) })
+      return textResult(`unapproved ${args.slug}`, { revision: body.revision })
     }
 
     throw new Error(`unknown tool: ${name}`)

@@ -12,7 +12,8 @@ export function appendApprovalIndex(root, { slug, revision, mode, comment, at_et
   const index = join(root, 'INDEX.md')
   const previous = existsSync(index) ? readFileSync(index, 'utf8') : ''
   const text = compact(comment)
-  const log = `- ${at_et} · ${slug} r${revision} · ${mode === 'approve' ? 'approved' : mode === 'approve_to_try' ? 'approved to try' : mode === 'approve_with_changes' ? 'approved with changes' : 'not yet'} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
+  const label = { approve: 'approved', approve_to_try: 'approved to try', approve_with_changes: 'approved with changes', not_yet: 'not yet', unapproved: 'unapproved' }[mode] ?? 'not yet'
+  const log = `- ${at_et} · ${slug} r${revision} · ${label} · ${text ? `"${text.slice(0, 160)}"` : '(no note)'}\n`
   const heading = /^## Approvals[ \t]*$/m.exec(previous)
   let updated
   if (heading) {
@@ -24,13 +25,27 @@ export function appendApprovalIndex(root, { slug, revision, mode, comment, at_et
   writeFileSync(index, updated)
 }
 
-export async function moveTabToInflight({ pane, revision, herdr = process.env.HERDR_BIN_PATH || 'herdr', herdrLane = process.env.UNBLOCK_HERDR_LANE || join(homedir(), '.local/bin/herdr-lane') }) {
+function laneRows(parsed) {
+  if (Array.isArray(parsed)) return parsed
+  if (parsed && typeof parsed === 'object') return [parsed]
+  return []
+}
+
+export async function moveTabToInflight({ pane, revision, onlyFromScoping = false, herdr = process.env.HERDR_BIN_PATH || 'herdr', herdrLane = process.env.UNBLOCK_HERDR_LANE || join(homedir(), '.local/bin/herdr-lane') }) {
   try {
     if (typeof pane !== 'string' || !pane.trim()) return
     const tab = JSON.parse(await run(herdr, ['pane', 'get', pane], 10000)).result?.pane?.tab_id
     if (!tab) return
     const label = JSON.parse(await run(herdr, ['tab', 'get', tab], 10000)).result?.tab?.label
-    if (typeof label === 'string' && label.startsWith('[scoping]')) await run(herdr, ['tab', 'rename', tab, label.slice(9).trim()], 10000)
+    const scopingLabel = typeof label === 'string' && label.startsWith('[scoping]')
+    if (onlyFromScoping && !scopingLabel) {
+      let listed
+      try { listed = JSON.parse(await run(herdrLane, ['list', '--json'], 10000)) }
+      catch { return }
+      const row = laneRows(listed).find((item) => item && item.tab === tab)
+      if (!row || row.section !== 'scoping') return
+    }
+    if (scopingLabel) await run(herdr, ['tab', 'rename', tab, label.slice(9).trim()], 10000)
     await run(herdrLane, ['section', tab, 'inflight', '--by', 'alex', '--note', `scope approved r${revision}`], 10000)
   } catch { /* Moving the tab is best effort; the approval is already durable. */ }
 }

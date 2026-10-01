@@ -376,6 +376,8 @@ body.zoom-open { overflow: hidden; }
 .title-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .approval { padding: 14px 16px; margin: 12px 0 20px; border: 1px solid var(--hairline); border-radius: var(--radius-small); background: var(--fill-1); font-size: 14px; }
 .approval-note { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
+.approval-meta { color: var(--text-2, inherit); font-size: 13px; margin-top: 4px; }
+blockquote.approval-note { margin: 8px 0 0; padding: 0; border: 0; }
 dialog.approve { width: min(540px, calc(100% - 32px)); box-sizing: border-box; border: 1px solid var(--hairline); border-radius: var(--radius-panel); background: var(--raised); color: var(--ink); padding: 24px; box-shadow: var(--shadow-2); }
 dialog.approve::backdrop { background: rgb(0 0 0 / .35); }
 dialog.approve h2 { margin: 0 0 12px; }

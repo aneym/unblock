@@ -491,7 +491,7 @@ async function scopeLinks(health, slug) {
 }
 
 async function scope(args) {
-  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
+  const usage = 'usage: unblock scope list | app <slug> <app> | url <slug> | notes <slug> [--since N] | ask <slug> --section <id> --quote <quote> [--rec text] [--why text] [--option text ...] <question...> | reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...> | edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json] | react <slug> T# [--clear] | resolve <slug> T# [--decision text] | approve <slug> --by alex --quote "<verbatim>" [--at <iso>] | unapprove <slug> --reason "<why>" | doc <slug> [--from <file>] | patch <slug> <id> --from <file> [--keep term ...] | lint <slug> --from <file> [--keep term ...] | threads <slug> [--open] [--json]; writes accept --keep term (repeatable)'
   const [sub = 'list', slug, ...words] = args
   if (sub === 'react') {
     const { rest, opts } = flags(args, { '--clear': false })
@@ -499,6 +499,29 @@ async function scope(args) {
     if (!name || !THREAD_ID.test(threadId ?? '') || extra.length) fail(usage)
     const data = await request(`/api/scope/${encodeURIComponent(name)}/threads/${threadId}/react`, { emoji: opts['--clear'] ? null : '👀' })
     return output(data, `${opts['--clear'] ? 'cleared' : 'seen'} ${data.thread.id}`)
+  }
+  if (sub === 'approve' || sub === 'unapprove') {
+    if (!slug) fail(usage)
+    const allowed = sub === 'approve' ? ['--by', '--quote', '--at'] : ['--reason']
+    const opts = {}
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]
+      if (word === '--json') { json = true; continue }
+      if (!allowed.includes(word)) fail(usage)
+      const value = words[++i]
+      if (value === undefined) fail(usage)
+      opts[word] = value
+    }
+    if (sub === 'approve') {
+      const quote = opts['--quote']
+      if (opts['--by'] === undefined || quote === undefined || opts['--by'] !== 'alex' || !String(quote).trim()) fail(usage)
+      const data = await request(`/api/scope/${encodeURIComponent(slug)}/pm-approve`, { by: 'alex', quote, ...(opts['--at'] !== undefined ? { at: opts['--at'] } : {}), ...(process.env.HERDR_PANE_ID ? { pane: process.env.HERDR_PANE_ID } : {}) })
+      return output(data, `approved ${slug} r${data.revision} (${data.approval.at_et}, ${data.approval.open} open)`)
+    }
+    const reason = opts['--reason']
+    if (reason === undefined || !String(reason).trim()) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(slug)}/unapprove`, { reason, ...(process.env.HERDR_PANE_ID ? { pane: process.env.HERDR_PANE_ID } : {}) })
+    return output(data, `unapproved ${slug}`)
   }
   if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
@@ -773,6 +796,8 @@ unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" .
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
 unblock scope react <slug> T# [--clear]
 unblock scope resolve <slug> T# [--decision "text"]
+unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
+unblock scope unapprove <slug> --reason "<why>"
 unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]

@@ -7,6 +7,7 @@ import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
+import { approvalBannerHtml } from './approval-banner.js'
 import { prepareAudio } from '../lib/voice-audio'
 import type { ScopeVoiceUi, ScopeFeedLine } from '../../../src/scope-voice.js'
 
@@ -192,10 +193,7 @@ let queuedApproval: QueuedApproval | null = null
 function isApproved() { return scope?.approval?.mode === 'approve_to_try' || scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
 function approvalBanner() {
   if (queuedApproval) return `<div class="approval" data-cm-skip role="status"><strong>${queuedApproval.failed ? "Couldn't approve. Try again." : 'Sending…'}</strong>${queuedApproval.comment ? `<div class="approval-note">${esc(queuedApproval.comment)}</div>` : ''}</div>`
-  const a = scope?.approval
-  if (!a) return ''
-  const label = a.mode === 'approve_to_try' ? 'Approved to try' : a.mode === 'approve' ? 'Approved, building' : a.mode === 'approve_with_changes' ? 'Approved with changes, building after the lane folds your note in' : 'Not yet'
-  return `<div class="approval" data-cm-skip><strong>${label}</strong> · ${esc(a.at_et)}${a.comment ? `<div class="approval-note">${esc(a.comment)}</div>` : ''}</div>`
+  return approvalBannerHtml(scope?.approval)
 }
 const approveDialog = document.createElement('dialog')
 approveDialog.className = 'approve'
