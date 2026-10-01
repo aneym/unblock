@@ -16,7 +16,7 @@ export function rateFor(model) {
   return USD_PER_MINUTE[model] ?? 0.10
 }
 
-export function createSpendLedger({ file, capUsd = 20, maxMinutes = 15, now = Date.now }) {
+export function createSpendLedger({ file, capUsd = null, maxMinutes = 15, now = Date.now }) {
   const period = (date) => new Date(date).toISOString().slice(0, 7)
   const load = () => {
     try {
@@ -48,8 +48,8 @@ export function createSpendLedger({ file, capUsd = 20, maxMinutes = 15, now = Da
       const current = period(now())
       const spent = sessions.filter((session) => session.period === current).reduce((sum, session) => sum + cost(session), 0)
       const rate = rateFor(model)
-      const minutes = Math.min(maxMinutes, Math.floor((capUsd - spent + 1e-9) / rate))
-      if (minutes < 1) {
+      const minutes = capUsd === null ? maxMinutes : Math.min(maxMinutes, Math.floor((capUsd - spent + 1e-9) / rate))
+      if (capUsd !== null && minutes < 1) {
         const error = new Error('Voice hit this month’s cap')
         error.code = 'VOICE_SPEND_CAP'
         throw error

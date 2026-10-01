@@ -1122,7 +1122,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       }
       const positive = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback
       const minutes = Number(process.env.UNBLOCK_VOICE_MAX_MINUTES)
-      const ledger = createSpendLedger({ file: join(stateDir(), 'voice-spend.json'), capUsd: positive(process.env.UNBLOCK_VOICE_CAP_USD, 20), maxMinutes: Number.isSafeInteger(minutes) && minutes > 0 ? minutes : 15 })
+      const ledger = createSpendLedger({ file: join(stateDir(), 'voice-spend.json'), capUsd: positive(process.env.UNBLOCK_VOICE_CAP_USD, null), maxMinutes: Number.isSafeInteger(minutes) && minutes > 0 ? minutes : 15 })
       const configured = async (id) => {
         const setting = settings[id]
         const cached = voiceKeyCache.get(id)

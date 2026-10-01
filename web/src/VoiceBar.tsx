@@ -62,7 +62,7 @@ export function VoiceBar({ state, transcript, onEnd, onRetry, provider, choices,
       <span className="voice-speed-value">{speed.toFixed(1)}×</span>
       <button type="button" data-voice-speed="up" aria-label="Faster" disabled={speed >= 1.5} onClick={() => stepSpeed(0.1)}>+</button>
     </span></>}
-    {spend && <span className="voice-spend"> · ${spend.spent_usd.toFixed(2)} of ${spend.cap_usd}</span>}
+    {spend && <span className="voice-spend"> · ${spend.spent_usd.toFixed(2)}{spend.cap_usd === null ? ' this month' : ` of $${spend.cap_usd}`}</span>}
     {minutesLeft && <> · 1 min left</>}</>
 
   return <div className={`voice-capsule${inactive ? ' voice-capsule-inactive' : ''}${exiting ? ' voice-exiting' : ''}`}

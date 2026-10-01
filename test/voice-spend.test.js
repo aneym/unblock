@@ -36,6 +36,21 @@ test('reservations enforce the monthly cap and settlement bills whole minutes', 
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('the default ledger has no cap and keeps metering past $20', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'voice-spend-'))
+  const file = join(dir, 'ledger.json')
+  try {
+    const ledger = createSpendLedger({ file, maxMinutes: 15, now: () => Date.parse('2026-09-29T23:00:00Z') })
+    for (let count = 1; count <= 20; count++) {
+      const reservation = ledger.reserve({ provider: 'openai', model: 'gpt-realtime-2.1' })
+      assert.equal(reservation.max_minutes, 15)
+      assert.deepEqual(ledger.status(), { spent_usd: count * 1.5, cap_usd: null, period: '2026-09' })
+      assert.equal(ledger.settle(reservation.session_id, 15 * 60), true)
+      assert.equal(ledger.status().spent_usd, count * 1.5)
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('corrupt ledger starts empty and UTC month rollover discards older periods', () => {
   const dir = mkdtempSync(join(tmpdir(), 'voice-spend-'))
   const file = join(dir, 'ledger.json')

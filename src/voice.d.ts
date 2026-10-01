@@ -122,7 +122,7 @@ export function xaiTools(tools?: VoiceToolDeclaration[]): { type: 'function'; na
 /** This month's voice spend against the cap (UTC calendar month). */
 export interface VoiceSpend {
   spent_usd: number
-  cap_usd: number
+  cap_usd: number | null
   /** "YYYY-MM" */
   period: string
 }
