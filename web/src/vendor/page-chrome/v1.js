@@ -1,6 +1,7 @@
 import { applyHostContext } from '../embed.js';
 
-export const VERSION = 'page-chrome@1.0';
+export const VERSION = 'page-chrome@1.1';
+const HREF = /^(?:\/(?![\/\\])[\x21-\x5b\x5d-\x7e]*|https:\/\/[\x21\x22\x24-\x2e\x30-\x3e\x41-\x5b\x5d-\x7e]+(?:[\/?#][\x21-\x5b\x5d-\x7e]*)?)$/;
 const ID = /^[a-z][a-z0-9_-]{0,39}$/;
 const KEYS = /^(Meta\+|Control\+|Shift\+|Alt\+){0,3}[A-Za-z0-9,./\[\]]$/;
 const KINDS = new Set(['read', 'move', 'change', 'send', 'phone', 'screen-only']);
@@ -14,7 +15,7 @@ export function validatePageMessage(params) {
   const label = (value, path) => { if (typeof value !== 'string' || Array.from(value).length < 1 || Array.from(value).length > 80 || !/\S/.test(value)) fail(path, 'expected a nonblank label of 1–80 code points'); };
   const id = (value, path) => { if (typeof value !== 'string' || !ID.test(value)) fail(path, 'invalid action id'); };
   if (!plain(params)) return { ok: false, errors: ['params: expected a plain object'] };
-  only(params, ['v', 'title', 'back', 'primary', 'menu', 'actions'], '');
+  only(params, ['v', 'title', 'back', 'href', 'primary', 'menu', 'actions'], '');
   if (params.v !== 1) fail('v', 'expected 1');
   label(params.title, 'title');
   if ('back' in params) {
@@ -26,6 +27,7 @@ export function validatePageMessage(params) {
       if (typeof route !== 'string' || Array.from(route).length > 300 || !/^\/(?!\/)[^\\\s]*$/.test(route)) fail('back.route', 'expected a local route of at most 300 characters');
     }
   }
+  if ('href' in params && (typeof params.href !== 'string' || params.href.length > 2048 || !HREF.test(params.href))) fail('href', 'expected a local path or an https URL of at most 2048 printable ASCII characters');
   const ids = new Set();
   if (!Array.isArray(params.actions)) fail('actions', 'expected an array');
   else {
@@ -64,8 +66,8 @@ export function validatePageMessage(params) {
 
 export function pageMessage(spec) {
   const actions = (spec.actions ?? []).map(({ id, label, kind, keys }) => ({ id, label, kind, ...(keys !== undefined ? { keys } : {}) }));
-  const menu = (spec.actions ?? []).filter((action) => action.placement === 'menu').map((action) => action.id);
-  return { v: 1, title: spec.title, ...(spec.back !== undefined ? { back: { label: spec.back.label, route: spec.back.route } } : {}), ...(spec.primary !== undefined ? { primary: spec.primary } : {}), ...(menu.length ? { menu } : {}), actions };
+  const menu = (spec.actions ?? []).filter((action) => action.placement === 'menu' && action.id !== spec.primary).map((action) => action.id);
+  return { v: 1, title: spec.title, ...(spec.back !== undefined ? { back: { label: spec.back.label, route: spec.back.route } } : {}), ...(spec.href !== undefined ? { href: spec.href } : {}), ...(spec.primary !== undefined ? { primary: spec.primary } : {}), ...(menu.length ? { menu } : {}), actions };
 }
 
 export function statusLine(updatedAt, staleAfterMs, now = Date.now()) {
@@ -79,7 +81,8 @@ export function statusLine(updatedAt, staleAfterMs, now = Date.now()) {
 }
 
 let sequence = 0;
-export function mountPage(root, initialSpec) {
+export function mountPage(root, initialSpec, options = {}) {
+  const now = options.now ?? (() => Date.now());
   const doc = root.ownerDocument;
   const win = doc.defaultView;
   let spec;
@@ -88,6 +91,10 @@ export function mountPage(root, initialSpec) {
     try { message = pageMessage(next); } catch { throw new TypeError('actions/back: invalid page spec'); }
     const result = validatePageMessage(message);
     if (!result.ok) throw new TypeError(result.errors.join('\n'));
+    if (next.chat?.railsUrl !== undefined) {
+      try { if (new URL(next.chat.railsUrl).protocol !== 'https:') throw new Error(); }
+      catch { throw new TypeError('chat.railsUrl: expected an https URL'); }
+    }
     return Object.freeze({ ...next });
   };
   spec = validate(initialSpec);
@@ -99,7 +106,7 @@ export function mountPage(root, initialSpec) {
   const framed = win.parent !== win && Boolean(hostOrigin);
   const previousFlag = doc.documentElement.dataset.pcFramed;
   if (framed) doc.documentElement.dataset.pcFramed = 'true';
-  let bar, head, menu, more, title, status;
+  let bar, head, menu, more, title, status, chat, sheet, renderedAt;
   let destroyed = false;
   let announced = false;
   let handshakeDone = !(framed && plain(spec.initialize));
@@ -124,6 +131,22 @@ export function mountPage(root, initialSpec) {
     more?.setAttribute('aria-expanded', 'false');
     if (focus) more?.focus();
   };
+  const closeSheet = (focus = false) => {
+    sheet?.remove(); sheet = undefined;
+    chat?.setAttribute('aria-expanded', 'false');
+    if (focus) chat?.focus();
+  };
+  const toggleChat = () => {
+    if (spec.chat?.onToggle) { spec.chat.onToggle(); return; }
+    if (sheet) { closeSheet(); return; }
+    if (!root.dispatchEvent(new win.CustomEvent('page-chrome:chat', { bubbles: true, cancelable: true }))) return;
+    sheet = el('div', 'pc-chat-sheet');
+    sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', 'Chat');
+    const link = el('a', 'btn btn--primary', 'Open in Rails');
+    link.href = spec.chat?.railsUrl ?? 'https://app.rails.so';
+    sheet.append(el('p', '', 'Chat lives in Rails.'), link);
+    bar.append(sheet); chat.setAttribute('aria-expanded', 'true'); link.focus();
+  };
   const toggleMenu = () => {
     if (menu) { closeMenu(); return; }
     menu = el('div', 'pc-menu menu');
@@ -134,16 +157,17 @@ export function mountPage(root, initialSpec) {
       if (keys) node.append(el('kbd', '', keys));
       menu.append(node);
     };
-    item('Open in new tab', '⌘⇧O', () => win.open(win.location.href, '_blank', 'noopener'));
-    item('Copy link', '⌘L', () => { try { Promise.resolve(win.navigator.clipboard?.writeText(win.location.href)).catch(() => {}); } catch { /* Clipboard access may be unavailable. */ } });
-    for (const action of spec.actions ?? []) if (action.placement === 'menu') item(action.label, action.keys, () => action.run({}));
+    item('Open in new tab', '⌘⇧O', () => win.open(spec.href !== undefined ? new URL(spec.href, win.location.href).href : win.location.href, '_blank', 'noopener'));
+    item('Copy link', '⌘L', () => { try { Promise.resolve(win.navigator.clipboard?.writeText(spec.href !== undefined ? new URL(spec.href, win.location.href).href : win.location.href)).catch(() => {}); } catch { /* Clipboard access may be unavailable. */ } });
+    for (const action of spec.actions ?? []) if (action.placement === 'menu' && action.id !== spec.primary) item(action.label, action.keys, () => action.run({}));
     if (spec.settings) item(spec.settings.label, undefined, () => navigate(spec.settings.route));
     bar.append(menu);
     more.setAttribute('aria-expanded', 'true');
   };
   const refreshStatus = () => {
     status?.remove(); status = undefined;
-    const text = statusLine(spec.updatedAt, spec.staleAfterMs);
+    renderedAt = now();
+    const text = statusLine(spec.updatedAt, spec.staleAfterMs, renderedAt);
     if (text) {
       status = el('span', 'pc-status', text);
       status.append(button('pc-refresh btn', 'Refresh', () => spec.onRefresh?.()));
@@ -160,7 +184,7 @@ export function mountPage(root, initialSpec) {
   };
   const scheduleMeasure = () => { if (frameId === undefined) frameId = win.requestAnimationFrame(measure); };
   const render = () => {
-    closeMenu(); bar?.remove(); head?.remove();
+    closeMenu(); closeSheet(); bar?.remove(); head?.remove();
     if (!framed) {
       bar = el('header', 'pc-bar');
       bar.dataset.scrolled = 'false';
@@ -173,7 +197,8 @@ export function mountPage(root, initialSpec) {
       more.setAttribute('aria-label', 'More');
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
-      const chat = button('pc-chat frame-btn', undefined, () => spec.chat?.onToggle ? spec.chat.onToggle() : root.dispatchEvent(new win.CustomEvent('page-chrome:chat', { bubbles: true })));
+      chat = button('pc-chat frame-btn', undefined, toggleChat);
+      chat.setAttribute('aria-expanded', 'false');
       chat.setAttribute('aria-label', 'Chat');
       chat.setAttribute('aria-pressed', String(Boolean(spec.chat?.open)));
       const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -187,7 +212,7 @@ export function mountPage(root, initialSpec) {
     const row = el('div', 'pc-head-row');
     title = el('h1', 'pc-title type-large-title', spec.title);
     const actions = el('div', 'pc-head-actions');
-    for (const action of spec.actions ?? []) if (action.placement !== 'menu') actions.append(button(`pc-action btn${action.id === spec.primary ? ' btn--primary' : ''}`, action.label, () => action.run({})));
+    for (const action of spec.actions ?? []) if (action.placement !== 'menu' || action.id === spec.primary) actions.append(button(`pc-action btn${action.id === spec.primary ? ' btn--primary' : ''}`, action.label, () => action.run({})));
     row.append(title, actions);
     head.append(row, el('p', 'pc-description', spec.description ?? ''));
     if (framed) root.prepend(head); else root.prepend(bar, head);
@@ -224,8 +249,22 @@ export function mountPage(root, initialSpec) {
     } catch { result = { ok: false, speech: `${action.label} didn't work.` }; }
     post({ id: data.id, result });
   };
-  const onKey = (event) => { if (event.key === 'Escape' && menu) { event.preventDefault(); closeMenu(true); } };
-  const onOutside = (event) => { if (menu && !menu.contains(event.target) && !more.contains(event.target)) closeMenu(true); };
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      if (menu) { event.preventDefault(); closeMenu(true); }
+      if (sheet) { event.preventDefault(); closeSheet(true); }
+      return;
+    }
+    if (!(framed && plain(spec.initialize)) || event.defaultPrevented || !(event.metaKey || event.ctrlKey)
+        || !/^(?:[0-9]|k|b|j|,|\\)$/i.test(event.key)
+        || event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    post({ method: 'rails/key', params: { key: event.key, meta: event.metaKey, ctrl: event.ctrlKey, shift: event.shiftKey, alt: event.altKey } });
+    if (!event.shiftKey && !event.altKey) event.preventDefault();
+  };
+  const onOutside = (event) => {
+    if (menu && !menu.contains(event.target) && !more.contains(event.target)) closeMenu();
+    if (sheet && !sheet.contains(event.target) && !chat.contains(event.target)) closeSheet();
+  };
   win.addEventListener('message', onMessage);
   win.addEventListener('scroll', scheduleMeasure, { passive: true });
   win.addEventListener('resize', scheduleMeasure, { passive: true });
@@ -242,11 +281,12 @@ export function mountPage(root, initialSpec) {
   return {
     framed, root,
     get spec() { return spec; },
+    get renderedAt() { return renderedAt; },
     update(patch) { if (destroyed) return; spec = validate({ ...spec, ...patch }); render(); if (announced) announce(); },
     announce,
     destroy() {
       if (destroyed) return;
-      destroyed = true; closeMenu(); bar?.remove(); head.remove();
+      destroyed = true; closeMenu(); closeSheet(); bar?.remove(); head.remove();
       win.clearInterval(statusTimer); win.clearTimeout(initTimer);
       if (frameId !== undefined) win.cancelAnimationFrame(frameId);
       win.removeEventListener('message', onMessage); win.removeEventListener('scroll', scheduleMeasure); win.removeEventListener('resize', scheduleMeasure);
@@ -261,11 +301,11 @@ export function commentsHeader(root, opts) {
   const doc = root.ownerDocument;
   const render = () => {
     root.replaceChildren();
-    for (const text of [`${state.open} open`, `${state.index} of ${state.total}`]) { const span = doc.createElement('span'); span.textContent = text; root.append(span); }
+    for (const [cls, text] of [['pc-comments-open', `${state.open} open`], ['pc-comments-position', `${state.index} of ${state.total}`]]) { const span = doc.createElement('span'); span.className = cls; span.textContent = text; root.append(span); }
     for (const [name, text, callback] of [['Previous comment', '‹', 'onPrev'], ['Next comment', '›', 'onNext']]) {
       const button = doc.createElement('button'); button.type = 'button'; button.className = 'pc-comment-step frame-btn'; button.textContent = text; button.setAttribute('aria-label', name); button.addEventListener('click', () => state[callback]?.()); root.append(button);
     }
-    const label = doc.createElement('label');
+    const label = doc.createElement('label'); label.className = 'pc-comments-resolved';
     const input = doc.createElement('input'); input.type = 'checkbox'; input.checked = Boolean(state.showResolved); input.addEventListener('change', () => state.onShowResolved?.(input.checked));
     label.append(input, ' Show resolved'); root.append(label);
   };
@@ -273,7 +313,7 @@ export function commentsHeader(root, opts) {
   return { update(patch) { state = { ...state, ...patch }; render(); }, destroy() { root.replaceChildren(); root.classList.remove('pc-comments'); } };
 }
 
-export function pageSuite(handle, { now = Date.now() } = {}) {
+export function pageSuite(handle, { now = handle.renderedAt ?? Date.now() } = {}) {
   const failures = [];
   const { root, spec, framed } = handle;
   const doc = root.ownerDocument;
