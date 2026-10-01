@@ -1,7 +1,7 @@
 export interface ApprovalIndexEntry {
   slug: string
   revision: number
-  mode: 'approve' | 'approve_with_changes' | 'not_yet'
+  mode: 'approve' | 'approve_with_changes' | 'not_yet' | 'approve_to_try'
   comment: string
   at_et: string
 }

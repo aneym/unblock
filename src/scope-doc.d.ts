@@ -95,7 +95,7 @@ export type DocAsset = { type: 'image'; width: number | null; height: number | n
   | { type: 'mock'; width: number | null; height: number | null; light: string; dark: string | null; html: string; frame: 'desktop' | 'phone' }
 
 export interface ScopeApproval {
-  mode: 'approve' | 'approve_with_changes' | 'not_yet'
+  mode: 'approve' | 'approve_with_changes' | 'not_yet' | 'approve_to_try'
   by: 'alex'
   who: string
   at: string
