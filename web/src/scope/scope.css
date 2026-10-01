@@ -97,7 +97,7 @@ code { font: 13.5px var(--mono); background: var(--fill-1); padding: 1px 5px; bo
 .quotes q { font-style: italic; }
 .quotes .src { font-size: 13px; color: var(--tx2); }
 
-.fig { margin: 0; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--card); padding: 16px; }
+.fig { margin: 0; }
 .fig svg { display: block; width: 100%; height: auto; }
 .fig svg.phone { display: none; max-width: 420px; }
 @media (max-width: 599px) { .fig svg.wide { display: none; } .fig svg.phone { display: block; } }
