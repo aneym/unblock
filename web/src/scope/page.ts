@@ -29,7 +29,7 @@ const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rai
 function chromeSpec() {
   const actions: PageAction[] = []
   if (boot.comment !== 'host') actions.push({ id: 'comment', label: 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: 'Comment on the whole doc.' } } })
-  if (!isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
+  if (boot.approve !== 'host' && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
   if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: 'Talk it through by voice', kind: 'screen-only', placement: 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
   return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const }
 }
@@ -624,7 +624,7 @@ function threadTarget(id: string) {
 function jumpThread(id: string, flash = false) {
   const target = threadTarget(id), node = target.node
   if (!node) return
-  if (target.general) scrollTo({ top: 0, behavior: 'instant' })
+  if (target.general) scrollTo({ top: phone() ? scrollY + node.getBoundingClientRect().top - 96 : 0, behavior: 'instant' })
   else if (phone()) scrollTo({ top: scrollY + node.getBoundingClientRect().top - 96, behavior: 'instant' })
   else node.scrollIntoView({ block: target.fallback ? 'start' : 'center', behavior: 'smooth' })
   if (flash && !target.fallback) { node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash') }
