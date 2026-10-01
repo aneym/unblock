@@ -84,6 +84,10 @@ test('with changes and not yet need his note, and read it back', async () => {
 test('an approved scope, a half sentence and a host without the route never send', async () => {
   const done = setup({ approval: { mode: 'approve', at: '2026-09-30T01:00:00Z' } })
   assert.deepEqual(await done.say('approve_scope', { mode: 'approve' }), { ok: false, speech: 'This scope is already approved.' })
+  const trial = setup({ approval: { mode: 'approve_to_try' } })
+  assert.deepEqual(await trial.say('approve_scope', { mode: 'approve' }), { ok: false, speech: 'This scope is approved to try. Press Ship it when the build is ready.' })
+  await trial.say('confirm')
+  assert.equal(trial.approvals.length, 0)
   const half = setup()
   assert.deepEqual(await half.say('approve_scope', { mode: 'not_yet', note: 'it needs the' }), { ok: false, speech: 'Go on.' })
   const host = setup({ postApprove: false })

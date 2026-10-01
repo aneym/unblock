@@ -191,6 +191,7 @@ export function createScopeVoiceSession(deps) {
             const mode = args.mode, note = words(args.note)
             if (!['approve', 'approve_with_changes', 'not_yet'].includes(mode)) return fail("I can't do that here.")
             if (['approve', 'approve_with_changes'].includes(scope.approval?.mode)) return fail('This scope is already approved.')
+            if (scope.approval?.mode === 'approve_to_try') return fail('This scope is approved to try. Press Ship it when the build is ready.')
             if (!deps.postApprove) return fail("I can't approve from here. Use the Approve button.")
             if (unfinished(note)) { filingLabel = 'Waiting for the rest'; return fail('Go on.') }
             if (!note && mode === 'approve_with_changes') return fail('What should the lane change first?')
