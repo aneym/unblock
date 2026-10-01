@@ -129,6 +129,21 @@ export function loadOrCreateSecret() {
   return secret
 }
 
+/** Separate from the agent bearer. Only the rails-sync sidecar should hold this. */
+export function loadOrCreateRailsSyncSecret() {
+  const file = join(stateDir(), 'rails-sync-auth')
+  try {
+    const existing = readFileSync(file, 'utf8').trim()
+    if (existing.length >= 32) return existing
+  } catch {
+    /* first run */
+  }
+  const secret = randomBytes(32).toString('base64url')
+  mkdirSync(stateDir(), { recursive: true, mode: 0o700 })
+  writeFileSync(file, `${secret}\n`, { mode: 0o600 })
+  return secret
+}
+
 /** Constant-time compare so a token cannot be recovered by timing. */
 function sameSecret(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false
@@ -345,6 +360,16 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   const refuseWorktreeOrigins = process.env.UNBLOCK_REFUSE_WORKTREE_ORIGINS === 'true'
   if (port === undefined) port = Number(process.env.UNBLOCK_PORT || 4488)
   const authSecret = loadOrCreateSecret()
+  const railsSyncSecret = loadOrCreateRailsSyncSecret()
+  function railsSyncProof(req) {
+    const header = req.headers['x-unblock-rails-sync']
+    return typeof header === 'string' && sameSecret(header.trim(), railsSyncSecret)
+  }
+  function rejectRailsWithoutProof(req, res, body) {
+    if (body?.via !== 'rails' || railsSyncProof(req)) return false
+    sendJson(res, 403, { code: 'RAILS_SYNC_PROOF' })
+    return true
+  }
   const relaySecret = process.env.UNBLOCK_ADMIN_RELAY_TOKEN || await defaultReadKey(process.env.UNBLOCK_ADMIN_RELAY_KEY_REF || 'unblock-admin-relay', 'UNBLOCK_ADMIN_RELAY_TOKEN')
   function relayIdentity(req) {
     if (relaySecret.length < 32 || !sameSecret(req.headers['x-unblock-relay'], relaySecret)) return null
@@ -947,9 +972,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         emitQueue()
         return sendJson(res, 200, result)
       }
+      if (rejectRailsWithoutProof(req, res, body)) return
+      const answeredVia = proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : body.via === 'rails' ? 'rails' : 'local'
       const result = body.bounce
-        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
-        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
+        ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, answeredVia, body.revision, body.field_bounce))
+        : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, answeredVia)
       if (!result) return notFound(res)
       emitQueue()
       return sendJson(res, 200, result)
@@ -1199,9 +1226,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (pathname === '/api/answer' && req.method === 'POST') {
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
+      if (rejectRailsWithoutProof(req, res, body)) return
+      const answeredVia = proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : body.via === 'rails' ? 'rails' : 'local'
       const result = body.bounce
-        ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local', body.revision, body.field_bounce))
-        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')
+        ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply, answeredVia, body.revision, body.field_bounce))
+        : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, answeredVia)
       emitQueue()
       return sendJson(res, 200, result)
     }

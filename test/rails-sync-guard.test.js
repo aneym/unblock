@@ -85,7 +85,7 @@ async function create(ask) {
 const decision = { purpose: 'decision', only_you: 'judgment', title: 'Launch day', why: 'The post is drafted.',
   fields: [{ name: 'day', label: 'Day', type: 'choice', choices: ['Tuesday', 'Thursday'], recommend: { value: 'Tuesday', why: 'Most readers are in.' } }] }
 const spend = { purpose: 'spend', only_you: 'spend', title: 'Pay', why: 'Needed.',
-  spend: { item: 'Workspace subscription', vendor: 'Acme', vendor_url: 'https://example.com/checkout', amount_cents: 1500, cap_cents: 2000, currency: 'usd' } }
+  spend: { item: 'Workspace subscription', vendor: 'Acme', vendor_url: 'https://example.com/checkout', amount_cents: 1500, cap_cents: 2000, currency: 'usd', why: 'The workspace needs a seat.' } }
 const hostedFor = (local) => [...asks.values()].find((a) => a.request_id === local.ticket)
 const local = async (ticket) => (await raw(`/api/asks/${ticket}`)).json
 

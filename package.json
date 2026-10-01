@@ -4,7 +4,8 @@
   "description": "One queue for everything an agent needs from a human.",
   "type": "module",
   "bin": {
-    "unblock": "./bin/unblock.js"
+    "unblock": "./bin/unblock.js",
+    "unblock-rails-sync": "./bin/unblock-rails-sync.js"
   },
   "engines": {
     "node": ">=22"
