@@ -1,8 +1,9 @@
-// Owner: Opus (r37, a lane never closes Alex's comment). Implementers copy it to test/ and make it pass; they never edit it.
-// Alex (2026-09-30 ~09:58 ET): "i asked a question here somewhere and the comment got removed rather than responded to".
-// On routing-next, pNE answered his T8 "sol 6.1 right?" and resolved it in the same second; the page hides resolved
-// threads, so the question vanished with no answer seen. Rule: a lane answers Alex's comment and it stays open until
-// he resolves it. A lane `resolve` on his comment records the answer and keeps it open. Lane questions still resolve.
+// Owner: Opus (r37, rewritten 2026-10-02 for "lanes close threads when we agree"). Implementers make it pass; they never edit it.
+// Alex (2026-10-02 19:45 ET, on Lane asks cards): "maybe these work more as comments in general, with just an approve
+// button ... and agents can close cards by themselves if we agree?" This supersedes r37's "a lane never closes Alex's
+// comment" (2026-09-30): the card now shows who resolved it and why, and he can reopen it. Two guards stay:
+// a lane says why when it closes his comment, and an answer of his that is a question never counts as a decision
+// (open-factory T7, "like agent rails could make its own ui? not sure i udnerstand", was resolved as his answer).
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -15,17 +16,22 @@ const sections = [
   { id: 'title', heading: 'Demo scope', body_md: 'A small page.' },
   { id: 'plan', heading: 'The plan', body_md: 'We run Sol medium for the build. Then the review.' },
 ]
+const confused = 'like agent rails could make its own ui? not sure i understand?'
 const scope = {
   version: 2, slug: 'demo', title: 'Demo scope', pane: 'w5H:pT1', revision: 2, updated_at: at, doc: { sections },
-  threads: [{ id: 'T1', anchor: anchorInSection(sections[1], 'Then the review'), author: 'agent', kind: 'question', status: 'open', recommendation: 'Sonnet', messages: [{ from: 'agent', text: 'Who reviews?', at }], created_at: at }],
+  threads: [
+    { id: 'T1', anchor: anchorInSection(sections[1], 'Then the review'), author: 'agent', kind: 'question', status: 'open', recommendation: 'Sonnet', messages: [{ from: 'agent', text: 'Who reviews?', at }], created_at: at },
+    // Stored before this change: his question was saved as his own answer and waits for the lane to confirm it.
+    { id: 'T2', anchor: anchorInSection(sections[1], 'Then the review'), author: 'agent', kind: 'question', status: 'resolved', recommendation: 'One copy', messages: [{ from: 'agent', text: 'One copy or two?', at }], created_at: at,
+      resolution: { decision: confused, alex_words: confused, by: 'alex', how: 'own', at, confirmed_at: null, revision: null } },
+  ],
 }
 
-test('a lane answers Alex\'s comment and it stays open; lane questions still resolve', async () => {
+test('a lane closes a thread once settled, says why, and can reopen it; his question is never a decision', async () => {
   const h = await startScopeHarness(scope)
   const { request, bearer } = h
-  const get = async () => (await request('/api/scope/demo', { headers: human })).json
-  const thread = async (id) => (await get()).scope.threads.find((t) => t.id === id)
-  const resolve = (id, body, headers = bearer) => request(`/api/scope/demo/threads/${id}/resolve`, { method: 'POST', headers, body })
+  const thread = async (id) => (await request('/api/scope/demo', { headers: human })).json.scope.threads.find((t) => t.id === id)
+  const post = (id, verb, body, headers = bearer) => request(`/api/scope/demo/threads/${id}/${verb}`, { method: 'POST', headers, body })
   const comment = async (quote, textValue, client_id) => {
     const posted = await request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor: anchorInSection(sections[1], quote), text: textValue, client_id } })
     assert.equal(posted.status, 201, posted.text)
@@ -38,52 +44,53 @@ test('a lane answers Alex\'s comment and it stays open; lane questions still res
     child.on('error', reject); child.on('close', (status) => done({ status, stdout, stderr }))
   })
   try {
-    // 1. What pNE did: reply, then resolve in the same breath. The thread stays open with the answer on it.
-    const t8 = await comment('We run Sol medium for the build', 'sol 6.1 right?', 'c-1')
-    assert.equal((await request(`/api/scope/demo/threads/${t8}/reply`, { method: 'POST', headers: bearer, body: { text: 'Yes: Sol is GPT-6.1 Sol. The table now says so.' } })).status, 200)
-    const kept = await resolve(t8, { decision: 'Answered: Sol is GPT-6.1 Sol.' })
-    assert.equal(kept.status, 200, kept.text)
-    assert.equal(kept.json.kept_open, true, 'the reply says the comment stayed open')
-    let t = await thread(t8)
-    assert.equal(t.status, 'open', 'a lane never closes Alex\'s comment')
-    assert.equal(t.resolution, undefined)
-    assert.equal(t.messages.at(-1).from, 'agent')
-    assert.equal(t.messages.filter((m) => m.from === 'agent').length, 1, 'the lane already answered: the decision is not added again')
+    // 1. The lane answers his comment, he agrees, and the lane closes it with a reason.
+    const t3 = await comment('We run Sol medium for the build', 'sol 6.1 right?', 'c-1')
+    assert.equal((await post(t3, 'reply', { text: 'Yes: Sol is GPT-6.1 Sol.' })).status, 200)
+    assert.equal((await post(t3, 'reply', { text: 'ok good', client_id: 'c-2' }, human)).status, 200)
+    const closed = await post(t3, 'resolve', { decision: 'Alex agreed: Sol is GPT-6.1 Sol.' })
+    assert.equal(closed.status, 200, closed.text)
+    let t = await thread(t3)
+    assert.equal(t.status, 'resolved')
+    assert.deepEqual([t.resolution.by, t.resolution.decision], ['agent', 'Alex agreed: Sol is GPT-6.1 Sol.'])
+    assert.equal(t.messages.at(-1).from, 'agent', 'the reason is also the lane\'s last word on the thread')
 
-    // 2. A lane resolve with no reply first: the decision becomes the lane's answer on the thread.
-    const t9 = await comment('Then the review', 'who reviews the reviewer?', 'c-2')
-    const answered = await resolve(t9, { decision: 'Sonnet 5.5 reviews; Opus judges a FAIL.' })
-    assert.equal(answered.status, 200, answered.text)
-    t = await thread(t9)
-    assert.equal(t.status, 'open')
-    assert.deepEqual(t.messages.map((m) => [m.from, m.text]), [['alex', 'who reviews the reviewer?'], ['agent', 'Sonnet 5.5 reviews; Opus judges a FAIL.']])
-    // With no reply and no decision there is no answer to show: refused with a plain next step.
-    const t10 = await comment('Then the review', 'and the budget?', 'c-3')
-    const empty = await resolve(t10, {})
-    assert.equal(empty.status, 400)
-    assert.match(empty.json.error, /reply/i)
-    assert.equal((await thread(t10)).status, 'open')
+    // 2. No reason, no close: his comment stays open and the lane is told what to pass.
+    const t4 = await comment('Then the review', 'who reviews the reviewer?', 'c-3')
+    const bare = await post(t4, 'resolve', {})
+    assert.equal(bare.status, 400)
+    assert.match(bare.json.error, /--decision/)
+    assert.equal((await thread(t4)).status, 'open')
 
-    // 3. Alex closes his own comment; the lane confirms it as before.
-    const mine = await resolve(t8, { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve', client_id: 'c-4' }, human)
-    assert.equal(mine.status, 200, mine.text)
-    t = await thread(t8)
-    assert.equal(t.status, 'resolved'); assert.equal(t.resolution.by, 'alex')
-    assert.equal((await resolve(t8, {})).status, 200)
-    assert.ok((await thread(t8)).resolution.confirmed_at, 'the lane still confirms Alex\'s resolve')
+    // 3. The lane reopens it from the CLI with a reason; he sees the reason on the card.
+    const reopened = await cli('scope', 'reopen', 'demo', t3, '--reason', 'Reopened: the table still says Sol 6.0.')
+    assert.equal(reopened.status, 0, reopened.stderr)
+    assert.match(reopened.stdout, new RegExp(`reopened ${t3}`))
+    t = await thread(t3)
+    assert.equal(t.status, 'open'); assert.equal(t.resolution, undefined)
+    assert.equal(t.messages.at(-1).text, 'Reopened: the table still says Sol 6.0.')
 
-    // 4. The lane's own question still resolves by the lane.
-    const q = await resolve('T1', { decision: 'Sonnet reviews, settled in T9.' })
-    assert.equal(q.status, 200, q.text)
-    assert.notEqual(q.json.kept_open, true)
+    // 4. Answering a lane question with a question keeps it open as his reply.
+    const asked = await post('T1', 'resolve', { decision: 'what about Opus?', alex_words: 'what about Opus?', how: 'own', client_id: 'c-4' }, human)
+    assert.equal(asked.status, 200, asked.text)
     t = await thread('T1')
-    assert.equal(t.status, 'resolved'); assert.equal(t.resolution.by, 'agent')
+    assert.equal(t.status, 'open'); assert.equal(t.resolution, undefined)
+    assert.deepEqual([t.messages.at(-1).from, t.messages.at(-1).text], ['alex', 'what about Opus?'])
 
-    // 5. The CLI tells the lane what happened.
-    const out = await cli('scope', 'resolve', 'demo', t9, '--decision', 'Sonnet 5.5 reviews.')
-    assert.equal(out.status, 0, out.stderr)
-    assert.match(out.stdout, new RegExp(`answered ${t9}`))
-    assert.match(out.stdout, /stays open until Alex resolves it/)
-    assert.equal((await thread(t9)).status, 'open')
+    // 5. A question stored as his answer before this change: the lane cannot confirm it, the list flags it, and it reopens.
+    const confirm = await post('T2', 'resolve', {})
+    assert.equal(confirm.status, 400)
+    assert.match(confirm.json.error, /scope reopen demo T2/)
+    const listed = await cli('scope', 'threads', 'demo')
+    assert.match(listed.stdout, /T2 resolved .*his answer is a question: unblock scope reopen demo T2/)
+    assert.equal((await cli('scope', 'reopen', 'demo', 'T2')).status, 0)
+    assert.equal((await thread('T2')).status, 'open')
+
+    // 6. Unchanged: Alex closes his own comment and the lane confirms it; a lane question resolves by the lane.
+    assert.equal((await post(t4, 'resolve', { decision: 'Resolved', alex_words: 'Resolved', how: 'resolve', client_id: 'c-5' }, human)).status, 200)
+    assert.equal((await post(t4, 'resolve', {})).status, 200)
+    assert.ok((await thread(t4)).resolution.confirmed_at)
+    assert.equal((await post('T1', 'resolve', { decision: 'Sonnet reviews.' })).status, 200)
+    assert.equal((await thread('T1')).resolution.by, 'agent')
   } finally { await h.close() }
 })

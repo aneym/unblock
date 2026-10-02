@@ -1,7 +1,7 @@
 // Owner: Opus (r41, Reopen and Delete). Implementers copy it to test/ and make it pass; they never edit it.
 // Alex (2026-09-30 14:55 ET): "need to be able to unresovle comments, and right click to see options btw."
 // The menu offers Reply, Resolve/Reopen, Copy link, Jump to text, and Delete on his own notes.
-// Server: POST threads/<T>/reopen (Alex or the Admin relay; a lane gets 403) puts a resolved or parked thread back
+// Server: POST threads/<T>/reopen (Alex, the Admin relay, or since 2026-10-02 a lane: scope-agent-resolve.test.js) puts a resolved or parked thread back
 // to open and tells the lane like a new note. POST threads/<T>/delete removes a thread Alex started (403 on a lane's
 // thread or from a lane) and tells the lane. Neither needs text.
 import assert from 'node:assert/strict'
@@ -32,7 +32,6 @@ test('Alex reopens a resolved or parked thread and deletes his own note; the lan
   try {
     // 1. Reopen a resolved comment: open again, resolution gone, messages kept, a revision is not a doc revision.
     const before = (await get()).scope.revision
-    assert.equal((await post('T2', 'reopen', {}, bearer)).status, 403, 'a lane cannot reopen')
     const opened = await post('T2', 'reopen', { client_id: 'c-1' })
     assert.equal(opened.status, 200, opened.text)
     let t = await thread('T2')

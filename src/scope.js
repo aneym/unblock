@@ -500,8 +500,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     if (verb === 'react' && human) return sendJson(res, 403, { error: 'lanes react through the CLI' })
     if (['reopen', 'delete'].includes(verb)) {
-      if (!human) return sendJson(res, 403, { error: verb === 'reopen' ? 'only Alex reopens' : 'only Alex deletes' })
-      if (!relay) requireHumanPath(req)
+      if (!human && verb === 'delete') return sendJson(res, 403, { error: 'only Alex deletes' })
+      if (human && !relay) requireHumanPath(req)
     }
     const body = await readJson(req)
     if (body?.images !== undefined && !human) return sendJson(res, 400, { error: 'invalid images' })
@@ -858,7 +858,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       } else if (verb === 'reopen') {
         if (!['resolved', 'parked'].includes(thread.status)) bad('only resolved or parked threads reopen')
         thread.status = 'open'; delete thread.resolution; delete thread.parked_at
-        noteData = { event: 'reopen', text: '' }
+        // Alex, 2026-10-02: lanes resolve and reopen threads themselves; his reopen is still a note to the lane.
+        if (human) noteData = { event: 'reopen', text: '' }
+        else if (typeof body.text === 'string' && body.text.trim()) thread.messages.push({ from: 'agent', text: text(body.text, 600), at, ...client })
       } else if (verb === 'delete') {
         if ((thread.author ?? thread.messages[0]?.from) !== 'alex') bad('only his own notes', 403)
         scope.threads = scope.threads.filter(t => t.id !== thread.id)
@@ -873,22 +875,28 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (!['take', 'own', 'resolve'].includes(how)) bad('invalid how')
         const decision = text(body.decision, 4000, true)
         const words = body.alex_words == null ? decision : text(body.alex_words, 4000, true)
-        thread.status = 'resolved'
-        thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client, ...pictures }
-        noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
-      } else if (thread.status === 'open') {
-        if ((thread.author ?? thread.messages[0]?.from) === 'alex') {
-          if (thread.messages.at(-1)?.from !== 'agent') {
-            if (typeof body.decision !== 'string' || !body.decision.trim()) bad(`reply to Alex's comment first: unblock scope reply ${slug} ${thread.id}`)
-            thread.messages.push({ from: 'agent', text: text(body.decision, 600), at, ...client })
-          }
-          delete thread.resolution
+        if (how === 'own' && words.trim().endsWith('?')) {
+          // His own answer is a question (open-factory T7): it stays open as a reply, never a decision.
+          thread.messages.push({ from: 'alex', text: words, at, ...via, ...client, ...pictures })
+          noteData = { event: 'reply', text: words }
+          thread.status = 'open'; delete thread.resolution; delete thread.parked_at
           result = { kept_open: true }
         } else {
           thread.status = 'resolved'
-          thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
+          thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client, ...pictures }
+          noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
         }
+      } else if (thread.status === 'open') {
+        // Alex, 2026-10-02 19:45 ET: "agents can close cards by themselves if we agree". A lane resolves his comment
+        // once it is answered and agreed; the one-line reason shows on the card and he can reopen it.
+        if ((thread.author ?? thread.messages[0]?.from) === 'alex') {
+          if (typeof body.decision !== 'string' || !body.decision.trim()) bad(`say why it is settled: unblock scope resolve ${slug} ${thread.id} --decision "why"`)
+          if (thread.messages.at(-1)?.from !== 'agent') thread.messages.push({ from: 'agent', text: text(body.decision, 600), at, ...client })
+        }
+        thread.status = 'resolved'
+        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
+        if (thread.resolution.how === 'own' && thread.resolution.alex_words?.trim().endsWith('?')) bad(`Alex's answer is a question; reopen it and answer: unblock scope reopen ${slug} ${thread.id}`)
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
       }
       result = verb === 'delete' ? { deleted: thread.id } : { ...result, thread }

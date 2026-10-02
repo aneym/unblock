@@ -300,7 +300,7 @@ unblock scope resolve demo T4
 unblock scope threads demo --open
 ```
 
-`scope resolve` on Alex's comment only records your answer; his comment stays open until Alex resolves it.
+`scope resolve` closes a thread once it is answered and Alex agrees, or the change is made. On Alex's comment, pass `--decision "why"`: the one line shows on his card as "Lane resolved", and he can reopen it. `unblock scope reopen demo T4 [--reason "text"]` reopens one. When Alex's own answer is a question, `scope threads` flags it; reopen it and answer instead of confirming.
 
 `unblock scope app <slug> recruiter|closer|rails-admin` files a scope under its app in Rails Admin.
 

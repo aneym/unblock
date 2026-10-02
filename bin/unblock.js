@@ -499,6 +499,7 @@ unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" .
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
 unblock scope react <slug> T# [--clear]
 unblock scope resolve <slug> T# [--decision "text"]
+unblock scope reopen <slug> T# [--reason "text"]
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
 unblock scope unapprove <slug> --reason "<why>"
 unblock scope app <slug> recruiter|closer|rails-admin
@@ -579,10 +580,10 @@ async function scope(args) {
     const data = await request(`/api/scope/${encodeURIComponent(slug)}/unapprove`, { reason, ...(process.env.HERDR_PANE_ID ? { pane: process.env.HERDR_PANE_ID } : {}) })
     return output(data, `unapproved ${slug}`)
   }
-  if (['ask', 'reply', 'resolve', 'edit'].includes(sub)) {
+  if (['ask', 'reply', 'resolve', 'reopen', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
-    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision'] : ['--rec', '--why', '--option']
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision'] : sub === 'reopen' ? ['--reason'] : ['--rec', '--why', '--option']
     for (let i = 0; i < words.length; i++) {
       if (words[i] !== '--keep') continue
       if (words[i + 1] === undefined) fail('--keep needs a value')
@@ -630,7 +631,12 @@ async function scope(args) {
     if (sub === 'resolve') {
       if (!threadId || words.length) fail(usage)
       const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}) })
-      return output(data, data.kept_open ? `answered ${data.thread.id} (Alex's comment stays open until Alex resolves it)` : `resolved ${data.thread.id}`)
+      return output(data, `resolved ${data.thread.id}`)
+    }
+    if (sub === 'reopen') {
+      if (!threadId || words.length) fail(usage)
+      const data = await request(`${base}/threads/${threadId}/reopen`, opts['--reason'] !== undefined ? { text: opts['--reason'] } : {})
+      return output(data, `reopened ${data.thread.id}`)
     }
     if (!words.length || words[0] === '--to') fail(usage)
     let data
@@ -739,7 +745,7 @@ async function scope(args) {
     if (opts['--from'] || opts['--since']) fail(usage)
     const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
     const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')
-    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
+    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? (t.resolution.how === 'own' && t.resolution.alex_words?.trim().endsWith('?') ? ` (his answer is a question: unblock scope reopen ${name} ${t.id}, then answer)` : ' (unconfirmed)') : ''}` : ''}`).join('\n'))
   }
   if (verb === 'notes') {
     if (opts['--open']) fail(usage)
