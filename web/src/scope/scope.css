@@ -240,7 +240,7 @@ details.why p { margin-top: 6px; color: var(--tx2); font-size: 13px; }
 @media(max-width:599px){ .fig:has(.fig-phone) .fig-wide { display:none; } .fig-phone { display:block; } }
 svg .ac { fill:var(--ac); } svg .muted { fill:var(--tx2); } svg .ok { fill:var(--success); } svg .warn { fill:var(--warning); } marker path { fill:var(--control); }
 .callout { padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--accent-soft); } .callout.warning { background:color-mix(in srgb,var(--warning) 10%,var(--page)); } .callout.tip { background:color-mix(in srgb,var(--success) 10%,var(--page)); }
-.doc .body { display:grid; gap:14px; } .doc table { border-collapse:collapse; width:100%; font-size:14px; } td,th { border:1px solid var(--line); padding:8px; text-align:left; overflow-wrap:anywhere; } pre { white-space:pre-wrap; overflow-wrap:anywhere; } .error { color:var(--danger); } #detached { position:relative; font-size:13px; color:var(--tx2); } #detached .card { position:relative; margin-top:10px; } .add { z-index:6; } .live { font-size:12px; color:var(--tx2); } .delivery { font-size:12px; color:var(--tx2); } .index-row { display:block; color:var(--tx); padding:16px; border-bottom:1px solid var(--line); }
+.doc .body { display:grid; gap:14px; } pre { white-space:pre-wrap; overflow-wrap:anywhere; } .error { color:var(--danger); } #detached { position:relative; font-size:13px; color:var(--tx2); } #detached .card { position:relative; margin-top:10px; } .add { z-index:6; } .live { font-size:12px; color:var(--tx2); } .delivery { font-size:12px; color:var(--tx2); } .index-row { display:block; color:var(--tx); padding:16px; border-bottom:1px solid var(--line); }
 @media(max-width:899px){ .add { z-index:25; } }
 .mermaid svg .node rect, .mermaid svg .node circle, .mermaid svg .node polygon, .mermaid svg .node path { fill:var(--surface); stroke:var(--hairline); }
 .mermaid svg .edgePath path, .mermaid svg .flowchart-link { stroke:var(--control); fill:none; }
@@ -427,3 +427,60 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 
 .menu p { margin: 6px 10px; font-size: 13.5px; }
 .menu button:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
+
+/* Document tables and semantic blocks (2026-10-02, Alex: "these tables in general ... are a bit hard to read").
+   Type and hairlines only: no outer box, no vertical rules, no stripes. */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.doc table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 14px; line-height: 1.5; }
+.doc th, .doc td { padding: 9px 14px 9px 0; text-align: left; vertical-align: top; border: 0; border-bottom: 1px solid var(--line); overflow-wrap: normal; word-break: normal; }
+.doc th:last-child, .doc td:last-child { padding-right: 0; }
+.doc thead th { padding-top: 0; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--tx2); white-space: nowrap; }
+.doc tbody td:first-child { font-weight: 500; white-space: nowrap; }
+.doc tbody tr:last-child td { border-bottom: 0; }
+.doc td { font-variant-numeric: tabular-nums; }
+.doc td code, .doc dd code, .doc .detail code { font-size: 12.5px; background: none; padding: 0; color: var(--tx); overflow-wrap: break-word; }
+@media (max-width: 599px) { .doc table { width: auto; min-width: 100%; } .doc td { min-width: 11rem; } .doc tbody td:first-child { min-width: 0; } }
+
+.sr-sep { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.lbl { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--tx2); }
+.eg { margin: 0; font-family: ui-serif, "New York", Georgia, serif; font-style: italic; color: var(--tx2); }
+.eg .lbl { font-family: var(--font-system); font-style: normal; text-transform: none; letter-spacing: 0; font-size: 12px; margin-right: 2px; }
+
+.terms { margin: 0; display: grid; }
+.term-row { display: grid; grid-template-columns: 11rem minmax(0, 1fr); column-gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.term-row:first-child { padding-top: 4px; }
+.term-row:last-child { border-bottom: 0; }
+.terms dt { margin: 0; display: grid; align-content: start; gap: 2px; }
+.terms .term { font-weight: 600; }
+.terms .tags { font-size: 12px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+.terms dd { margin: 0; display: grid; gap: 4px; min-width: 0; }
+.terms .def { margin: 0; }
+.terms .eg { font-size: 15px; line-height: 1.5; }
+.terms .detail { margin: 0; font-size: 14px; line-height: 1.5; color: var(--tx2); }
+.terms .detail.labelled { display: flex; flex-wrap: wrap; column-gap: 18px; row-gap: 2px; }
+.terms .detail .lbl { margin-right: 4px; }
+@media (max-width: 599px) { .term-row { grid-template-columns: minmax(0, 1fr); row-gap: 4px; } .terms dt { grid-auto-flow: column; justify-content: start; align-items: baseline; gap: 8px; } }
+
+.dodont { display: grid; gap: 6px; }
+.dodont p { margin: 0; display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); align-items: baseline; }
+.dodont .say .lbl { color: var(--success); }
+.dodont .avoid .lbl { color: var(--danger); }
+.dodont .avoid { color: var(--tx2); }
+
+.compare { display: grid; gap: 14px; }
+.compare-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.compare-row p { margin: 0; display: grid; gap: 2px; align-content: start; }
+.compare .before { color: var(--tx2); }
+.compare .after .lbl { color: var(--ac); }
+@media (max-width: 599px) { .compare-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: 12px; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); align-items: baseline; }
+.steps li::before { content: counter(step); font-size: 24px; font-weight: 300; line-height: 1; color: var(--tx2); font-variant-numeric: tabular-nums; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 20px 28px; }
+.stat p { margin: 0; }
+.stat-figure { display: flex; align-items: baseline; gap: 6px; }
+.stat-value { font-size: 34px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-unit { font-size: 15px; color: var(--tx2); }
+.stat-meaning { font-size: 14px; line-height: 1.45; color: var(--tx2); margin-top: 4px; }

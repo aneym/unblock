@@ -1,6 +1,6 @@
 import { makeAnchor, locateAnchor, type Anchor, type AnchorSection } from '../../../src/scope-anchor.js'
 
-export const blocks = 'h1,h2,h3,h4,p,li,pre,tr,td,th,figcaption,q,.src'
+export const blocks = 'h1,h2,h3,h4,p,li,pre,tr,td,th,dt,dd,figcaption,q,.src'
 const skip = 'button,textarea,[data-cm-skip]'
 export function sectionOf(node: Node | null): { section: AnchorSection; root: HTMLElement } | null {
   const el = node instanceof Element ? node : node?.parentElement

@@ -22,7 +22,65 @@ function inline(text: string): string {
   const code = esc(text).replace(/`([^`]+)`/g, (_, value: string) => hold(`<code>${value}</code>`))
   const links = code.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label: string, url: string) => hold(`<a href="${url}" target="_blank" rel="noopener">${label.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>')}</a>`))
   const expand = (html: string): string => html.replace(/\u0000(\d+)\u0000/g, (_, index: string) => expand(tokens[Number(index)]))
-  return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>'))
+  return expand(links.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/(^|[^\w\u0000])_(?=\S)([^_\n]*?\S)_(?![\w])/g, '$1<em>$2</em>'))
+}
+// Semantic blocks (```terms, ```example, ```do, ```compare, ```steps, ```stat): lanes write words, the page owns the
+// look. Separators and labels stay in the DOM as hidden text, so a comment's quote still matches the doc's plain text.
+const hiddenText = (text: string) => `<span class="sr-sep">${esc(text)}</span>`
+const label = (name: string, cls = '') => `<span class="lbl${cls ? ` ${cls}` : ''}">${esc(name)}</span>${hiddenText(':')} `
+const LABEL_LINE = /^([A-Z][A-Za-z']{0,14}(?: [a-z][A-Za-z']{0,10})?):\s+(.*)$/
+const splitPair = (line: string) => { const at = line.indexOf(' :: '); return at < 0 ? null : [line.slice(0, at).trim(), line.slice(at + 4).trim()] as const }
+const example = (text: string) => `<p class="eg"><span class="lbl">e.g.</span> ${inline(text)}</p>`
+function termsBlock(source: string): string {
+  const items: { term: string; def: string; tags: string; lines: string[] }[] = []
+  for (const raw of source.split('\n')) {
+    const line = raw.trim(); if (!line) continue
+    const pair = splitPair(line)
+    if (pair) { items.push({ term: pair[0], def: pair[1], tags: '', lines: [] }); continue }
+    const item = items.at(-1); if (!item) continue
+    const tags = line.match(/^Tags:\s+(.*)$/)
+    if (tags) item.tags = tags[1]; else item.lines.push(line)
+  }
+  return `<dl class="terms">${items.map(item => {
+    const labelled: string[] = [], rest: string[] = []
+    for (const line of item.lines) {
+      const eg = line.match(/^e\.g\.\s+(.*)$/i), named = line.match(LABEL_LINE)
+      if (eg) rest.push(example(eg[1]))
+      else if (named) labelled.push(`<span class="pair">${label(named[1])}${inline(named[2])}</span>`)
+      else rest.push(`<p class="detail">${inline(line)}</p>`)
+    }
+    return `<div class="term-row"><dt><span class="term">${inline(item.term)}</span>${item.tags ? `<span class="tags">${hiddenText(' Tags: ')}${inline(item.tags)}</span>` : ''}</dt><dd>${hiddenText(' :: ')}<p class="def">${inline(item.def)}</p>${rest.join('')}${labelled.length ? `<p class="detail labelled">${labelled.join(' ')}</p>` : ''}</dd></div>`
+  }).join('')}</dl>`
+}
+function doBlock(source: string): string {
+  const rows = source.split('\n').map(line => line.trim().match(/^(Do|Don't|Say|Avoid):\s+(.*)$/)).filter(Boolean) as RegExpMatchArray[]
+  return `<div class="dodont">${rows.map(([, name, text]) => `<p class="${/^(Do|Say)$/.test(name) ? 'say' : 'avoid'}">${label(name)}${inline(text)}</p>`).join('')}</div>`
+}
+function compareBlock(source: string): string {
+  const rows: [string, string][] = []
+  for (const raw of source.split('\n')) {
+    const match = raw.trim().match(/^(Before|After):\s+(.*)$/); if (!match) continue
+    if (match[1] === 'Before' || !rows.length || rows.at(-1)![1]) rows.push(['', ''])
+    rows.at(-1)![match[1] === 'Before' ? 0 : 1] = match[2]
+  }
+  return `<div class="compare">${rows.map(([before, after]) => `<div class="compare-row"><p class="before">${label('Before')}${inline(before)}</p><p class="after">${label('After')}${inline(after)}</p></div>`).join('')}</div>`
+}
+function stepsBlock(source: string): string {
+  const steps = source.split('\n').map(line => line.trim().replace(/^\d+[.)]\s+/, '')).filter(Boolean)
+  return `<ol class="steps">${steps.map(step => `<li>${inline(step)}</li>`).join('')}</ol>`
+}
+function statBlock(source: string): string {
+  const stats = source.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const [head, meaning] = splitPair(line) ?? [line, '']
+    const [, value = head, unit = ''] = head.match(/^([~≈<>+\-−]?[$€£]?[\d][\d.,:]*[%kKmMbB×x]?)\s*(.*)$/) || []
+    return `<div class="stat"><p class="stat-figure"><span class="stat-value">${inline(value)}</span>${unit ? ` <span class="stat-unit">${inline(unit)}</span>` : ''}</p>${meaning ? `${hiddenText(' :: ')}<p class="stat-meaning">${inline(meaning)}</p>` : ''}</div>`
+  })
+  return `<div class="stats">${stats.join('')}</div>`
+}
+const BLOCKS: Record<string, (source: string) => string> = {
+  terms: termsBlock, do: doBlock, compare: compareBlock, steps: stepsBlock, stat: statBlock,
+  example: (source) => source.split(/\n\s*\n/).map(text => text.trim()).filter(Boolean).map(text => example(text.replace(/\s*\n\s*/g, ' '))).join(''),
 }
 export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = ''): string {
   const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
@@ -82,7 +140,8 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
           const poster = mediaUrl(values.poster, 'image')
           out.push(`<figure class="fig video"><div class="video-stage" data-cm-skip><video controls preload="metadata" playsinline src="${src}"${poster ? ` poster="${poster}"` : ''}></video></div>${cap}${cap ? '<div class="fig-actions" data-cm-skip><button type="button" class="btn fig-comment">Comment on this recording</button></div>' : ''}</figure>`)
         }
-      } else out.push(`<pre><code>${esc(f.source)}</code></pre>`)
+      } else if (Object.hasOwn(BLOCKS, f.lang)) out.push(BLOCKS[f.lang](f.source))
+      else out.push(`<pre><code>${esc(f.source)}</code></pre>`)
       continue
     }
     const callout = line.match(/^>\s*\[!(NOTE|TIP|WARNING)\]\s*(.*)/)
@@ -95,7 +154,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
     const heading = line.match(/^(#{1,4})\s+(.*)/)
     if (heading) { const h = Math.max(3, heading[1].length); out.push(`<h${h}>${inline(heading[2])}</h${h}>`); i++; continue }
     if (line.includes('|') && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || '')) {
-      const head = cells(line); i += 2; const rows: string[][] = []; while ((lines[i] || '').includes('|')) rows.push(cells(lines[i++])); out.push(`<table><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`); continue
+      const head = cells(line); i += 2; const rows: string[][] = []; while ((lines[i] || '').includes('|')) rows.push(cells(lines[i++])); out.push(`<div class="table-wrap"><table><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`); continue
     }
     if (/^\s*([-*]|\d+[.)])\s/.test(line)) {
       const tag = /^\s*\d/.test(line) ? 'ol' : 'ul', items: string[] = []

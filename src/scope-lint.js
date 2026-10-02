@@ -18,13 +18,19 @@ const rules = [
 const blank = (text) => text.replace(/[^\n]/g, ' ')
 
 function prose(text) {
-  let fence = null
+  let fence = null, block = null
   const lines = text.split('\n').map((line) => {
     const marker = line.match(/^\s*(`{3,}|~{3,})/)
+    if (block) {
+      if (marker && marker[1][0] === block[0] && marker[1].length >= block.length && /^\s*$/.test(line.slice(marker[0].length))) { block = null; return blank(line) }
+      return line
+    }
     if (fence) {
       if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && /^\s*$/.test(line.slice(marker[0].length))) fence = null
       return blank(line)
     }
+    // Semantic blocks hold prose (terms, examples, steps); only their fence lines are skipped.
+    if (marker && /^(?:terms|example|do|compare|steps|stat)\s*$/.test(line.slice(marker[0].length))) { block = marker[1]; return blank(line) }
     if (marker) { fence = marker[1]; return blank(line) }
     if (/^\s*!\[.*\]\(.*\)\s*$/.test(line)) return blank(line)
     return line.replace(/\s*\{#[^}]+\}\s*$/, blank)
