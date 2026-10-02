@@ -75,10 +75,9 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
           const height = /^-?\d+$/.test(values.height || '') ? Math.max(240, Math.min(1200, Number(values.height))) : 560
           const allow = (values.allow || '').split(',').map(v => v.trim()).filter(v => ['microphone', 'camera', 'autoplay', 'clipboard-write'].includes(v)).join('; ')
           const sandbox = values.src.startsWith('asset:') ? 'allow-scripts allow-forms' : 'allow-scripts allow-forms allow-same-origin allow-popups'
-          const autoplay = values.autoplay === 'true'
+          // Every demo mounts inline as it nears the viewport; `autoplay: true` is still accepted and changes nothing.
           const title = document.createElement('div'); title.innerHTML = cap
-          const stage = autoplay ? '<p class="type-hint">Loading demo…</p>' : '<button type="button" class="btn demo-try">Try it</button>'
-          out.push(`<figure class="fig demo" data-frame="${values.frame === 'phone' ? 'phone' : 'desktop'}"><div class="demo-stage" data-cm-skip data-src="${src}" data-sandbox="${esc(sandbox)}" data-allow="${esc(allow)}" data-height="${height}" data-title="${esc(title.textContent || 'Demo')}"${autoplay ? ' data-autoplay="1"' : ''}>${stage}</div>${cap}<div class="fig-actions" data-cm-skip>${cap ? '<button type="button" class="btn fig-comment">Comment on this demo</button>' : ''}<a class="demo-open" href="${src}" target="_blank" rel="noopener">Open in a new tab</a></div></figure>`)
+          out.push(`<figure class="fig demo" data-frame="${values.frame === 'phone' ? 'phone' : 'desktop'}"><div class="demo-stage" data-cm-skip data-src="${src}" data-sandbox="${esc(sandbox)}" data-allow="${esc(allow)}" data-height="${height}" data-title="${esc(title.textContent || 'Demo')}"><p class="type-hint">Loading demo…</p></div>${cap}<div class="fig-actions" data-cm-skip>${cap ? '<button type="button" class="btn fig-comment">Comment on this demo</button>' : ''}<a class="demo-open" href="${src}" target="_blank" rel="noopener">Open in a new tab</a></div></figure>`)
         } else {
           const poster = mediaUrl(values.poster, 'image')
           out.push(`<figure class="fig video"><div class="video-stage" data-cm-skip><video controls preload="metadata" playsinline src="${src}"${poster ? ` poster="${poster}"` : ''}></video></div>${cap}${cap ? '<div class="fig-actions" data-cm-skip><button type="button" class="btn fig-comment">Comment on this recording</button></div>' : ''}</figure>`)

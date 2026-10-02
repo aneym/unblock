@@ -507,7 +507,7 @@ function render() {
     if (range && sel) sel.setBaseAndExtent(backward ? range.endContainer : range.startContainer, backward ? range.endOffset : range.startOffset, backward ? range.startContainer : range.endContainer, backward ? range.startOffset : range.endOffset)
   }
   if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); if (target && document.activeElement !== target) target.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
-  watchAutoplay()
+  watchDemos()
   postDemoPins()
 }
 function renderCards() {
@@ -959,22 +959,22 @@ function mountDemo(stage: HTMLElement) {
   if (frame.contentWindow && figure) demoFrames.set(frame.contentWindow, figure)
   layout()
 }
-const autoplayStages = new Set<HTMLElement>()
+const pendingStages = new Set<HTMLElement>()
 const demoObserver = new IntersectionObserver(entries => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue
     const stage = entry.target as HTMLElement
     demoObserver.unobserve(stage)
-    autoplayStages.delete(stage)
+    pendingStages.delete(stage)
     mountDemo(stage)
   }
 }, { rootMargin: '200px' })
-function watchAutoplay() {
-  const live = new Set(doc.querySelectorAll<HTMLElement>('.demo-stage[data-autoplay="1"]'))
-  for (const stage of autoplayStages) if (!live.has(stage)) { demoObserver.unobserve(stage); autoplayStages.delete(stage) }
+function watchDemos() {
+  const live = new Set(doc.querySelectorAll<HTMLElement>('.demo-stage'))
+  for (const stage of pendingStages) if (!live.has(stage)) { demoObserver.unobserve(stage); pendingStages.delete(stage) }
   for (const stage of live) {
-    if (stage.querySelector('iframe') || autoplayStages.has(stage)) continue
-    autoplayStages.add(stage)
+    if (stage.querySelector('iframe') || pendingStages.has(stage)) continue
+    pendingStages.add(stage)
     demoObserver.observe(stage)
   }
 }
@@ -1034,8 +1034,6 @@ document.addEventListener('click', e => {
   if (lightbox.contains(target)) return
   const shot = target.closest<HTMLButtonElement>('button.shot'); if (shot) { openZoom(shot); return }
   if (!zoom.hidden) return
-  const demo = target.closest<HTMLButtonElement>('button.demo-try')
-  if (demo) { const stage = demo.closest<HTMLElement>('.demo-stage'); if (stage) mountDemo(stage); return }
   const figureButton = target.closest<HTMLButtonElement>('button.fig-comment')
   if (figureButton) {
     const figure = figureButton.closest('figure')
