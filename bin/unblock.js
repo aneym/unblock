@@ -745,7 +745,7 @@ async function scope(args) {
     if (opts['--from'] || opts['--since']) fail(usage)
     const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
     const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')
-    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? (t.resolution.how === 'own' && t.resolution.alex_words?.trim().endsWith('?') ? ` (his answer is a question: unblock scope reopen ${name} ${t.id}, then answer)` : ' (unconfirmed)') : ''}` : ''}`).join('\n'))
+    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && !t.resolution.confirmed_at ? (t.resolution.how === 'own' && t.resolution.alex_words?.includes('?') ? ` (his answer is a question: unblock scope reopen ${name} ${t.id}, then answer)` : ' (unconfirmed)') : ''}` : ''}`).join('\n'))
   }
   if (verb === 'notes') {
     if (opts['--open']) fail(usage)

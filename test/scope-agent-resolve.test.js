@@ -16,7 +16,7 @@ const sections = [
   { id: 'title', heading: 'Demo scope', body_md: 'A small page.' },
   { id: 'plan', heading: 'The plan', body_md: 'We run Sol medium for the build. Then the review.' },
 ]
-const confused = 'like agent rails could make its own ui? not sure i understand?'
+const confused = 'like agent rails could make its own ui? not sure i udnerstand'
 const scope = {
   version: 2, slug: 'demo', title: 'Demo scope', pane: 'w5H:pT1', revision: 2, updated_at: at, doc: { sections },
   threads: [
@@ -71,11 +71,11 @@ test('a lane closes a thread once settled, says why, and can reopen it; his ques
     assert.equal(t.messages.at(-1).text, 'Reopened: the table still says Sol 6.0.')
 
     // 4. Answering a lane question with a question keeps it open as his reply.
-    const asked = await post('T1', 'resolve', { decision: 'what about Opus?', alex_words: 'what about Opus?', how: 'own', client_id: 'c-4' }, human)
+    const asked = await post('T1', 'resolve', { decision: 'what about Opus? not sure', alex_words: 'what about Opus? not sure', how: 'own', client_id: 'c-4' }, human)
     assert.equal(asked.status, 200, asked.text)
     t = await thread('T1')
     assert.equal(t.status, 'open'); assert.equal(t.resolution, undefined)
-    assert.deepEqual([t.messages.at(-1).from, t.messages.at(-1).text], ['alex', 'what about Opus?'])
+    assert.deepEqual([t.messages.at(-1).from, t.messages.at(-1).text], ['alex', 'what about Opus? not sure'])
 
     // 5. A question stored as his answer before this change: the lane cannot confirm it, the list flags it, and it reopens.
     const confirm = await post('T2', 'resolve', {})

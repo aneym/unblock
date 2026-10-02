@@ -875,7 +875,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (!['take', 'own', 'resolve'].includes(how)) bad('invalid how')
         const decision = text(body.decision, 4000, true)
         const words = body.alex_words == null ? decision : text(body.alex_words, 4000, true)
-        if (how === 'own' && words.trim().endsWith('?')) {
+        if (how === 'own' && words.includes('?')) {
           // His own answer is a question (open-factory T7): it stays open as a reply, never a decision.
           thread.messages.push({ from: 'alex', text: words, at, ...via, ...client, ...pictures })
           noteData = { event: 'reply', text: words }
@@ -896,7 +896,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.status = 'resolved'
         thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
-        if (thread.resolution.how === 'own' && thread.resolution.alex_words?.trim().endsWith('?')) bad(`Alex's answer is a question; reopen it and answer: unblock scope reopen ${slug} ${thread.id}`)
+        if (thread.resolution.how === 'own' && thread.resolution.alex_words?.includes('?')) bad(`Alex's answer is a question; reopen it and answer: unblock scope reopen ${slug} ${thread.id}`)
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision
       }
       result = verb === 'delete' ? { deleted: thread.id } : { ...result, thread }
