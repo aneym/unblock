@@ -92,9 +92,10 @@ function updateImageBox(key: string) {
 }
 async function uploadPicture(bytes: Blob, type: string): Promise<CommentImage> {
   const res = await fetch(`${endpoint}/assets`, { method: 'POST', headers: { 'Content-Type': type }, body: bytes })
+  if (res.status === 404 || res.status === 405) throw new Error('Pictures need the newer Admin.')
   const result = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`)
-  if (typeof result.id !== 'string' || !(result.width > 0) || !(result.height > 0)) throw new Error('Could not upload picture')
+  if (typeof result.id !== 'string') throw new Error('Could not upload picture')
   return { id: result.id, width: result.width, height: result.height }
 }
 async function addImages(box: HTMLTextAreaElement, files: File[]) {

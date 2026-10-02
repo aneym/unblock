@@ -71,8 +71,7 @@ function readNote(data) {
 
 function readReady(data) {
   if (!Number.isFinite(data.duration) || data.duration <= 0 || data.duration > 600) return null
-  const steps = cleanSteps(data.steps)
-  if (!steps) return null
+  const steps = cleanSteps(data.steps) ?? []
   return {
     type: 'rails-demo/ready',
     v: 1,
