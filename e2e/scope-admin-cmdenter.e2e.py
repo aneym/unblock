@@ -7,17 +7,13 @@ that as 'take it' and with a comment, we should use the context of the comment t
 approve any scope from Admin ... Until it's live, have scope pages fall back to drawing Approve themselves in host mode."
 Serves web/dist-scope from e2e/scope-admin-stub.mjs in admin mode (events off, the page polls; approve and comment host),
 port 4619. At 1280 and 390 it proves:
-  1) ⌘Enter with a note on a lane question shows "Reading your note…" at once, with Take it / No / Something else
-     disabled, while the picker works;
-  2) there is no client deadline (p6 12:05 ET, reversing the 6 s take fallback): a picker that answers 'no' after 7 s
-     is still reading at 6.5 s, then applies like an on-time answer (Said no, with Undo); after the 10 s Undo window
-     exactly one reject goes out with his note;
-  3) a failed pick never decides: "No, do not ship this" plus a 500 (and a note plus a 404, Admin before this fix)
-     resolves nothing, rejects nothing, keeps his draft, and shows "Couldn't read your note. Choose a button.";
-  4) a real unsure answer sends nothing and asks him to pick (the buttons are hinted, enabled);
-  4b) ⌘Enter with no note still takes it with Undo, and the take goes out after 10 s;
-  5) an envelope-only change (each scopes push) does not redraw the doc or steal his reply box; a real lane edit still lands;
-  6) Approve scope shows on a host-mode page that no host draws for: unframed, or framed by a page whose iframe lacks
+  1) Alex, 2026-10-02 19:45 ET, superseding the ⌘Enter-picks rule above: "if i leave a comment, it should default to
+     reply ... with just an approve button, if i dont need to comment". A note plus ⌘Enter on a lane question posts one
+     plain reply, never asks the picker and never decides; the card stays open with Approve;
+  2) ⌘Enter with no note sends nothing;
+  3) Approve with a typed note takes the recommendation once, with his note as his words;
+  4) an envelope-only change (each scopes push) does not redraw the doc or steal his reply box; a real lane edit still lands;
+  5) Approve scope shows on a host-mode page that no host draws for: unframed, or framed by a page whose iframe lacks
      data-approve-host="1"; it does not show when the frame carries data-approve-host="1".
 usage: e2e/scope-admin-cmdenter.e2e.py [worktree] [--no-build]
 """
@@ -45,7 +41,7 @@ VISIBLE = "(e) => !!e && e.getClientRects().length > 0 && getComputedStyle(e).vi
 NO_ERRORS = "const e = window.__errs || []; const csp = (window.__csp || []).filter((x) => x.startsWith('script') || x.startsWith('img')); return {ok: e.length === 0 && csp.length === 0, e, csp}"
 H = ("const vis = %s; const where = (t) => document.querySelector(`.sheet .card[data-t=\"${t}\"]`) || document.querySelector(`#cards .card[data-t=\"${t}\"]`); "
      "const box = (t) => where(t)?.querySelector(`textarea[data-draft=\"${t}\"]`); "
-     "const choices = (t) => [...(where(t)?.querySelectorAll('[data-action=\"take\"],[data-action=\"no\"],[data-action=\"else\"]') || [])];") % VISIBLE
+    ) % VISIBLE
 
 
 def js(code, wait=600):
@@ -75,44 +71,19 @@ def cmd_enter(t, text):
 
 
 def scenario(phone, label):
-    decided = lambda t: "const d = where(%s)?.querySelector('.decided'); " % json.dumps(t)
     steps = [{'wait_for': 'mark.hl[data-t="T1"]'}, {'wait': 400}]
-    couldnt = lambda t, note: (H + decided(t) + " const b = choices(%s); const p = where(%s)?.querySelector('.picking'); "
-        "const line = [...(where(%s)?.querySelectorAll('p, [role=alert], [role=status]') || [])].find((e) => vis(e) && e.textContent.includes('read your note. Choose a button.')); "
-        "return {ok: !d && !vis(p) && !!line && box(%s)?.value === %s && b.length === 3 && b.every((x) => !x.disabled), decided: !!d, picking: vis(p), line: line?.textContent, draft: box(%s)?.value, b: b.map((x) => x.disabled)}"
-        % (json.dumps(t), json.dumps(t), json.dumps(t), json.dumps(t), json.dumps(note), json.dumps(t)))
-    # 1, 2: a picker that answers 'no' after 7 s.
-    steps += [*hook('pick?mode=slowno', 200), *open_thread('T1', phone), *cmd_enter('T1', 'no, not Executor'), {'wait': 300},
-              C(f'{label}: ⌘Enter shows "Reading your note…" at once', H + " const p = where('T1')?.querySelector('.picking'); return {ok: vis(p) && p.textContent.includes('Reading your note…'), text: p?.textContent}"),
-              C(f'{label}: while reading, Take it / No / Something else are disabled', H + " const b = choices('T1'); return {ok: b.length === 3 && b.every((x) => x.disabled), n: b.length, disabled: b.map((x) => x.disabled)}"),
-              {'shot': f'{label}-reading'},
-              {'wait': 6200},
-              C(f'{label}: at 6.5 s it is still reading his note; nothing decided', H + decided('T1') + " const p = where('T1')?.querySelector('.picking'); return {ok: !d && vis(p), decided: d?.textContent, picking: vis(p)}"),
-              {'wait': 1500},
-              C(f'{label}: the late "no" applies like an on-time answer: Said no, with Undo', H + decided('T1') + " return {ok: vis(d) && d.textContent.includes('Said no') && d.textContent.includes('no, not Executor') && !!d.querySelector('[data-action=\"undo\"]'), text: d?.textContent}"),
-              {'shot': f'{label}-said-no'},
-              {'wait': 11000},
+    # 1: a note plus ⌘Enter is a reply.
+    steps += [*open_thread('T1', phone), *cmd_enter('T1', 'is Executor fast enough?'), {'wait': 1500},
+              C(f'{label}: a note plus ⌘Enter posts a reply and the question stays open, with Approve', H + " const c = where('T1'); const m = [...(c?.querySelectorAll('.msgs .msg') || [])].at(-1); const a = c?.querySelector('[data-action=\"take\"]'); "
+                "return {ok: !!m && m.textContent.includes('is Executor fast enough?') && !c.querySelector('.settled') && vis(a) && a.textContent.trim() === 'Approve' && box('T1')?.value === '', last: m?.textContent, settled: !!c?.querySelector('.settled'), approve: a?.textContent}"),
+              {'shot': f'{label}-replied'},
               *close(phone)]
-    # 3: a failed pick never decides (500, then 404).
-    steps += [*hook('ask?id=T5'), *hook('pick?mode=fail', 200), *open_thread('T5', phone), *cmd_enter('T5', 'No, do not ship this'), {'wait': 1500},
-              C(f'{label}: a 500 from the picker decides nothing, keeps his draft and says so', couldnt('T5', 'No, do not ship this')),
-              {'shot': f'{label}-couldnt-read'},
-              *close(phone),
-              *hook('ask?id=T7'), *hook('pick?mode=missing', 200), *open_thread('T7', phone), *cmd_enter('T7', 'sounds right'), {'wait': 1500},
-              C(f'{label}: a 404 from the picker decides nothing, keeps his draft and says so', couldnt('T7', 'sounds right')),
-              {'wait': 11000},
+    # 2, 3: no note sends nothing; Approve with a note takes it.
+    steps += [*hook('ask?id=T8'), *open_thread('T8', phone), *cmd_enter('T8', ''), {'wait': 800},
+              C(f'{label}: ⌘Enter with no note decides nothing', H + " return {ok: !where('T8')?.querySelector('.settled') && vis(where('T8')?.querySelector('[data-action=\"take\"]'))}"),
+              *js("(() => { " + H + " const b = box('T8'); b.value = 'ok, ship it'; b.dispatchEvent(new Event('input', { bubbles: true })); where('T8').querySelector('[data-action=\"take\"]').click(); return true })()", 1500),
               *close(phone)]
-    # 4: a real unsure answer.
-    steps += [*hook('ask?id=T6'), *hook('pick?mode=unsure', 200), *open_thread('T6', phone), *cmd_enter('T6', 'hmm'), {'wait': 1500},
-              C(f'{label}: an unsure answer sends nothing and asks him to pick', H + decided('T6') + " const b = choices('T6'); const p = where('T6')?.querySelector('.picking'); "
-                "return {ok: !d && !vis(p) && b.length === 3 && b.every((x) => !x.disabled && x.classList.contains('suggest')), decided: !!d, picking: vis(p), b: b.map((x) => [x.disabled, x.className])}"),
-              *close(phone)]
-    # 4b: no note is still take, with Undo.
-    steps += [*hook('ask?id=T8'), *open_thread('T8', phone), *cmd_enter('T8', ''), {'wait': 600},
-              C(f'{label}: ⌘Enter with no note takes it, with Undo', H + decided('T8') + " return {ok: vis(d) && d.textContent.includes('Took it') && !!d.querySelector('[data-action=\"undo\"]'), text: d?.textContent}"),
-              {'wait': 11000},
-              *close(phone)]
-    # 5: an envelope-only push.
+    # 4: an envelope-only push.
     if phone:
         steps += [*js("(() => { window.__docNode = document.querySelector('#doc p'); return !!window.__docNode })()", 100), *hook('envelope'),
                   C(f'{label}: an envelope-only push does not redraw the doc', "return {ok: !!window.__docNode && window.__docNode.isConnected}")]
@@ -207,12 +178,9 @@ def run():
             label = f'{width}'
             page_shot('/scope/demo', scenario(width < 600, label), width, 'light', label)
             posts = [e for e in entries(log) if e['method'] == 'POST' and e['path'].startswith('/w/api/live-scopes/demo/threads')]
-            picks = [e['path'].rsplit('/', 2)[1] for e in posts if e['path'].endswith('/pick')]
-            check(f'{label}: ⌘Enter with a note asked the picker for T1, T5, T7 and T6 (not T8, which had no note)', picks == ['T1', 'T5', 'T7', 'T6'], picks)
-            writes = [e for e in posts if not e['path'].endswith('/pick') and '/T2/' not in e['path']]
-            got = [(e['path'].rsplit('/', 2)[1], e['path'].rsplit('/', 1)[1], (e.get('body') or {}).get('how'), (e.get('body') or {}).get('alex_words') or (e.get('body') or {}).get('text')) for e in writes]
-            check(f'{label}: one reject for T1 with his note, one take for T8; nothing for T5, T7 (failed picks) or T6 (unsure)',
-                  got == [('T1', 'reject', None, 'no, not Executor'), ('T8', 'resolve', 'take', 'Take the recommendation')], got)
+            got = [(e['path'].rsplit('/', 2)[1], e['path'].rsplit('/', 1)[1], (e.get('body') or {}).get('how'), (e.get('body') or {}).get('alex_words') or (e.get('body') or {}).get('text')) for e in posts if '/T2/' not in e['path']]
+            check(f'{label}: one reply on T1 with his note and one take on T8 with his note; no pick, nothing else',
+                  got == [('T1', 'reply', None, 'is Executor fast enough?'), ('T8', 'resolve', 'take', 'ok, ship it')], got)
             check(f'{label}: nothing was written to T2 by the envelope push', not [e for e in posts if '/T2/' in e['path']])
             for name, route, framed, host in (('unframed', '/scope/demo', False, False), ('framed-no-host', '/frame/demo', True, False), ('framed-host', '/frame/demo?host=1', True, True)):
                 reset(log)

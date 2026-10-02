@@ -49,8 +49,6 @@ type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; a
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
 function disablePending() { document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => { if (uploading.get(box.dataset.draft!)) { const button = box.closest('.reply')?.querySelector<HTMLButtonElement>('.btn.primary'); if (button) button.disabled = true; box.closest('.reply')?.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = true) } }); document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
-type AskChoice = { action: 'take' | 'option' | 'no' | 'else'; label: string; option?: number }
-const askDecisions = new Map<string, { choice: AskChoice; note: string; timer: number }>(), askSuggestions = new Map<string, AskChoice | null>(), picking = new Set<string>()
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 function focusBox(id: string) {
   const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${id}"] textarea`)
@@ -385,7 +383,7 @@ function cardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : 'Resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
@@ -394,16 +392,15 @@ function cardHtml(t: Thread) {
   if (compose && (isOpen || mode === 'reply')) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && t.kind === 'question') {
-    const decision = askDecisions.get(t.id), suggested = askSuggestions.has(t.id) ? ' suggest' : ''
-    const reading = picking.has(t.id), off = reading ? ' disabled' : ''
-    const choices = decision ? `<p class="decided">${esc(decision.choice.action === 'take' ? 'Took it' : decision.choice.action === 'option' ? `Chose: ${decision.choice.label}` : decision.choice.action === 'no' ? 'Said no' : 'Something else')}${decision.note ? ` · ${esc(decision.note)}` : ''} <button data-action="undo">Undo</button></p>` : `<div class="choices"><button class="btn${suggested}" data-action="take"${off}>Take it</button><button class="btn${suggested}" data-action="no"${off}>No</button><button class="btn${suggested}" data-action="else"${off}>Something else</button></div>${reading ? '<p class="picking" role="status">Reading your note…</p>' : suggested ? '<p class="pick-hint">Pick one; your note goes with it.</p>' : ''}`
-    body = t.recommendation ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="${modes.get(t.id) === 'else' ? 'Your answer' : 'Add a note · ⌘Enter takes it'}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}</div>${choices}</div>` : '<div class="choices only-on"><button class="btn one" data-action="else">Answer</button></div>'
+    // Alex, 2026-10-02 19:45 ET: a note is a reply to the lane, never a decision; Approve takes the recommendation.
+    const approve = t.recommendation ? '<button class="btn primary" data-action="take">Approve</button>' : ''
+    body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="Reply to the lane · ⌘Enter sends">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn${approve ? '' : ' primary'}" data-action="reply">Reply</button>${approve}</div>${approve ? '<p class="pick-hint">Approve takes the recommendation; a note goes with it.</p>' : ''}</div>`
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
   return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
-  ${isOpen && t.kind === 'question' && t.options?.length && !askDecisions.has(t.id) ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<button${askSuggestions.get(t.id)?.option === i + 1 ? ' class="suggest"' : ''} data-action="option" data-option="${i + 1}">${esc(option)}</button>`).join('')}</details>` : ''}
+  ${isOpen && t.kind === 'question' && t.options?.length ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<div class="other-option"><span>${esc(option)}</span><button class="btn small" data-action="option" data-option="${i + 1}">Pick this</button></div>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
   ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
@@ -799,10 +796,9 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
   if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { openSelectionComment(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = target.closest('.composer') ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
-  if (name === 'undo' && t) { const decision = askDecisions.get(t.id); if (decision) clearTimeout(decision.timer); askDecisions.delete(t.id); renderCards(); return }
   if (name === 'attach') { target.closest('.reply')?.querySelector<HTMLInputElement>('[data-images]')?.click(); return }
   if (name === 'remove-image') { saveImages(key, getImages(key).filter((_, i) => i !== Number(target.dataset.image))); updateImageBox(key); return }
-  if (pending.has(key) || sending.has(key) || uploading.get(key) || askDecisions.has(key) || picking.has(key) && ['take', 'no', 'else', 'option'].includes(name)) return
+  if (pending.has(key) || sending.has(key) || uploading.get(key)) return
   const images = imageSnapshot ?? getImages(key).map(image => image.id), pictures = images.length ? { images } : {}
   const text = getDraft(key).trim()
   if (name === 'cancel') { if (t) { modes.delete(t.id); menus.delete(t.id); renderCards() } else { cancelComposer() }; return }
@@ -840,42 +836,11 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
     else if (name === 'park') await postPark(t.id)
     else if (name === 'reopen') await write(`/${t.id}/reopen`, {}, t.id)
     else if (name === 'confirm-delete') { await write(`/${t.id}/delete`, {}, t.id); closeSheet(); focused = open()[0]?.id || null }
-    if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id); askSuggestions.delete(t.id)
+    if (getDraft(key).trim() === text) deleteDraft(key); errors.delete(key); modes.delete(t.id); menus.delete(t.id)
     if (!sending.has(t.id) && (['take', 'resolve', 'park'].includes(name) || name === 'send' && mode === 'else')) { closeSheet(); focused = open()[0]?.id || null }
     renderCards()
   } catch (error) { errors.set(key, error instanceof Error ? error.message : 'Could not send') }
   finally { pending.delete(key); renderCards() }
-}
-async function pickAsk(t: Thread) {
-  if (pending.has(t.id) || sending.has(t.id) || picking.has(t.id) || askDecisions.has(t.id) || uploading.get(t.id)) return
-  const note = getDraft(t.id).trim(), images = getImages(t.id).map(image => image.id)
-  focus(t.id, false, false)
-  picking.add(t.id); errors.delete(t.id)
-  if (note) renderCards()
-  let result: { choice: AskChoice | null; sure: boolean } = { choice: { action: 'take', label: t.recommendation! }, sure: true }
-  try {
-    if (note) {
-      try {
-        result = await api<{ choice: AskChoice | null; sure: boolean }>(`${endpoint}/threads/${t.id}/pick`, { text: note })
-      } catch {
-        if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
-        errors.set(t.id, "Couldn't read your note. Choose a button.")
-        return
-      }
-    }
-    if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open' || getDraft(t.id).trim() !== note) return
-    if (!result.sure || !result.choice) { askSuggestions.set(t.id, result.choice); renderCards(); return }
-    const choice = result.choice
-    askSuggestions.delete(t.id)
-    const timer = window.setTimeout(() => {
-      askDecisions.delete(t.id)
-      if (scope?.threads.find(thread => thread.id === t.id)?.status !== 'open') { renderCards(); return }
-      const target = document.createElement('button'); target.dataset.t = t.id; if (choice.option != null) target.dataset.option = String(choice.option)
-      setDraft(t.id, note)
-      void action(choice.action, target, images)
-    }, 10_000)
-    askDecisions.set(t.id, { choice, note, timer }); renderCards()
-  } finally { picking.delete(t.id); renderCards() }
 }
 const zoom = document.createElement('div')
 zoom.className = 'zoom'; zoom.hidden = true; zoom.setAttribute('role', 'dialog'); zoom.setAttribute('aria-modal', 'true')
@@ -929,8 +894,8 @@ document.addEventListener('keydown', e => {
   if (!(target instanceof HTMLTextAreaElement) || !target.matches('textarea[data-draft]')) return
   e.preventDefault()
   const id = target.dataset.draft!, thread = scope?.threads.find(t => t.id === id)
-  if (thread?.kind === 'question' && thread.status === 'open' && thread.recommendation && modes.get(id) !== 'reply') { void pickAsk(thread); return }
-  const button = target.closest('.reply')?.querySelector<HTMLElement>('.btn.primary[data-action]')
+  const reply = thread?.kind === 'question' && thread.status === 'open' && !modes.has(id)
+  const button = target.closest('.reply')?.querySelector<HTMLElement>(reply ? '[data-action="reply"]' : '.btn.primary[data-action]')
   if (button) void action(button.dataset.action!, button)
 })
 function captionAnchorOf(figure: HTMLElement): Anchor | null {

@@ -173,9 +173,7 @@ mark.hl.flash { animation: flash .9s ease-out; }
 .card:not(.on) .q { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rec { background: var(--fill-1); border-radius: 10px; padding: 9px 11px; display: grid; gap: 2px; }
 .other-options button { display: block; width: 100%; margin-top: 6px; }
-.btn.suggest, .other-options button.suggest { background: var(--ac-soft); border: 1px solid var(--ac); }
-.decided, .pick-hint, .picking { font-size: 13px; color: var(--tx2); }
-.decided button { border: 0; background: none; color: var(--ac); padding: 0 4px; font-size: inherit; }
+.pick-hint { font-size: 13px; color: var(--tx2); }
 .other-options button { text-align: left; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); font-size: 13.5px; line-height: 1.4; }
 .other-options button:hover { border-color: var(--control); background: var(--fill-1); }
 .rec .lbl, .msgs .lbl, .other-options .lbl { font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--tx2); }
@@ -484,3 +482,9 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .stat-value { font-size: 34px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .stat-unit { font-size: 15px; color: var(--tx2); }
 .stat-meaning { font-size: 14px; line-height: 1.45; color: var(--tx2); margin-top: 4px; }
+
+/* Ask cards are threads (2026-10-02): options read as text, each with a quiet Pick this. */
+.other-options .other-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; line-height: 1.4; }
+.other-options .other-option:last-child { border-bottom: 0; }
+.other-options .other-option button.btn.small { display: inline-flex; width: auto; margin: 0; padding: 0 10px; height: 26px; border-radius: 8px; font-size: 12.5px; font-weight: 600; background: var(--raised); border: 1px solid var(--line); }
+.other-options .other-option button.btn.small:hover { background: var(--fill-1); }
