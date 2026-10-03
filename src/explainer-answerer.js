@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { headingOf } from './scope-doc.js'
 import { quoteSnippet } from './scope-anchor.js'
 
@@ -73,7 +73,7 @@ function killGroup(child) {
   child.once('exit', () => clearTimeout(timer))
 }
 
-export function createAnswerer({ readScope, writeAnswer, log = console.error }) {
+export function createAnswerer({ readScope, writeAnswer, liveItems, log = console.error }) {
   const queue = []
   const running = new Set()
   const children = new Set()
@@ -139,10 +139,12 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
     const thread = scope?.threads?.find((item) => item.id === job.threadId)
     const sources = Array.isArray(scope?.sources) ? scope.sources.filter((dir) => typeof dir === 'string') : []
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
+    const item = (patch) => liveItems?.upsert(job.slug, { thread: job.threadId, to: job.messageAt, by: 'Explainer', ...patch })
     const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
     const settle = async (outcome) => {
       if (stopped) return
       await patch(outcome)
+      item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
       if (!stopped) await postOwner(scope, thread, outcome)
     }
     if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
@@ -158,6 +160,7 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
       const finishSlot = () => { if (settled && exited) resolve() }
       const finish = (outcome) => {
         if (settled) return
+        if (partialTimer) flushPartial()
         settled = true
         clearTimeout(timer)
         clearTimeout(partialTimer)
@@ -168,11 +171,11 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
         partialTimer = null
         partialAt = Date.now()
         if (stopped || settled || !partial) return
-        writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: partial, pending: true }).catch((error) => log(`unblock: explainer partial failed: ${error.message}`))
+        item({ status: 'streaming', text: partial.split('\n').filter(line => !line.startsWith('NEEDS_OWNER')).join('\n'), doing: null })
       }
       const schedulePartial = () => {
         if (stopped || settled) return
-        const wait = 700 - (Date.now() - partialAt)
+        const wait = 100 - (Date.now() - partialAt)
         if (wait <= 0) flushPartial()
         else if (!partialTimer) partialTimer = setTimeout(flushPartial, wait)
       }
@@ -190,6 +193,7 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
         finish({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
         return
       }
+      item({ status: 'thinking' })
       children.add(child)
       child.once('close', () => children.delete(child))
       timer = setTimeout(() => {
@@ -205,6 +209,24 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
         else if (msg.type === 'stream_event' && event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
           partial += event.delta.text
           schedulePartial()
+        } else if (msg.type === 'assistant') {
+          const tool = msg.message?.content?.filter(block => block.type === 'tool_use').at(-1)
+          if (tool) {
+            const input = tool.input ?? {}
+            let doing = { text: 'Working' }
+            if (tool.name === 'Read') doing.text = `Reading ${basename(String(input.file_path ?? ''))}`
+            else if (tool.name === 'Grep') doing.text = `Searching for "${String(input.pattern ?? '').slice(0, 40)}"`
+            else if (tool.name === 'Glob') doing.text = `Looking for ${input.pattern ?? ''}`
+            else if (tool.name === 'WebFetch') {
+              try {
+                const url = new URL(input.url)
+                if (['http:', 'https:'].includes(url.protocol)) doing = { text: `Reading ${url.hostname}`, link: input.url }
+              } catch { /* Unknown URL: keep Working. */ }
+            }
+            doing.text = doing.text.slice(0, 120)
+            const current = liveItems?.list(job.slug).find(value => value.id === `${job.threadId}@${job.messageAt}`)
+            item({ status: current?.status ?? 'thinking', doing })
+          }
         } else if (msg.type === 'result') {
           if (msg.is_error || typeof msg.result !== 'string') badResult = true
           else { badResult = false; resultText = msg.result }
