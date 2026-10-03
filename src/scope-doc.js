@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path'
+import { KIND_IDS } from './doc-kinds.js'
 import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } from './scope-anchor.js'
 
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
@@ -184,7 +185,7 @@ export function validateScope(scope) {
         && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }
-  if (scope.kind !== undefined) check(scope.kind === 'scope' || scope.kind === 'explainer', 'invalid kind')
+  if (scope.kind !== undefined && !KIND_IDS.includes(scope.kind)) throw new Error('invalid kind')
   if (scope.answerer !== undefined) check(scope.answerer === 'on' || scope.answerer === 'off', 'invalid answerer')
   if (scope.sources !== undefined) check(Array.isArray(scope.sources) && scope.sources.length >= 1 && scope.sources.length <= 8 && scope.sources.every((dir) => typeof dir === 'string' && isAbsolute(dir)), 'invalid sources')
   if (scope.approve_default !== undefined) check(['try', 'ship'].includes(scope.approve_default), 'invalid approve_default')
