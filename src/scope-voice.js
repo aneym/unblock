@@ -30,6 +30,7 @@ export const SCOPE_VOICE_TOOLS = [
 export const SCOPE_VOICE_KICKOFF = 'The call has started. Say "Ready." and nothing else, then wait for him.'
 export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc written by a lane (an AI agent). Alex leads. Route intent, not focus.
 Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. If the point is worth keeping on the doc, call comment: its read-back is the offer. Otherwise stop. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
+"This", "here" or "that" in his question means the Looking at block and Selected text first.
 Feedback, decisions and answers to the doc's questions: answer on the focused thread (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
 Wait until he finishes a thought before calling a writing tool. Pass his own words; never paraphrase. Comment and reply read back; wait for his yes, then call confirm.
 When he approves the scope or says not yet, use approve_scope; it reads back first.
@@ -167,8 +168,16 @@ export function createScopeVoiceSession(deps) {
               item.why && `Why: ${item.why}`,
               ...item.messages.slice(-2).map(message => `${message.from}: ${message.text}`),
             ].filter(Boolean).join('\n')
-            const parts = [thread && `Focused thread:\n${briefThread(thread)}`,
-              ...sections.map(section => `${section.heading}\n${section.body_md.replace(/^[ \t]*```[^\n]*\n[\s\S]*?(?:^[ \t]*```[^\n]*(?:\n|$)|$(?![\s\S]))/gm, '')}`),
+            context = deps.getContext()
+            thread = scope.threads.find(item => item.id === context.thread)
+            const lookingAt = sections.find(section => section.id === context.section)
+            const bodyOf = section => section.body_md.replace(/^[ \t]*```[^\n]*\n[\s\S]*?(?:^[ \t]*```[^\n]*(?:\n|$)|$(?![\s\S]))/gm, '')
+            const looking = [
+              lookingAt && `Looking at: ${lookingAt.heading}\n${bodyOf(lookingAt).slice(0, 6000)}`,
+              context.selection && `Selected text: "${context.selection.quote}"`,
+            ].filter(Boolean).join('\n')
+            const parts = [looking, thread && `Focused thread:\n${briefThread(thread)}`,
+              ...sections.filter(section => section !== lookingAt).map(section => `${section.heading}\n${bodyOf(section)}`),
               ...scope.threads.map(briefThread)].filter(Boolean)
             let timer
             try {

@@ -59,6 +59,50 @@ test('explain answers from the doc, the BRIEF and what Alex said, and never writ
   assert.equal(feed.tool, 'explain'); assert.equal(feed.write, false); assert.match(feed.label, /capability gate/)
 })
 
+test('explain prioritizes the viewed section even after a long document prefix', async () => {
+  for (const body of ['The last section explains the rollout.', 'Rollout details. '.repeat(500)]) {
+    const last = { id: 'last', heading: 'The rollout', body_md: body }
+    const { voice } = session({
+      getScope: async () => ({ scope: { ...scope, doc: { sections: [
+        { id: 'earlier', heading: 'Earlier', body_md: 'Earlier details. '.repeat(1000) }, last,
+      ] } } }),
+      getContext: () => ({ thread: 'T3', section: 'last', selection: null }),
+    })
+    const out = await voice.handle('explain', { question: 'what does this mean?' })
+    assert.ok(out.context.startsWith(`Looking at: The rollout\n${body.slice(0, 6000)}`))
+    assert.equal(out.context.split('The rollout').length - 1, 1, 'the viewed section is not repeated')
+    assert.ok(out.context.length <= 12000)
+    if (body.length > 6000) assert.ok(out.context.includes('Focused thread:'), 'a large viewed section leaves room for other context')
+  }
+})
+
+test('explain puts selected text in the looking-at block and strips its fences', async () => {
+  const { voice } = session({ getContext: () => ({
+    thread: 'T3', section: 'gate', selection: anchorInSection(sections[1], 'holds a new tool'),
+  }) })
+  const out = await voice.handle('explain', { question: 'why is that needed?' })
+  const first = out.context.split('\n\nFocused thread:')[0]
+  assert.ok(first.startsWith('Looking at: The capability gate\n'))
+  assert.ok(first.includes('Selected text: "holds a new tool"'))
+  assert.ok(first.includes('Figure: Approving a held tool'))
+  assert.ok(!first.includes('src: https://'))
+})
+
+test('explain reads the current page context again after scrolling during a call', async () => {
+  let section = 'gate', reads = 0
+  const { voice } = session({ getContext: () => {
+    reads++
+    return { thread: 'T3', section, selection: null }
+  } })
+  const first = await voice.handle('explain', { question: 'what does this mean?' })
+  const firstReads = reads
+  section = 'import'
+  const second = await voice.handle('explain', { question: 'and this?' })
+  assert.ok(firstReads > 0 && reads > firstReads, 'each explain samples page context')
+  assert.ok(first.context.startsWith('Looking at: The capability gate\n'))
+  assert.ok(second.context.startsWith('Looking at: The import\nOption A keeps the old import.'))
+})
+
 test('explain still answers from the doc when the BRIEF and history are slow or fail', async () => {
   for (const fetchContext of [async () => { throw new Error('down') }, () => new Promise((resolve) => setTimeout(() => resolve({ brief: 'late', said: [] }), 10_000))]) {
     const { voice, calls } = session({ fetchContext })
