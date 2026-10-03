@@ -422,7 +422,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       requireHumanPath(req)
       const thread = state.scope?.threads.find(t => t.id === threadId)
       if (!thread) bad('no such thread', 404)
-      if (thread.kind !== 'question' || thread.status !== 'open' || !thread.recommendation) bad('only open lane questions')
+      if (thread.status !== 'open' || !thread.recommendation) bad('only open threads with recommendations')
       const body = await readJson(req)
       const text = typeof body?.text === 'string' ? body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim() : ''
       if (text.length > 4000) bad(`your answer is too long (${text.length} of 4000 characters)`)
@@ -835,7 +835,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (body.options !== undefined && (human || body.recommendation === undefined)) bad('options require an agent recommendation')
         const message = { from: human ? 'alex' : 'agent', text: text(body.text), at, ...via, ...client, ...pictures }
         if (!human && body.recommendation !== undefined) {
-          if (thread.kind !== 'question') bad('only questions have recommendations')
+          if (thread.kind !== 'question' && thread.status !== 'open') bad('only open comments have recommendations')
           thread.recommendation = text(body.recommendation, 600)
           if (body.options !== undefined) setOptions(thread)
           else delete thread.options
@@ -850,7 +850,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           thread.status = 'open'; delete thread.resolution; delete thread.parked_at
         }
       } else if (verb === 'reject') {
-        if (thread.status !== 'open' || thread.kind !== 'question' || !thread.recommendation) bad('only open questions with recommendations can be rejected')
+        if (thread.status !== 'open' || !thread.recommendation) bad('only open threads with recommendations can be rejected')
         const reason = body.text == null || (typeof body.text === 'string' && !body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()) ? '' : text(body.text)
         thread.rejected_at = at
         thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client, ...pictures })

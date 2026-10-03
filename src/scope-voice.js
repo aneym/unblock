@@ -258,11 +258,11 @@ export function createScopeVoiceSession(deps) {
           if (name === 'answer') return answer(textOf(args.text))
           if (name === 'take_recommendation') {
             if (!thread) return fail('Which one? Say next question.')
-            if (thread.kind !== 'question' || thread.status !== 'open' || !thread.recommendation) return fail('That question has no open recommendation.')
+            if (thread.status !== 'open' || !thread.recommendation) return fail('That thread has no open recommendation.')
             return send(() => deps.postResolve(thread.id, { decision: thread.recommendation, alex_words: 'Take the recommendation', how: 'take', via: 'voice' }), 'Done. Took the recommendation.')
           }
           if (name === 'reject') {
-            if (!thread || thread.kind !== 'question' || thread.status !== 'open' || !thread.recommendation) return fail('Nothing to say no to here.')
+            if (!thread || thread.status !== 'open' || !thread.recommendation) return fail('Nothing to say no to here.')
             return send(() => deps.postReject(thread.id, { text: textOf(args.reason), via: 'voice' }), 'Sent. Waiting for a new option.')
           }
           if (name === 'park') {
