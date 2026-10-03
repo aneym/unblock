@@ -102,7 +102,7 @@ code { font: 13.5px var(--mono); background: var(--fill-1); padding: 1px 5px; bo
 .fig svg.phone { display: none; max-width: 420px; }
 @media (max-width: 599px) { .fig svg.wide { display: none; } .fig svg.phone { display: block; } }
 .fig figcaption { font-size: 14px; color: var(--tx2); margin-top: 10px; }
-svg text { font-family: var(--font-system); fill: var(--tx); font-size: 14px; }
+svg text { font-family: var(--font-system); fill: var(--tx); font-size: 14px; stroke: none; } /* a .box/.core/.gate group never outlines its labels */
 svg .sm { font-size: 12px; fill: var(--tx2); }
 svg .hd { font-size: 12px; font-weight: 700; letter-spacing: .06em; fill: var(--tx2); }
 svg .box { fill: var(--raised); stroke: var(--line); }
