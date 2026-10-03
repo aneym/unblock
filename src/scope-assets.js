@@ -246,23 +246,25 @@ export function docAssets(dir, sections) {
   }
   for (const section of Array.isArray(sections) ? sections : []) {
     if (typeof section?.body_md !== 'string') continue
-    let fence = null, values = {}
+    let fence = null, values = {}, entry = false
     const finish = () => {
-      if (!['demo', 'video'].includes(fence)) return
-      reference(fence, 'src', values.src, fence === 'demo' ? 'html' : 'video')
+      if (!['demo', 'video', 'tabs'].includes(fence) || fence === 'tabs' && !entry) return
+      reference(fence === 'tabs' ? 'demo' : fence, 'src', values.src, fence === 'video' ? 'video' : 'html')
       if (fence === 'video' && values.poster !== undefined) reference(fence, 'poster', values.poster, 'image')
     }
     // The end of the section closes an open fence, as it does on the page.
     for (const line of [...section.body_md.split('\n'), '```']) {
       if (fence !== null) {
-        if (/^```/.test(line)) { finish(); fence = null; values = {} }
-        else if (['demo', 'video'].includes(fence)) {
-          const pair = line.match(/^\s*(src|poster|height|frame|allow):\s*(.*?)\s*$/)
+        if (/^```/.test(line)) { finish(); fence = null; values = {}; entry = false }
+        else if (fence === 'tabs' && /^\s*---\s*$/.test(line)) { finish(); values = {}; entry = false }
+        else if (['demo', 'video', 'tabs'].includes(fence)) {
+          if (line.trim()) entry = true
+          const pair = line.match(/^\s*(src|poster|height|frame|allow|caption):\s*(.*?)\s*$/)
           if (pair) values[pair[1]] = pair[2]
         }
         continue
       }
-      if (/^```/.test(line)) { fence = line.match(/^```(demo|video)\s*$/)?.[1] ?? ''; continue }
+      if (/^```/.test(line)) { fence = line.match(/^```(demo|video|tabs)\s*$/)?.[1] ?? ''; continue }
       if (!/!\[(?:[^[\]\n]|\[(?:[^[\]\n]|\[[^[\]\n]*\])*\])*\]\(/.test(line)) continue
       const image = line.match(IMAGE_LINE)
       if (!image || !image[2].startsWith('asset:') || !ASSET_ID.test(image[2].slice(6))) bad(`invalid image ${image?.[1] ?? line}: unblock scope doc --from uploads local files`)

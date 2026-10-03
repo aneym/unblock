@@ -186,7 +186,7 @@ const marks = (id: string) => {
   const stage = anchor?.embed && embedStage(anchor)
   return stage ? [stage] : [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
 }
-const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
+const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open]),[role="tabpanel"][hidden]')
 const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
 function unread(t: Thread) {
@@ -617,6 +617,7 @@ function layoutShots() {
     }
   })
 }
+document.addEventListener('scope-tab-change', () => layout())
 function layout() {
   layoutShots()
   if (phone()) return
@@ -694,6 +695,7 @@ function threadOnScreen(id: string) {
   return rect.bottom >= 52 && rect.top < innerHeight
 }
 function focus(id: string | null, scroll = false, openSheet = true) {
+  if (id) document.dispatchEvent(new CustomEvent('scope-thread-focus', { detail: id }))
   focused = id
   if (id) markSeen(id)
   renderCards()

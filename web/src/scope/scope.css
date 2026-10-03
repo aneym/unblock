@@ -530,3 +530,9 @@ body.explainer .steps li::before { position: absolute; left: 0; top: -2px; }
 .other-options .other-option:last-child { border-bottom: 0; }
 .other-options .other-option button.btn.small { display: inline-flex; width: auto; margin: 0; padding: 0 10px; height: 26px; border-radius: 8px; font-size: 12.5px; font-weight: 600; background: var(--raised); border: 1px solid var(--line); }
 .other-options .other-option button.btn.small:hover { background: var(--fill-1); }
+.scope-tabs > [role="tablist"] { display: flex; gap: 24px; overflow-x: auto; flex-wrap: nowrap; margin-bottom: 12px; }
+.scope-tabs [role="tab"] { flex: 0 0 auto; padding: 8px 0; border: 0; border-bottom: 1px solid transparent; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.scope-tabs [role="tab"][aria-selected="true"] { color: var(--tx); font-weight: 600; border-bottom-color: currentColor; }
+.scope-tabs > [role="tabpanel"][hidden] { display: none; }
+.scope-tabs .fig { margin-top: 0; }
+.tab-thread-hint { display: block; margin-top: 8px; padding: 0; border: 0; background: none; color: var(--tx2); font: inherit; font-size: 12px; cursor: pointer; text-align: left; }

@@ -1,4 +1,6 @@
 import DOMPurify from 'dompurify'
+import { parseMediaFence } from '../../../src/scope-media.js'
+import './tabs.ts'
 import type { DocAsset } from '../../../src/scope-doc.js'
 
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
@@ -120,21 +122,18 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
         let phone = ''; if (/^```svg phone\s*$/.test(lines[i] || '')) phone = `<div class="fig-phone" data-cm-skip>${sanitizeSvg(fence().source)}</div>`
         out.push(`<figure class="fig"><div class="fig-wide" data-cm-skip>${sanitizeSvg(f.source)}</div>${phone}${caption()}</figure>`)
       } else if (f.lang === 'mermaid') out.push(`<figure class="fig mermaid"><div data-mermaid="${esc(f.source)}" data-cm-skip><pre>${esc(f.source)}</pre></div>${caption()}</figure>`)
+      else if (f.lang === 'tabs') {
+        // Flat demo entries avoid nesting triple-backtick fences in this line-based parser.
+        const entries = f.source.split(/^\s*---\s*$/m).filter(entry => entry.trim()).map(entry => parseMediaFence(entry, assets, assetBase))
+        const group = `scope-tabs-${out.length}`
+        const labels = entries.map((entry, index) => entry.values.caption?.split(/:|—/)[0].trim() || `Tab ${index + 1}`)
+        out.push(`<div class="scope-tabs"><div role="tablist" aria-label="Demos" data-cm-skip>${entries.map((entry, index) => `<button type="button" role="tab" id="${group}-tab-${index}" aria-controls="${group}-panel-${index}" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}">${esc(labels[index])}</button>`).join('')}</div>${entries.map((entry, index) => `<div role="tabpanel" id="${group}-panel-${index}" aria-labelledby="${group}-tab-${index}" data-tab-label="${esc(labels[index])}"${index ? ' hidden' : ''}><figure class="fig demo" data-frame="${entry.values.frame === 'phone' ? 'phone' : 'desktop'}">${entry.src ? `<div class="demo-stage" data-cm-skip data-tab-src="${entry.src}" data-sandbox="${esc(entry.sandbox)}" data-allow="${esc(entry.allow)}" data-height="${entry.height}" data-title="${esc(entry.values.caption || 'Demo')}" style="height:${entry.height}px"></div>` : '<div class="shot-missing" data-cm-skip>Demo unavailable</div>'}<figcaption>${inline(entry.values.caption || labels[index])}</figcaption>${entry.src ? `<div class="fig-actions" data-cm-skip><button type="button" class="btn fig-comment">Comment on this demo</button><a class="demo-open" href="${entry.src}" target="_blank" rel="noopener">Open in a new tab</a></div>` : ''}</figure></div>`).join('')}</div>`)
+      }
       else if (f.lang === 'demo' || f.lang === 'video') {
-        const values: Record<string, string> = {}
-        for (const line of f.source.split('\n')) { const match = line.match(/^\s*([^:]+):\s*(.*?)\s*$/); if (match) values[match[1].trim()] = match[2] }
-        const mediaUrl = (value: string | undefined, type: DocAsset['type']) => {
-          if (!value) return ''
-          try { if (new URL(value).protocol === 'https:') return esc(value) } catch {}
-          const id = value.startsWith('asset:') ? value.slice(6) : ''
-          return id && Object.hasOwn(assets, id) && assets[id].type === type ? assetUrl(id) : ''
-        }
-        const demo = f.lang === 'demo', src = mediaUrl(values.src, demo ? 'html' : 'video'), cap = caption()
+        const { values, src, height, allow, sandbox, mediaUrl } = parseMediaFence(f.source, assets, assetBase, f.lang === 'demo' ? 'html' : 'video')
+        const demo = f.lang === 'demo', cap = caption()
         if (!src) { out.push(`<figure class="fig ${f.lang}"><div class="shot-missing" data-cm-skip>${demo ? 'Demo' : 'Recording'} unavailable</div>${cap}</figure>`); continue }
         if (demo) {
-          const height = /^-?\d+$/.test(values.height || '') ? Math.max(240, Math.min(1200, Number(values.height))) : 560
-          const allow = (values.allow || '').split(',').map(v => v.trim()).filter(v => ['microphone', 'camera', 'autoplay', 'clipboard-write'].includes(v)).join('; ')
-          const sandbox = values.src.startsWith('asset:') ? 'allow-scripts allow-forms' : 'allow-scripts allow-forms allow-same-origin allow-popups'
           // Every demo mounts inline as it nears the viewport; `autoplay: true` is still accepted and changes nothing.
           const title = document.createElement('div'); title.innerHTML = cap
           out.push(`<figure class="fig demo" data-frame="${values.frame === 'phone' ? 'phone' : 'desktop'}"><div class="demo-stage" data-cm-skip data-src="${src}" data-embed-src="${esc(values.src)}" data-sandbox="${esc(sandbox)}" data-allow="${esc(allow)}" data-height="${height}" data-title="${esc(title.textContent || 'Demo')}"><p class="type-hint">Loading demo…</p></div>${cap}<div class="fig-actions" data-cm-skip>${cap ? '<button type="button" class="btn fig-comment">Comment on this demo</button>' : ''}<a class="demo-open" href="${src}" target="_blank" rel="noopener">Open in a new tab</a></div></figure>`)
