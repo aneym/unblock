@@ -11,6 +11,8 @@
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
 // /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
+// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?thread&status[&by&doing&link&text]
+// (one live item frame), /__stream_reply?thread[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
 // /__remove_later (the Later section is deleted), /__spread (eight threads down Later)
 import http from 'node:http'
 import fs from 'node:fs'
@@ -27,11 +29,11 @@ const stamp = () => new Date().toISOString().replace(/(\.\d{3})\d*Z$/, '$1Z')
 const LATER = Array.from({ length: 16 }, (_, i) => `Later paragraph ${i + 1}: settings and themes wait for pass ${i + 1}, after the page ships to phones and the lane has read every note.`).join('\n\n')
 const SHOT = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800"><rect width="600" height="800" fill="#8fa9b3"/><rect x="40" y="60" width="520" height="80" rx="12" fill="#e9eef0"/></svg>'
 
-let doc, seq, sections, threads, notes, listeners
+let doc, seq, sections, threads, notes, listeners, items, itemSeq, timers = []
 const images = new Map()
 function reset() {
   const at = '2026-09-29T20:00:00.000Z'
-  seq = 3; listeners?.forEach((l) => l.end()); listeners = new Set(); notes = []
+  seq = 3; listeners?.forEach((l) => l.end()); listeners = new Set(); notes = []; items = new Map(); itemSeq = 0; timers.forEach(clearTimeout); timers = []
   doc = { slug: 'demo', title: 'Scope page fixes', pane: 'w5H:pT1', created_at: at, updated_at: at }
   sections = {
     title: { heading: 'Scope page fixes', body_md: 'A doc the page keeps live.', updated_at: at },
@@ -59,7 +61,7 @@ function view() {
   })
   const assets = { shot1: { type: 'image', width: 600, height: 800 }, shot2: { type: 'image', width: 600, height: 800 } }
   const scope = { version: 2, slug: doc.slug, title: doc.title, pane: doc.pane, revision: seq, updated_at: doc.updated_at, doc: { sections: list, assets }, threads: projected, presence: [] }
-  return { generated_at: doc.updated_at, source: 'live-docs', received_at: doc.updated_at, data: scope, scope, notes: notes.map((n) => ({ ...n })) }
+  return { generated_at: doc.updated_at, source: 'live-docs', received_at: doc.updated_at, data: scope, scope, notes: notes.map((n) => ({ ...n })), items: [...items.values()] }
 }
 
 function bump() {
@@ -67,6 +69,16 @@ function bump() {
   const frame = `id: ${seq}\nevent: scope\ndata: ${JSON.stringify(view())}\n\n`
   for (const l of listeners) l.write(frame)
 }
+
+// Live items (explainers lane, 2026-10-03): the unblock daemon's item shape, sent as `event: item` frames.
+function upsertItem(thread, patch) {
+  const t = threads.find((x) => x.id === thread), to = t.messages.filter((m) => m.from === 'alex').at(-1).at, id = `${thread}@${to}`
+  const item = { type: 'reply', doing: null, text: '', ...items.get(id), ...patch, id, thread, to, seq: ++itemSeq, updated_at: stamp() }
+  items.set(id, item)
+  const frame = `event: item\ndata: ${JSON.stringify(item)}\n\n`
+  for (const l of listeners) l.write(frame)
+}
+const REPLY = ['Voice waits ', 'because the ', 'phone page ', 'ships first, ', 'then voice rides on it.']
 
 function write(route, body) {
   const now = stamp(), pics = (Array.isArray(body.images) ? body.images : []).map((id) => images.get(id)).filter(Boolean).map(({ id, width, height }) => ({ id, width, height }))
@@ -140,6 +152,22 @@ http.createServer((req, res) => {
     if (url.pathname === '/__detached_resolved') { const now = stamp(); threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: 'A sentence the lane deleted', prefix: '', suffix: '' }, kind: 'comment', status: 'resolved', by: 'alex', how: 'resolve', decision: 'Done', resolved_at: now, messages: [{ from: 'alex', text: 'A detached note.', at: now, via: 'admin' }] }); bump(); return send(200, { seq }) }
     if (url.pathname === '/__grow_title') { sections.title.body_md += '\n\nThe lane added a paragraph above everything, long enough to push the rest of the doc down by a few lines on any screen width.'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__edit_later') { const s = sections.later; s.body_md = s.body_md.replace('Later paragraph 16: settings and themes wait for pass 16', 'Later paragraph 16: settings, themes and fonts wait for pass 16'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
+    // pinned view (explainers lane, 2026-10-03): ten paragraphs land at the top of The plan, above T2's anchor; then T2's text goes away.
+    if (url.pathname === '/__grow_plan') { const s = sections.plan; s.body_md = Array.from({ length: 10 }, (_, i) => `New plan paragraph ${i + 1}: the lane wrote this while Alex was reading, and it runs to about three lines on a desktop screen so the anchor below moves down a long way.`).join('\n\n') + '\n\n' + s.body_md; s.updated_at = stamp(); bump(); return send(200, { seq }) }
+    if (url.pathname === '/__detach_t2') { const s = sections.plan; s.body_md = s.body_md.replace('Voice comes last.', 'Voice ships with the page.'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
+    // live items: one item frame; or a scripted lane turn on a thread (seen, thinking, doing, five chunks, done, then the message lands).
+    if (url.pathname === '/__item') { upsertItem(q.get('thread'), { status: q.get('status'), by: q.get('by') || 'Rooms PM', ...(q.get('doing') ? { doing: { text: q.get('doing'), ...(q.get('link') ? { link: q.get('link') } : {}) } } : {}), ...(q.get('text') ? { text: q.get('text') } : {}) }); return send(200, { seq }) }
+    if (url.pathname === '/__stream_reply') {
+      const thread = q.get('thread'), by = q.get('by') || 'Rooms PM'
+      const at = (ms, fn) => timers.push(setTimeout(fn, ms))
+      at(0, () => upsertItem(thread, { status: 'seen', by }))
+      at(400, () => upsertItem(thread, { status: 'thinking', by }))
+      at(900, () => upsertItem(thread, { status: 'thinking', by, doing: { text: 'Reading FINDINGS.md' } }))
+      REPLY.forEach((_, i) => at(1500 + i * 350, () => upsertItem(thread, { status: 'streaming', by, doing: null, text: REPLY.slice(0, i + 1).join('') })))
+      at(1500 + REPLY.length * 350, () => upsertItem(thread, { status: 'done', by, doing: null, text: REPLY.join('') }))
+      at(1800 + REPLY.length * 350, () => { threads.find((x) => x.id === thread).messages.push({ from: 'agent', text: REPLY.join(''), at: stamp() }); bump() })
+      return send(200, { seq })
+    }
     if (url.pathname === '/__remove_later') { delete sections.later; bump(); return send(200, { seq }) }
     if (url.pathname === '/__lane_reply') {
       const at = stamp(), on = anchorInSection({ id: 'plan', heading: sections.plan.heading, body_md: sections.plan.body_md }, 'Voice comes last')

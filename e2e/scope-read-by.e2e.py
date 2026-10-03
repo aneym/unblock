@@ -6,8 +6,9 @@ The page said "Sent" for a note that had only been queued, and never showed that
 e2e/scope-stub.mjs (port 4627). At 1280 and 390, light, the chip on Alex's comment T2 reads:
   1) "Sending…" while the daemon still holds the note (queued or held);
   2) "Sent" once lane-post took it (delivered);
-  3) "Read by Scope PM" once the lane's hook took the bulletin (delivered, read_by "Scope PM");
-and the in-flight summary line ("N comments · …") counts it as "1 Read".
+  3) once the lane's hook took the bulletin (delivered, read_by "Scope PM"), no chip: a 👀 reaction titled "Seen by Scope PM"
+     (explainers lane, 2026-10-03, Alex's redesign of the read line);
+and the in-flight summary line ("N comments · …") counts it as "1 Seen".
 usage: e2e/scope-read-by.e2e.py [<worktree>] [--no-build]
 """
 import json, os, shutil, subprocess, sys, time, urllib.request
@@ -44,9 +45,12 @@ def scenario(label):
         steps += hook(f'note?thread=T2&delivery={delivery}')
         steps.append(C(f'{label}: {delivery} reads "{want}"', CHIP + f" return {{ok: text === {json.dumps(want)}, text}}"))
     steps += hook('note?thread=T2&delivery=delivered&read_by=Scope%20PM')
-    steps.append(C(f'{label}: read reads "Read by Scope PM"', CHIP + " return {ok: text === 'Read by Scope PM', text}"))
-    steps.append(C(f'{label}: the in-flight summary counts it as read',
-                   "const t = (document.querySelector('p.inflight')?.textContent || '').trim(); return {ok: /(^| )1 Read( ·|$)/.test(t), t}"))
+    # explainers lane, 2026-10-03 (Alex: "the 'ready by factory' can just be an eye emoji reaction to my latest message"):
+    # a read note shows as a 👀 reaction titled "Seen by <name>"; the chip steps aside and no "Read by" line is drawn.
+    steps.append(C(f'{label}: read shows 👀 "Seen by Scope PM" and no Read by line',
+                   CHIP + " const eyes = card?.querySelector('.reaction')?.getAttribute('title'); return {ok: eyes === 'Seen by Scope PM' && !text && !/Read by/.test(card?.textContent || ''), eyes, text}"))
+    steps.append(C(f'{label}: the in-flight summary counts it as seen',
+                   "const t = (document.querySelector('p.inflight')?.textContent || '').trim(); return {ok: /(^| )1 Seen( ·|$)/.test(t), t}"))
     steps.append(C(f'{label}: no page error', "const e = window.__errs || []; return {ok: e.length === 0, e}"))
     return steps
 
