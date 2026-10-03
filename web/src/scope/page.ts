@@ -550,7 +550,9 @@ function renderCards() {
   syncFigureFocus()
   if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
   syncThreadClasses()
-  const visible = ordered().filter(t => isExplainer() || t.status === 'open' || showResolved)
+  const byId = new Map(scope?.threads.map(t => [t.id, t]))
+  const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
+  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => isExplainer() || t.status === 'open' || showResolved)
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -560,7 +562,11 @@ function renderCards() {
   if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
   const makeCard = (t: Thread) => kept?.dataset.t === t.id ? refreshCard(kept, card(t)) : card(t)
   const mainNodes: Node[] = visible.filter(t => !missing.has(t.id)).map(makeCard)
-  if (composer?.parentElement === cards) mainNodes.push(composer)
+  if (composer?.parentElement === cards) {
+    const range = composing && !composing.general && rangeFromAnchor(composing)?.range
+    const at = !range ? 0 : mainNodes.findIndex(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return mark && range.comparePoint(mark.firstChild!, 0) > 0 })
+    mainNodes.splice(at < 0 ? mainNodes.length : at, 0, composer)
+  }
   if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) mainNodes.push(kept)
   replaceAround(cards, mainNodes, kept?.parentElement === cards ? kept : composer)
   const gone = visible.filter(t => missing.has(t.id))
@@ -635,20 +641,11 @@ function layout() {
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
-  if (composing && !composing.general) {
-    const below: number[] = []
-    let above = top[pivot], bottom = top[pivot] + heights[pivot] + 10
-    for (let i = pivot - 1; i >= 0; i--) {
-      const candidate = Math.min(want[i], above - heights[i] - 10)
-      if (candidate < 8) below.unshift(i)
-      else { top[i] = candidate; above = candidate }
-    }
-    below.push(...nodes.map((_, i) => i).slice(pivot + 1))
-    for (const i of below) { top[i] = Math.max(want[i], bottom); bottom = top[i] + heights[i] + 10 }
-  } else {
-    for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
-    for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
-    if (top[0] < 8) { const shift = 8 - top[0]; top.forEach((_, i) => top[i] += shift) }
+  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
+  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
+  if (top[0] < 8) {
+    top[0] = 8
+    for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
   }
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0

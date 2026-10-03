@@ -11,7 +11,7 @@
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
 // /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
-// /__remove_later (the Later section is deleted)
+// /__remove_later (the Later section is deleted), /__spread (eight threads down Later)
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -145,6 +145,16 @@ http.createServer((req, res) => {
       const at = stamp(), on = anchorInSection({ id: 'plan', heading: sections.plan.heading, body_md: sections.plan.body_md }, 'Voice comes last')
       threads.find((t) => t.id === 'T1').messages.push({ from: 'agent', text: 'Executor it is, unless you say otherwise.', at })
       threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: on.quote, prefix: on.prefix || '', suffix: on.suffix || '' }, kind: 'question', status: 'open', recommendation: 'Yes', messages: [{ from: 'agent', text: 'Voice after phones?', at }] })
+      bump(); return send(200, { seq })
+    }
+    // composer-anchor: lane questions and Alex's notes spread down Later (paragraphs 2, 4, ... 16), so the rail is long.
+    if (url.pathname === '/__spread') {
+      const at = stamp()
+      for (let i = 2; i <= 16; i += 2) {
+        const a = anchorInSection({ id: 'later', heading: sections.later.heading, body_md: sections.later.body_md }, `Later paragraph ${i}: settings`)
+        const ask = i % 4 === 0
+        threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'later', quote: a.quote, prefix: a.prefix || '', suffix: a.suffix || '' }, kind: ask ? 'question' : 'comment', status: 'open', ...(ask ? { recommendation: `Pass ${i}` } : {}), messages: [{ from: ask ? 'agent' : 'alex', text: ask ? `Ship pass ${i} before phones?` : `Note on pass ${i}.`, at, ...(ask ? {} : { via: 'admin' }) }] })
+      }
       bump(); return send(200, { seq })
     }
     if (url.pathname === '/__lane_edit') { const s = sections.plan; s.body_md = s.body_md.replace('We ship the page first.', 'We ship the page first, on phones.'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
