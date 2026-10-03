@@ -1,9 +1,9 @@
 import { makeAnchor, locateAnchor, type Anchor, type AnchorSection } from '../../../src/scope-anchor.js'
 
 export const blocks = 'h1,h2,h3,h4,p,li,pre,tr,td,th,dt,dd,figcaption,q,.src'
-const skip = 'button,textarea,[data-cm-skip]'
+const skip = 'button,textarea,input,select,script,style,[data-cm-skip]'
 export function sectionOf(node: Node | null): { section: AnchorSection; root: HTMLElement } | null {
-  const el = node instanceof Element ? node : node?.parentElement
+  const el = node?.nodeType === 1 ? node as Element : node?.parentElement
   if (!el || el.closest(skip)) return null
   const root = el.closest<HTMLElement>('section[data-section]')
   if (!root) return null
@@ -15,13 +15,15 @@ export function sectionText(root: HTMLElement): { text: string; map: ({ node: Te
   const map: ({ node: Text; offset: number } | null)[] = []
   const boundary = () => { if (text && !/\s$/.test(text)) { text += '\n'; map.push(null) } }
   const walk = (node: Node) => {
-    if (node instanceof Element) {
-      if (node.matches(skip)) return
-      if (node.matches(blocks)) boundary()
+    if (node.nodeType === 1) {
+      const element = node as Element
+      if (element.matches(skip)) return
+      if (element.matches(blocks)) boundary()
       node.childNodes.forEach(walk)
-      if (node.matches(blocks)) boundary()
-    } else if (node instanceof Text) {
-      for (let i = 0; i < node.length; i++) { text += node.data[i]; map.push({ node, offset: i }) }
+      if (element.matches(blocks)) boundary()
+    } else if (node.nodeType === 3) {
+      const value = node as Text
+      for (let i = 0; i < value.length; i++) { text += value.data[i]; map.push({ node: value, offset: i }) }
     }
   }
   walk(root)
@@ -51,6 +53,7 @@ export function rootFor(anchor: Anchor): HTMLElement | null {
   return anchor.section.startsWith('q:') ? document.querySelector(`#q-${CSS.escape(anchor.section.slice(2))} .q-body`) : document.getElementById(anchor.section)
 }
 export function rangeFromAnchor(anchor: Anchor): { range: Range; exact: boolean } | null {
+  if (anchor.embed) return null
   const root = rootFor(anchor)
   if (!root) return null
   const { text, map } = sectionText(root), found = locateAnchor(text, anchor)

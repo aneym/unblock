@@ -1,3 +1,4 @@
+import { embedBridgeScript } from './demo-host.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -192,7 +193,9 @@ export function storeAsset(dir, bytes, contentType, { human = false } = {}) {
 }
 
 export function serveAsset(req, res, asset) {
-  const type = asset.metadata.content_type, total = asset.bytes.length
+  const type = asset.metadata.content_type
+  const body = type === 'text/html' ? Buffer.concat([asset.bytes, Buffer.from(embedBridgeScript())]) : asset.bytes
+  const total = body.length
   const headers = {
     'Content-Type': `${type}${['text/html', 'image/svg+xml'].includes(type) ? '; charset=utf-8' : ''}`,
     'X-Content-Type-Options': 'nosniff',
@@ -202,7 +205,7 @@ export function serveAsset(req, res, asset) {
     'Content-Length': total,
   }
   const range = typeof req.headers.range === 'string' ? req.headers.range.match(/^bytes=(\d*)-(\d*)$/) : null
-  let status = 200, bytes = asset.bytes
+  let status = 200, bytes = body
   if (range && (range[1] || range[2])) {
     if (range[1] && BigInt(range[1]) >= BigInt(total)) {
       res.writeHead(416, { ...headers, 'Content-Range': `bytes */${total}`, 'Content-Length': 0 })
@@ -216,7 +219,7 @@ export function serveAsset(req, res, asset) {
         return res.end()
       }
       status = 206
-      bytes = asset.bytes.subarray(start, end + 1)
+      bytes = body.subarray(start, end + 1)
       headers['Content-Range'] = `bytes ${start}-${end}/${total}`
       headers['Content-Length'] = bytes.length
     }

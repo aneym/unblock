@@ -3,7 +3,7 @@
  * Pure: no DOM. The page and the tests share this so a note filed from the player
  * and a pin sent back to it cannot disagree about the shape.
  */
-import { cleanRegion, normalizeAnchor } from './scope-anchor.js'
+import { cleanRegion, normalizeAnchor, locateAnchor, locateEmbed } from './scope-anchor.js'
 
 const NOTE_ID = /^[A-Za-z0-9_-]{1,64}$/
 const UNIT = /^[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9-]+$/
@@ -125,4 +125,62 @@ export function demoPins(threads, captionAnchor) {
       resolved: thread.status !== 'open',
     })),
   }
+}
+
+// HTML assets retain their opaque sandbox. A per-load capability binds replies to
+// the exact iframe; the child accepts commands only from its URL's parent origin.
+export function embedBridgeScript() {
+  return `<script>(() => { const fold = text => text.split('').map(ch => ch.toLowerCase().length === 1 ? ch.toLowerCase() : ch).join(''); const locateAnchor = ${locateAnchor.toString()};(${embedBridge.toString()})(${locateEmbed.toString()}); })()</script>`
+}
+function embedBridge(matcher) {
+  const locate = matcher
+  let token = '', parentOrigin = ''
+  const textMap = () => {
+    let text = ''; const map = []
+    const walk = node => {
+      if (node.nodeType === 1) {
+        if (node.matches('script,style,button,input,textarea,select,[hidden],[data-cm-skip]')) return
+        if (text && /^(H[1-6]|P|LI|DIV|TR|PRE|SECTION)$/.test(node.tagName)) { text += '\n'; map.push(null) }
+        node.childNodes.forEach(walk)
+      } else if (node.nodeType === 3) {
+        for (let i = 0; i < node.length; i++) { text += node.data[i]; map.push({ node, offset: i }) }
+      }
+    }
+    walk(document.body); return { text, map }
+  }
+  const send = data => { if (token) parent.postMessage({ type: 'rails-embed', token, ...data }, parentOrigin) }
+  const findRange = anchor => {
+    const { text, map } = textMap(), found = locate(text, anchor)
+    if (!found) return null
+    const positions = map.slice(found.start, found.end).filter(Boolean)
+    if (!positions.length) return null
+    const range = document.createRange(), first = positions[0], last = positions.at(-1)
+    range.setStart(first.node, first.offset); range.setEnd(last.node, last.offset + 1)
+    return range
+  }
+  window.addEventListener('message', event => {
+    if (event.source !== parent || event.origin !== location.origin || event.data?.type !== 'rails-embed') return
+    const data = event.data
+    if (data.action === 'init' && typeof data.token === 'string') { token = data.token; parentOrigin = event.origin; send({ action: 'ready' }); return }
+    if (!token || data.token !== token) return
+    if (data.action === 'match') send({ action: 'matches', matches: data.anchors.map(item => ({ id: item.id, found: !!findRange(item.anchor) })) })
+    if (data.action === 'highlight') {
+      const range = findRange(data.anchor)
+      if (range) { range.startContainer.parentElement?.scrollIntoView({ block: 'center' }); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range) }
+    }
+  })
+  let timer
+  const selected = () => {
+    const sel = getSelection()
+    if (!token || !sel?.rangeCount || sel.isCollapsed) return
+    const range = sel.getRangeAt(0), { text, map } = textMap()
+    const inside = map.map((pos, i) => pos && range.comparePoint(pos.node, pos.offset) === 0 && !(pos.node === range.endContainer && pos.offset === range.endOffset) ? i : -1).filter(i => i >= 0)
+    if (!inside.length) return
+    const start = inside[0], end = inside.at(-1) + 1, clean = text => text.replace(/\s+/g, ' ').trim()
+    const quote = clean(text.slice(start, end)).slice(0, 300).trim()
+    if (!quote) return
+    const rect = range.getBoundingClientRect()
+    send({ action: 'selection', anchor: { quote, prefix: clean(text.slice(0, start)).slice(-40), suffix: clean(text.slice(end)).slice(0, 40) }, rect: { top: rect.top, bottom: rect.bottom, right: rect.right } })
+  }
+  for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(timer); timer = setTimeout(selected, 80) })
 }

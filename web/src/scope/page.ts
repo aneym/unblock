@@ -3,7 +3,7 @@ import '../vendor/page-chrome/v1.css'
 import './page-chrome.css'
 import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
 import { appOf, orderThreads, type ScopeV2, type Thread, type DocSection, type ScopeApproval, type CommentImage } from '../../../src/scope-doc.js'
-import { locateAnchor, type Anchor } from '../../../src/scope-anchor.js'
+import { locateAnchor, locateEmbed, makeAnchor, type Anchor } from '../../../src/scope-anchor.js'
 import { demoNote, demoPins, readDemoMessage, type DemoNoteMessage, type DemoReadyMessage } from '../../../src/demo-host.js'
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
@@ -49,6 +49,7 @@ function syncChrome() {
 }
 let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
 let selectionRange: Range | null = null, selectionScrolling = false
+let embedSelectionRect: { top: number; bottom: number; right: number } | null = null
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
@@ -140,7 +141,7 @@ lightbox.addEventListener('cancel', e => { e.preventDefault(); closeLightbox() }
 document.addEventListener('keydown', e => { if (!lightbox.open) return; if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); e.stopImmediatePropagation(); if (e.key === 'Escape') closeLightbox(); else moveLightbox(e.key === 'ArrowLeft' ? -1 : 1) } })
 function composerKey() {
   if (composing?.general) return 'general'
-  const key = `composer:${composing?.section}:${composing?.quote}`
+  const key = `composer:${composing?.section}:${composing?.embed ? composing.embed.src + ":" : ""}${composing?.quote}`
   if (draftStorageKey(key).length < 200) return key
   let hash = 2166136261
   for (const char of key) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
@@ -180,7 +181,11 @@ function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
   replaceAround(kept, nodes, reply)
   return kept
 }
-const marks = (id: string) => [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
+const marks = (id: string) => {
+  const anchor = scope?.threads.find(t => t.id === id)?.anchor
+  const stage = anchor?.embed && embedStage(anchor)
+  return stage ? [stage] : [...doc.querySelectorAll<HTMLElement>(`mark[data-t="${id}"]`)]
+}
 const hidden = (mark: HTMLElement) => !!mark.closest('details:not([open])')
 const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
@@ -429,7 +434,7 @@ function cardHtml(t: Thread) {
     body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="Reply to the lane · ⌘Enter sends">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn${approve ? '' : ' primary'}" data-action="reply">Reply</button>${approve}${approve && t.kind !== 'question' ? '<button class="btn" data-action="no">Reject</button>' : ''}</div>${approve ? '<p class="pick-hint">Approve takes the recommendation; a note goes with it.</p>' : ''}</div>`
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
-  const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
+  const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.embed ? `<button class="btn small" data-action="jump-text">${missing.has(t.id) ? 'Embed changed' : 'Embed ' + esc(t.anchor.embed.src)} · <q>${esc(t.anchor.embed.quote)}</q></button>` : t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
   return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<div class="other-option"><span>${esc(option)}</span><button class="btn small" data-action="option" data-option="${i + 1}">Pick this</button></div>`).join('')}</details>` : ''}
@@ -444,6 +449,7 @@ function highlight() {
   missing.clear()
   for (const t of ordered()) {
     if (t.anchor.general) continue
+    if (t.anchor.embed) { const stage = embedStage(t.anchor); if (!stage || embedMatches.get(t.id) === false) missing.add(t.id); continue }
     const root = document.getElementById(t.anchor.section)
     if (!root?.matches('section[data-section]')) { missing.add(t.id); continue }
     const { text, map } = sectionText(root), found = locateAnchor(text, t.anchor)
@@ -538,6 +544,7 @@ function render() {
   if (activeKey) { const target = [...document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]')].find(n => n.dataset.draft === activeKey && n.getClientRects().length); if (target && document.activeElement !== target) target.focus({ preventScroll: true }); if (caret != null) target?.setSelectionRange(caret, caretEnd ?? caret, direction || undefined) }
   watchDemos()
   postDemoPins()
+  refreshEmbedMatches()
 }
 function renderCards() {
   syncFigureFocus()
@@ -619,6 +626,9 @@ function layout() {
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
     if (queued?.anchor?.general || n.classList.contains('composer') && composing?.general) return 8
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
+    const embedAnchor = queued?.anchor || (n.classList.contains('composer') ? composing : scope?.threads.find(t => t.id === n.dataset.t)?.anchor)
+    const stage = embedAnchor?.embed && embedStage(embedAnchor)
+    if (stage) return Math.max(8, stage.getBoundingClientRect().top - base)
     const composerRange = n.classList.contains('composer') && composing && rangeFromAnchor(composing)?.range
     return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
@@ -669,6 +679,7 @@ function threadTarget(id: string) {
   return { node: list.length && !list.some(hidden) ? document.getElementById(thread?.anchor.section || '') : null, general: false, fallback: true }
 }
 function jumpThread(id: string, flash = false) {
+  highlightEmbed(id)
   const target = threadTarget(id), node = target.node
   if (!node) return
   if (target.general) scrollTo({ top: phone() ? scrollY + node.getBoundingClientRect().top - 96 : 0, behavior: 'instant' })
@@ -699,7 +710,7 @@ function renderSheet() {
   const list = navList(), i = list.findIndex(x => x.id === t.id)
   sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
   const fresh = document.createElement('div')
-  fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? (isExplainer() ? 'The whole doc' : 'General comment') : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}${isExplainer() ? ' explainer' : ''}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${list.length}${isExplainer() ? '' : ' open'}</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+  fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.embed ? `Embed ${esc(t.anchor.embed.src)} · <q>${esc(t.anchor.embed.quote)}</q>` : t.anchor.general ? (isExplainer() ? 'The whole doc' : 'General comment') : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}${isExplainer() ? ' explainer' : ''}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${list.length}${isExplainer() ? '' : ' open'}</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...sheet.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -721,7 +732,7 @@ function showSelection() {
   document.querySelector('[data-action="comment"]')?.remove()
   if (!selection || composing || selectionScrolling) return
   const range = selectionRange?.startContainer.isConnected ? selectionRange : rangeFromAnchor(selection)?.range
-  const rect = range && [...range.getClientRects()].filter(r => r.width > 0).at(-1)
+  const rect = selection.embed ? embedSelectionRect : range && [...range.getClientRects()].filter(r => r.width > 0).at(-1)
   if (!rect) return
   const button = document.createElement('button'); button.className = 'add'; button.dataset.action = 'comment'; button.textContent = isExplainer() ? 'Ask' : 'Comment'
   document.body.append(button)
@@ -734,7 +745,7 @@ function readSelection() {
   if (!zoom.hidden) return
   const selected = docSelection()
   if (selected) { selection = selected.anchor; selectionRange = selected.range.cloneRange(); selectionTop = selected.range.getBoundingClientRect().top + scrollY; showSelection() }
-  else if (!document.activeElement?.closest('.card,.add')) { selection = null; selectionRange = null; showSelection() }
+  else if (!selection?.embed && !document.activeElement?.closest('.card,.add')) { selection = null; selectionRange = null; showSelection() }
 }
 function openSelectionComment(anchor = selection, range = selectionRange) {
   if (!anchor) return
@@ -847,7 +858,7 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
     catch (error) { errors.set(t.id, error instanceof Error ? error.message : 'Could not copy'); renderCards() }
     return
   }
-  if (t && name === 'jump-text') { closeMenus(); focus(t.id); marks(t.id)[0]?.scrollIntoView({ block: 'center' }); return }
+  if (t && name === 'jump-text') { closeMenus(); highlightEmbed(t.id); focus(t.id); marks(t.id)[0]?.scrollIntoView({ block: 'center' }); return }
   if (t && target.closest('.menu') && name !== 'menu-reply') { menus.delete(t.id); deleting.delete(t.id); renderCards() }
   if (t && name === 'else' && t.recommendation && !text) { modes.set(t.id, 'else'); renderCards(); const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${t.id}"] textarea`); if (input) input.placeholder = 'Your answer'; focusBox(t.id); return }
   if (t && ['menu', 'menu-reply', ...(!t.recommendation ? ['else'] : [])].includes(name)) {
@@ -944,6 +955,97 @@ function captionAnchorOf(figure: HTMLElement): Anchor | null {
   if (video && video.currentTime >= .5) anchor.t = Math.round(video.currentTime * 10) / 10
   return anchor
 }
+const embedMatches = new Map<string, boolean>()
+const embedConnections = new WeakMap<HTMLIFrameElement, { token: string; direct: boolean }>()
+function embedStage(anchor: Anchor): HTMLElement | null {
+  return [...(document.getElementById(anchor.section)?.querySelectorAll<HTMLElement>('.demo-stage') || [])].find(stage => stage.dataset.embedSrc === anchor.embed?.src) || null
+}
+function embedCommand(frame: HTMLIFrameElement, data: Record<string, unknown>) {
+  const connection = embedConnections.get(frame)
+  if (connection) frame.contentWindow?.postMessage({ type: 'rails-embed', token: connection.token, ...data }, '*') // opaque asset origin
+}
+function connectEmbed(frame: HTMLIFrameElement, stage: HTMLElement) {
+  const token = crypto.randomUUID()
+  for (const thread of scope?.threads || []) if (thread.anchor.embed && embedStage(thread.anchor) === stage) embedMatches.delete(thread.id)
+  try {
+    const child = frame.contentDocument
+    if (child?.body && frame.contentWindow?.location.origin === location.origin) {
+      embedConnections.set(frame, { token, direct: true })
+      const read = () => {
+        const sel = child.getSelection()
+        if (!sel?.rangeCount || sel.isCollapsed || !child.body.contains(sel.anchorNode) || !child.body.contains(sel.focusNode)) return
+        const range = sel.getRangeAt(0), { text, map } = sectionText(child.body)
+        const inside = map.map((pos, i) => pos && range.comparePoint(pos.node, pos.offset) === 0 && !(pos.node === range.endContainer && pos.offset === range.endOffset) ? i : -1).filter(i => i >= 0)
+        if (!inside.length) return
+        const section = stage.closest<HTMLElement>('section[data-section]')!.id
+        const anchor = makeAnchor(section, text, inside[0], inside.at(-1)! + 1)
+        if (anchor) receiveEmbedSelection(stage, anchor, range.getBoundingClientRect())
+      }
+      for (const event of ['selectionchange', 'pointerup', 'mouseup']) child.addEventListener(event, () => window.setTimeout(read, 80))
+      refreshEmbedMatches(); if (focused) highlightEmbed(focused); return
+    }
+  } catch {} // sandboxed HTML deliberately has an opaque origin
+  if (!stage.dataset.embedSrc?.startsWith('asset:')) return
+  embedConnections.set(frame, { token, direct: false })
+  embedCommand(frame, { action: 'init' })
+}
+function receiveEmbedSelection(stage: HTMLElement, quote: { quote: string; prefix: string; suffix: string }, rect: { top: number; bottom: number; right: number }) {
+  const frameRect = stage.querySelector('iframe')!.getBoundingClientRect()
+  selection = { section: stage.closest<HTMLElement>('section[data-section]')!.id, ...quote, embed: { src: stage.dataset.embedSrc!, ...quote } }
+  selectionRange = null; selectionTop = frameRect.top + rect.top + scrollY
+  embedSelectionRect = { top: frameRect.top + rect.top, bottom: frameRect.top + rect.bottom, right: frameRect.left + rect.right }
+  showSelection()
+}
+function directEmbedRange(frame: HTMLIFrameElement, anchor: Anchor) {
+  try {
+    const child = frame.contentDocument
+    if (!child?.body || !anchor.embed) return null
+    const { text, map } = sectionText(child.body), found = locateEmbed(text, anchor.embed)
+    const positions = found && map.slice(found.start, found.end).filter(p => p)
+    if (!positions?.length) return null
+    const first = positions[0]!, last = positions.at(-1)!, range = child.createRange()
+    range.setStart(first.node, first.offset); range.setEnd(last.node, last.offset + 1)
+    return range
+  } catch { return null }
+}
+function refreshEmbedMatches() {
+  for (const stage of doc.querySelectorAll<HTMLElement>('.demo-stage')) {
+    const frame = stage.querySelector('iframe'), connection = frame && embedConnections.get(frame)
+    if (!frame || !connection) continue
+    const threads = (scope?.threads || []).filter(t => t.anchor.embed && embedStage(t.anchor) === stage)
+    if (connection.direct) for (const thread of threads) embedMatches.set(thread.id, !!directEmbedRange(frame, thread.anchor))
+    else embedCommand(frame, { action: 'match', anchors: threads.map(t => ({ id: t.id, anchor: t.anchor.embed })) })
+  }
+  updateEmbedDetached(); renderCards(); layout()
+}
+function updateEmbedDetached() {
+  for (const thread of scope?.threads || []) if (thread.anchor.embed) {
+    if (!embedStage(thread.anchor) || embedMatches.get(thread.id) === false) missing.add(thread.id)
+    else missing.delete(thread.id)
+  }
+}
+function highlightEmbed(id: string) {
+  const anchor = scope?.threads.find(t => t.id === id)?.anchor
+  const stage = anchor?.embed && embedStage(anchor), frame = stage && stage.querySelector('iframe')
+  if (!anchor || !frame) return
+  if (embedConnections.get(frame)?.direct) {
+    const range = directEmbedRange(frame, anchor)
+    if (range) { range.startContainer.parentElement?.scrollIntoView({ block: 'center' }); const sel = frame.contentDocument!.getSelection()!; sel.removeAllRanges(); sel.addRange(range) }
+  } else embedCommand(frame, { action: 'highlight', anchor: anchor.embed })
+}
+window.addEventListener('message', event => {
+  if (event.data?.type !== 'rails-embed') return
+  const frame = [...doc.querySelectorAll<HTMLIFrameElement>('.demo-stage iframe')].find(frame => frame.contentWindow === event.source)
+  const connection = frame && embedConnections.get(frame)
+  if (!frame || !connection || connection.direct || event.origin !== 'null' || event.data.token !== connection.token) return
+  const stage = frame.closest<HTMLElement>('.demo-stage')!, data = event.data
+  if (data.action === 'ready') { refreshEmbedMatches(); if (focused) highlightEmbed(focused) }
+  if (data.action === 'selection' && typeof data.anchor?.quote === 'string' && data.anchor.quote.trim() && typeof data.anchor.prefix === 'string' && typeof data.anchor.suffix === 'string' && [data.rect?.top, data.rect?.bottom, data.rect?.right].every(Number.isFinite)) receiveEmbedSelection(stage, data.anchor, data.rect)
+  if (data.action === 'matches' && Array.isArray(data.matches)) {
+    for (const item of data.matches) if (typeof item.found === 'boolean' && scope?.threads.some(t => t.id === item.id && embedStage(t.anchor) === stage)) embedMatches.set(item.id, item.found)
+    updateEmbedDetached(); renderCards(); layout()
+  }
+})
 const demoFrames = new WeakMap<Window, HTMLElement>()
 type DemoFigure = HTMLElement & { demoReady?: DemoReadyMessage }
 function mountDemo(stage: HTMLElement) {
@@ -955,6 +1057,7 @@ function mountDemo(stage: HTMLElement) {
   frame.referrerPolicy = 'no-referrer'
   frame.title = stage.dataset.title || 'Demo'
   frame.loading = 'lazy'
+  frame.addEventListener('load', () => connectEmbed(frame, stage), { once: true })
   stage.replaceChildren(frame)
   const figure = stage.closest('figure')
   if (frame.contentWindow && figure) demoFrames.set(frame.contentWindow, figure)

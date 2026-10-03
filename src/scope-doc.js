@@ -1,5 +1,5 @@
 import { isAbsolute } from 'node:path'
-import { locateAnchor, makeAnchor, normalizeAnchor, plainText } from './scope-anchor.js'
+import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } from './scope-anchor.js'
 
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
 export const THREAD_ID = /^T\d{1,4}$/
@@ -46,6 +46,7 @@ export function orderThreads(scope) {
   const position = (thread) => {
     if (thread.anchor.general) return [-1, -1]
     const index = scope.doc.sections.findIndex((s) => s.id === thread.anchor.section)
+    if (thread.anchor.embed) return index >= 0 && hasEmbedFence(scope.doc.sections[index], thread.anchor.embed.src) ? [index, scope.doc.sections[index].body_md.indexOf(thread.anchor.embed.src)] : [Infinity, Infinity]
     const found = index < 0 ? null : locateAnchor(sectionPlain(scope.doc.sections[index]), thread.anchor)
     return found ? [index, found.start] : [Infinity, Infinity]
   }

@@ -26,6 +26,13 @@ export function normalizeAnchor(input) {
   const quote = anchorText(input.quote).slice(0, 300).trim()
   if (!quote) return null
   const anchor = { section: input.section, quote, prefix: anchorText(input.prefix).slice(-40).trim(), suffix: anchorText(input.suffix).slice(0, 40).trim() }
+  if (input.embed !== undefined) {
+    const embed = input.embed
+    if (!embed || typeof embed !== 'object' || Array.isArray(embed) || typeof embed.src !== 'string' || !embed.src.trim() || embed.src.length > 2048 || typeof embed.quote !== 'string') return null
+    const quote = anchorText(embed.quote).slice(0, 300).trim()
+    if (!quote) return null
+    anchor.embed = { src: embed.src.trim(), quote, prefix: anchorText(embed.prefix).slice(-40).trim(), suffix: anchorText(embed.suffix).slice(0, 40).trim() }
+  }
   if (input.general === true && input.section === 'title') anchor.general = true
   if (Number.isFinite(input.t) && input.t >= 0 && input.t <= 86400) {
     anchor.t = Math.round(input.t * 10) / 10
@@ -74,6 +81,20 @@ export function locateAnchor(text, anchor) {
   return best === null ? null : { start: map[best], end: map[best + quote.length - 1] + 1, exact }
 }
 
+/** Embed text must retain exact case and nearby context, never a loose fallback. */
+export function locateEmbed(text, anchor) {
+  const found = locateAnchor(text, anchor)
+  if (!found?.exact) return null
+  const prefix = String(anchor.prefix ?? '').replace(/\s/g, '').slice(-12)
+  const suffix = String(anchor.suffix ?? '').replace(/\s/g, '').slice(0, 12)
+  if (prefix || suffix) {
+    const before = text.slice(0, found.start).replace(/\s/g, '')
+    const after = text.slice(found.end).replace(/\s/g, '')
+    if (!(prefix && before.endsWith(prefix)) && !(suffix && after.startsWith(suffix))) return null
+  }
+  return found
+}
+
 export function sectionLabel(section) {
   return { plan: 'the plan', ask: 'your ask', decisions: 'the decisions', thread: 'the thread' }[section] ?? (/^q:Q\d{1,3}$/.test(section) ? section.slice(2) : section)
 }
@@ -95,4 +116,10 @@ export function plainText(markdown) {
     .replace(/[*_`]/g, '')
     .replace(/\|/g, ' ')
     .split(/\n\s*\n/).map(collapse).filter(Boolean).join('\n')
+}
+
+/** Only a demo fence in the containing section may own an embed anchor. */
+export function hasEmbedFence(section, src) {
+  return [...String(section?.body_md ?? '').matchAll(/^\s*```demo[^\n]*\n([\s\S]*?)^\s*```\s*$/gm)]
+    .some(match => match[1].split('\n').some(line => line.match(/^\s*src:\s*(.*?)\s*$/)?.[1] === src))
 }

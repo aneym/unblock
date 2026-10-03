@@ -7,7 +7,7 @@ import { promptPane } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
-import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
+import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 
@@ -864,7 +864,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (human) {
         const anchor = normalizeAnchor(body.anchor)
         const section = scope.doc.sections.find((s) => s.id === anchor?.section)
-        if (!section || !locateAnchor(sectionPlain(section), anchor)) bad('invalid anchor')
+        if (!section || !(anchor.embed ? hasEmbedFence(section, anchor.embed.src) : locateAnchor(sectionPlain(section), anchor))) bad('invalid anchor')
         if (body.recommendation !== undefined || body.why !== undefined) bad('invalid kind')
         thread = { id: nextThreadId(scope), anchor, author: 'alex', kind: 'comment', status: 'open', messages: [{ from: 'alex', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
         if (body.options !== undefined) bad('options require an agent recommendation')
@@ -1019,7 +1019,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       result.detached = scope.threads.filter((t) => {
         if (t.anchor.general) return false
         const section = scope.doc.sections.find((s) => s.id === t.anchor.section)
-        return !section || !locateAnchor(sectionPlain(section), t.anchor)
+        return !section || (t.anchor.embed ? !hasEmbedFence(section, t.anchor.embed.src) : !locateAnchor(sectionPlain(section), t.anchor))
       }).map((t) => t.id)
     }
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))

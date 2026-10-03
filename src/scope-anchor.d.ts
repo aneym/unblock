@@ -19,6 +19,7 @@ export interface Anchor {
   prefix: string
   /** Up to 40 chars of text just after the quote (collapsed, trimmed), may be ''. */
   suffix: string
+  embed?: { src: string; quote: string; prefix: string; suffix: string }
   general?: true
   /** Seconds into a recording or demo, one decimal, from 0 to 86400. */
   t?: number
@@ -72,3 +73,8 @@ export function quoteSnippet(quote: string, max?: number): string
  * dropped, [text](url) → text, bare URLs → 'a link', one paragraph per line.
  */
 export function plainText(markdown: string): string
+
+export function hasEmbedFence(section: { body_md: string }, src: string): boolean
+
+/** Exact embed quote with at least one retained context edge when supplied. */
+export function locateEmbed(text: string, anchor: { quote: string; prefix?: string; suffix?: string }): { start: number; end: number; exact: boolean } | null
