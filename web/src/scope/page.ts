@@ -570,7 +570,7 @@ function renderCards() {
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
-  const kept = activeCard && (activeCard.parentElement === cards || activeCard.parentElement === detached) ? activeCard : focusedNode || retained || null
+  const kept = activeCard && (activeCard.parentElement === cards || activeCard.parentElement === detached) ? activeCard : retained || focusedNode || null
   const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
   const keptThread = kept?.dataset.t && scope?.threads.find(t => t.id === kept.dataset.t)
   if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
