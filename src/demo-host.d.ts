@@ -66,7 +66,14 @@ export interface DemoTimeMessage {
   playing: boolean
 }
 
-export type DemoMessage = DemoNoteMessage | DemoReadyMessage | DemoTimeMessage
+export interface DemoSizeMessage {
+  type: 'rails-demo/size'
+  v: 1
+  /** Content height in px, rounded and clamped to 160..2400. */
+  h: number
+}
+
+export type DemoMessage = DemoNoteMessage | DemoReadyMessage | DemoTimeMessage | DemoSizeMessage
 
 export interface DemoPin {
   id: string
@@ -79,7 +86,7 @@ export interface DemoPin {
 
 /**
  * A cleaned player message, or null. Accepts only a plain object with `v === 1`
- * and type `rails-demo/ready`, `rails-demo/note` or `rails-demo/time`.
+ * and type `rails-demo/ready`, `rails-demo/note`, `rails-demo/time`, or `rails-demo/size`.
  * A note with a bad id, moment or text is null (the message cannot be filed).
  * A bad shot, step or region is nulled on the message and the rest is kept.
  */
