@@ -303,10 +303,16 @@ export function commentsHeader(root, opts) {
   const doc = root.ownerDocument;
   const render = () => {
     root.replaceChildren();
-    for (const [cls, text] of [['pc-comments-open', `${state.open} open`], ['pc-comments-position', `${state.index} of ${state.total}`]]) { const span = doc.createElement('span'); span.className = cls; span.textContent = text; root.append(span); }
+    if (typeof state.label === 'string') {
+      const name = doc.createElement('span'); name.className = 'pc-comments-open'; name.textContent = state.label; root.append(name);
+      const count = doc.createElement('span'); count.className = 'pc-comments-count'; count.textContent = state.index > 0 ? `${state.index} of ${state.total}` : String(state.open); root.append(count);
+    } else {
+      for (const [cls, text] of [['pc-comments-open', `${state.open} open`], ['pc-comments-position', `${state.index} of ${state.total}`]]) { const span = doc.createElement('span'); span.className = cls; span.textContent = text; root.append(span); }
+    }
     for (const [name, text, callback] of [['Previous comment', '‹', 'onPrev'], ['Next comment', '›', 'onNext']]) {
       const button = doc.createElement('button'); button.type = 'button'; button.className = 'pc-comment-step frame-btn'; button.textContent = text; button.setAttribute('aria-label', name); button.addEventListener('click', () => state[callback]?.()); root.append(button);
     }
+    if (state.resolved === false) return;
     const label = doc.createElement('label'); label.className = 'pc-comments-resolved';
     const input = doc.createElement('input'); input.type = 'checkbox'; input.checked = Boolean(state.showResolved); input.addEventListener('change', () => state.onShowResolved?.(input.checked));
     label.append(input, ' Show resolved'); root.append(label);

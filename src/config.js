@@ -147,6 +147,8 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
     ['UNBLOCK_VOICE_CAP_USD', typeof file.voice_spend_cap_usd === 'number' && Number.isFinite(file.voice_spend_cap_usd) && file.voice_spend_cap_usd > 0 ? String(file.voice_spend_cap_usd) : null],
     ['UNBLOCK_VOICE_MAX_MINUTES', normalizePositiveInteger(file.voice_max_minutes)],
     ['UNBLOCK_ISSUE_REPO', typeof file.voice_issue_repo === 'string' && file.voice_issue_repo.trim() ? file.voice_issue_repo.trim() : null],
+    ['UNBLOCK_EXPLAINER_CONCURRENCY', normalizePositiveInteger(file.explainer?.concurrency)],
+    ['UNBLOCK_EXPLAINER_TIMEOUT_MS', normalizePositiveInteger(file.explainer?.timeoutMs)],
   ]
   for (const [name, value] of settings) {
     if (env[name] !== undefined && env[name] !== '') continue

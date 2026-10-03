@@ -1283,6 +1283,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     server.once('error', reject)
     server.listen(port, HOST, resolve)
   })
+  scopeRoutes.recover()
   actualPort = server.address().port
 
   const daemonFile = join(stateDir(), 'daemon.json')

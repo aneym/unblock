@@ -9,6 +9,7 @@ import { lintDoc, lintText } from './scope-lint.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor } from './scope-anchor.js'
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
+import { createAnswerer } from './explainer-answerer.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -26,6 +27,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   const listeners = new Map()
   const delivering = new Map()
   const writes = new Map()
+  let answerer
   const paneNames = new Map()
   let closed = false
   let readTimer = null
@@ -69,7 +71,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const scope = data.scope
       const threads = Array.isArray(scope.threads) ? scope.threads : []
       return [{ slug: dir.name, app: appOf(scope), title: scope.title ?? '', updated_at: scope.updated_at ?? '',
-        pane: scope.pane ?? '', revision: scope.revision, open: threads.filter((t) => t.status === 'open').length }]
+        pane: scope.pane ?? '', revision: scope.revision, open: threads.filter((t) => t.status === 'open').length,
+        kind: scope.kind === 'explainer' ? 'explainer' : 'scope' }]
     }).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
   }
 
@@ -673,6 +676,79 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function scopeNotes(slug, filter) { return store.scopeNotes(slug, filter).map(note => ({ ...note, author: note.from })) }
 
+  function answererOn(scope) {
+    if (scope.answerer === 'on') return true
+    if (scope.answerer === 'off') return false
+    return scope.kind === 'explainer'
+  }
+
+  function writeAnswer(slug, patch) {
+    const previous = writes.get(slug) ?? Promise.resolve()
+    const pending = previous.catch(() => {}).then(() => applyAnswer(slug, patch))
+    writes.set(slug, pending)
+    return pending.finally(() => { if (writes.get(slug) === pending) writes.delete(slug) })
+  }
+
+  function applyAnswer(slug, patch) {
+    if (closed) return
+    const dir = join(root, slug)
+    let scope
+    try { scope = JSON.parse(readFileSync(join(dir, 'scope.json'), 'utf8')) } catch { return }
+    if (!scope || scope.version !== 2) return
+    const thread = (scope.threads ?? []).find((item) => item.id === patch.threadId)
+    const message = thread?.messages?.find((item) => item.answerer && item.pending && item.at === patch.at)
+    if (!message) return
+    let text = typeof patch.text === 'string' ? patch.text : ''
+    if (text.length > 4000) {
+      const unit = text.charCodeAt(3998)
+      text = `${text.slice(0, unit >= 0xd800 && unit <= 0xdbff ? 3998 : 3999)}…`
+    }
+    message.text = text
+    if (patch.pending) message.pending = true
+    else {
+      delete message.pending
+      if (patch.needs_owner) message.needs_owner = true
+      if (patch.handoff) message.handoff = true
+    }
+    scope.updated_at = new Date().toISOString()
+    const problems = validateScope(scope)
+    if (problems.length) { console.error(`unblock: explainer answer rejected slug=${slug} ${problems[0]}`); return }
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    const entry = listeners.get(slug)
+    if (entry) entry.meta = metadata(slug)
+    emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+  }
+
+  function interruptAnswerer() {
+    let dirs
+    try { dirs = readdirSync(root, { withFileTypes: true }) } catch { return }
+    for (const dir of dirs) {
+      if (!dir.isDirectory() || !SLUG.test(dir.name)) continue
+      const path = join(root, dir.name, 'scope.json')
+      let scope
+      try { scope = JSON.parse(readFileSync(path, 'utf8')) } catch { continue }
+      if (!scope || scope.version !== 2 || !Array.isArray(scope.threads)) continue
+      let changed = false
+      for (const thread of scope.threads) {
+        for (const message of thread.messages ?? []) {
+          if (message?.answerer === true && message.pending === true) {
+            message.text = 'Interrupted: ask again'
+            delete message.handoff
+            delete message.needs_owner
+            delete message.pending
+            changed = true
+          }
+        }
+      }
+      if (!changed) continue
+      scope.updated_at = new Date().toISOString()
+      writeFileSync(join(root, dir.name, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+      renameSync(join(root, dir.name, 'scope.json.tmp'), path)
+      cache.delete(dir.name)
+    }
+  }
+
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
   function changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
@@ -901,6 +977,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       result = verb === 'delete' ? { deleted: thread.id } : { ...result, thread }
     }
+    let answerJob = null
+    if (human && noteData && (newThread || verb === 'reply') && answererOn(scope)) {
+      thread.messages.push({ from: 'agent', answerer: true, pending: true, text: 'Answering…', at })
+      answerJob = { slug, threadId: thread.id, messageAt: at, scopeDir: dir }
+    }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
     if (!human && verb !== 'react') {
@@ -945,13 +1026,17 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     if (noteData) {
       const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
-      emit(slug, 'note', note)
+      if (answerJob) {
+        const [marked] = store.markScopeNotes([note.id], 'answerer')
+        emit(slug, 'note', marked ?? note)
+      } else emit(slug, 'note', note)
     }
     const state = readScope(slug)
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
     emit(slug, 'scope', { ...state, notes: scopeNotes(slug) })
-    if (noteData) schedule(slug)
+    if (answerJob) answerer.enqueue(answerJob)
+    else if (noteData) schedule(slug)
     return result
   }
 
@@ -1069,6 +1154,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { scanningReads = false }
   }
 
+  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer })
+
   readTimer = setInterval(() => { void scanBulletinReads() }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
   readTimer.unref()
 
@@ -1081,6 +1168,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   async function close() {
     closed = true
+    answerer?.stop()
     clearInterval(readTimer)
     for (const entry of listeners.values()) {
       clearInterval(entry.timer)
@@ -1098,5 +1186,5 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     for (const entry of listeners.values()) for (const client of entry.clients) client.write(': keepalive\n\n')
   }
 
-  return { handle, close, keepalive }
+  return { handle, close, keepalive, recover: interruptAnswerer }
 }

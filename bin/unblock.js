@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, extname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
 import { IMAGE_LINE } from '../src/scope-assets.js'
 import { filerPid } from '../src/origin-process.js'
 import { lintDoc } from '../src/scope-lint.js'
@@ -492,7 +492,7 @@ async function scopeLinks(health, slug) {
 }
 
 const SCOPE_USAGE = `unblock scope [list|url|notes|threads]           scoping docs and anchored threads
-unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"]
+unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
@@ -507,33 +507,54 @@ unblock scope kpi <slug> set --from <file.json>
 unblock scope kpi <slug> list [--json]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
-unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]`
+unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
+unblock explain [list|url|notes|threads|doc|patch|lint|ask|reply|edit|resolve|reopen]
+unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off]`
 
-function scopeNew(args, usage) {
+function scopeNew(args, usage, mode = 'scope') {
   const slugRe = /^[a-z0-9][a-z0-9-]{0,63}$/
   const paneRe = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
-  let pane, app, title
+  let pane, app, title, kind = mode === 'explain' ? 'explainer' : undefined, answerer
+  const sources = []
   const words = []
   for (let i = 1; i < args.length; i++) {
     const word = args[i]
     if (word === '--json') { json = true; continue }
-    if (word === '--pane' || word === '--app' || word === '--title') {
+    if (word === '--sources') {
+      while (args[i + 1] && !args[i + 1].startsWith('--')) sources.push(args[++i])
+      if (!sources.length) fail(usage)
+      continue
+    }
+    if (word === '--pane' || word === '--app' || word === '--title' || word === '--kind' || word === '--answerer') {
       const value = args[++i]
       if (value === undefined) fail(usage)
       if (word === '--pane') pane = value
       else if (word === '--app') app = value
+      else if (word === '--kind') kind = value
+      else if (word === '--answerer') answerer = value
       else title = value
     } else if (word.startsWith('-')) fail(usage)
     else words.push(word)
   }
   const slug = words[0]
   if (words.length !== 1 || !slugRe.test(slug ?? '') || !paneRe.test(pane ?? '') || (app !== undefined && !APPS.includes(app))) fail(usage)
+  if (kind !== undefined && kind !== 'scope' && kind !== 'explainer') fail(usage)
+  if (answerer !== undefined && answerer !== 'on' && answerer !== 'off') fail(usage)
+  const resolved = sources.map((dir) => {
+    const abs = resolve(dir)
+    let stat
+    try { stat = statSync(abs) } catch { fail(`no such source dir: ${abs}`) }
+    if (!stat.isDirectory()) fail(`no such source dir: ${abs}`)
+    return abs
+  })
+  if (resolved.length > 8) fail(usage)
+  if (kind === 'explainer' && !resolved.length) fail(usage)
   const root = process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
   const dir = join(root, slug)
   const path = join(dir, 'scope.json')
   if (existsSync(path)) fail(`${path} exists`, 4)
   const heading = title ?? slug
-  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
+  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), ...(kind ? { kind } : {}), ...(answerer ? { answerer } : {}), ...(resolved.length ? { sources: resolved } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
   const problems = validateScope(scope)
   if (problems.length) fail(problems.join('\n'), 1)
   mkdirSync(dir, { recursive: true })
@@ -542,13 +563,13 @@ function scopeNew(args, usage) {
   output({ slug, path }, `created ${slug} at ${path}`)
 }
 
-async function scope(args) {
+async function scope(args, mode = 'scope') {
   const usage = SCOPE_USAGE
   if (!args.length || ['--help', '-h', 'help'].includes(args[0])) {
     console.log(usage)
     return
   }
-  if (args[0] === 'new') return scopeNew(args, usage)
+  if (args[0] === 'new') return scopeNew(args, usage, mode)
   const [sub = 'list', slug, ...words] = args
   if (sub === 'react') {
     const { rest, opts } = flags(args, { '--clear': false })
@@ -652,9 +673,10 @@ async function scope(args) {
   const [verb = 'list', name, ...extra] = rest
   if (verb === 'list' && !name && !extra.length && !Object.keys(opts).length) {
     const { scopes } = await request('/api/scope')
+    const want = mode === 'explain' ? 'explainer' : 'scope'
     const health = await request('/api/health')
-    const listed = await Promise.all(scopes.map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
-    return output({ scopes: listed }, listed.map((item) => `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
+    const listed = await Promise.all(scopes.filter((item) => (item.kind === 'explainer' ? 'explainer' : 'scope') === want).map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
+    return output({ scopes: listed }, listed.map((item) => want === 'explainer' ? `${item.slug}  ${item.title}  ${item.url}` : `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
   }
   if (verb === 'app') {
     if (!APPS.includes(extra[0])) fail('app must be recruiter, closer or rails-admin')
@@ -1060,6 +1082,7 @@ try {
   else if (command === 'reveal') await reveal(input)
   else if (command === 'mirror') await mirror(input)
   else if (command === 'scope') await scope(input)
+  else if (command === 'explain') await scope(input, 'explain')
   else if (command === 'daemon') await daemonCmd(input)
   else if (command === 'rails') await rails(input)
   else if (command === 'ui' || command === 'mcp') {

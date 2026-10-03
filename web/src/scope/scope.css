@@ -132,6 +132,44 @@ body.show-resolved mark.hl.resolved.on { box-shadow: 0 1.5px 0 var(--tx2); }
 mark.hl.unread { position: relative; }
 mark.hl.unread::after { content: ""; position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
 .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ac); flex: none; }
+/* explainer: questions in the margin, answers that read like the doc */
+.side-head .pc-comments-count, .open-chip .q-count { color: var(--tx2); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* index: one quiet heading per group, title rows on hairlines; no comment counter, chip or voice without a doc */
+body.index .side, body.index .open-chip, body.index #talk { display: none; }
+body.index { padding-bottom: 0; }
+.index-group { display: grid; }
+.index-group h2 { padding-bottom: 8px; border-bottom: 1px solid var(--line); font: 600 13px/1.3 var(--font-system); letter-spacing: 0; color: var(--tx2); }
+.index-group .index-row { padding: 14px 0; font-size: 17px; font-weight: 500; text-decoration: none; }
+.index-group .index-row:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.card.explainer { gap: 10px; }
+.card.explainer .msg { gap: 4px; }
+.msg.answer .from { color: var(--tx2); font-weight: 600; }
+.msg.follow { border-top: 1px solid var(--line); padding-top: 10px; }
+.answer-body { display: grid; gap: 8px; min-width: 0; font-size: 14px; line-height: 1.55; color: var(--tx); overflow-wrap: break-word; }
+.answer-body > * { margin: 0; }
+.answer-body ul, .answer-body ol { padding-left: 18px; display: grid; gap: 5px; }
+.answer-body li::marker { color: var(--tx2); }
+.answer-body strong { font-weight: 650; }
+.answer-body h3, .answer-body h4 { font: 650 14px/1.4 var(--font-system); margin-top: 4px; }
+.answer-body code { font-size: 12.5px; padding: 1px 4px; border-radius: 4px; }
+.answer-body pre { padding: 8px 10px; border-radius: var(--radius-small); background: var(--fill-1); font-size: 12.5px; line-height: 1.45; white-space: pre; overflow-x: auto; }
+.answer-body pre code { padding: 0; background: none; font-size: inherit; }
+.answer-body a { color: var(--ac); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.answer-body table { border-collapse: collapse; font-size: 13px; }
+.answer-body th, .answer-body td { padding: 4px 10px 4px 0; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.answer-body th { color: var(--tx2); font-weight: 600; }
+.answer-body .quotes { gap: 6px !important; }
+.answer-body .quotes li, .answer-body .callout { padding: 0; border: 0; background: none; }
+.answer-body .quotes q { color: var(--tx2); }
+.card.explainer:not(.on) .answer-body > :not(:first-child) { display: none; }
+.card.explainer:not(.on) .answer-body > p:first-child { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.card.explainer:not(.on) .answer-body > :first-child:not(p) { max-height: 6.2em; overflow: hidden; }
+.msg.answer.pending .answer-body { color: var(--tx2); }
+.answer-wait { margin: 0; font-size: 13.5px; color: var(--tx2); animation: answer-pulse 1.6s ease-in-out infinite; }
+.answer-wait::after { content: "…"; }
+.answer-note { margin: 0; font-size: 12.5px; color: var(--tx2); }
+@keyframes answer-pulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .answer-wait { animation: none; } }
 .open-chip #resolvedChip[hidden] { display: none; }
 .open-chip #resolvedChip { font-size: 13px; padding: 0 8px; }
 .open-chip #resolvedChip[aria-pressed="true"] { background: var(--ac-soft); color: var(--ac); }
@@ -475,6 +513,10 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: 12px; }
 .steps li { counter-increment: step; display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); align-items: baseline; }
 .steps li::before { content: counter(step); font-size: 24px; font-weight: 300; line-height: 1; color: var(--tx2); font-variant-numeric: tabular-nums; }
+/* A grid li makes every inline child (bold lead, code, a question highlight) its own grid item, so the text after it
+   falls into the 2.25rem number column one word per line. Explainers flow the step as text with the number hung left. */
+body.explainer .steps li { display: block; position: relative; padding-left: 2.25rem; }
+body.explainer .steps li::before { position: absolute; left: 0; top: -2px; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 20px 28px; }
 .stat p { margin: 0; }

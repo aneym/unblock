@@ -45,7 +45,7 @@ export interface PageHandle {
   readonly renderedAt: number;
   update(patch: Partial<PageSpec>): void; announce(): void; destroy(): void;
 }
-export interface CommentsState { open: number; index: number; total: number; showResolved: boolean }
+export interface CommentsState { open: number; index: number; total: number; showResolved: boolean; label?: string; resolved?: boolean }
 export interface CommentsOptions extends CommentsState { onPrev?(): void; onNext?(): void; onShowResolved?(checked: boolean): void }
 export declare const VERSION: 'page-chrome@1.2';
 export declare function validatePageMessage(params: unknown): { ok: boolean; errors: string[] };

@@ -82,7 +82,7 @@ const BLOCKS: Record<string, (source: string) => string> = {
   terms: termsBlock, do: doBlock, compare: compareBlock, steps: stepsBlock, stat: statBlock,
   example: (source) => source.split(/\n\s*\n/).map(text => text.trim()).filter(Boolean).map(text => example(text.replace(/\s*\n\s*/g, ' '))).join(''),
 }
-export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = ''): string {
+export function markdown(source: string, assets: Record<string, DocAsset> = {}, assetBase = '', options: { inert?: boolean } = {}): string {
   const lines = source.replace(/[\r\u0000]/g, '').split('\n'), out: string[] = []
   let i = 0
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
@@ -94,6 +94,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
     const line = lines[i]
     if (!line.trim()) { i++; continue }
     if (imageLine(line)) {
+      if (options.inert) { out.push(`<p>${esc(line)}</p>`); i++; continue }
       const shots: string[] = []
       let count = 0
       while (imageLine(lines[i])) {
@@ -114,7 +115,8 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
     }
     if (/^```/.test(line)) {
       const f = fence()
-      if (f.lang === 'svg') {
+      if (options.inert) out.push(`<pre><code>${esc(f.source)}</code></pre>`)
+      else if (f.lang === 'svg') {
         let phone = ''; if (/^```svg phone\s*$/.test(lines[i] || '')) phone = `<div class="fig-phone" data-cm-skip>${sanitizeSvg(fence().source)}</div>`
         out.push(`<figure class="fig"><div class="fig-wide" data-cm-skip>${sanitizeSvg(f.source)}</div>${phone}${caption()}</figure>`)
       } else if (f.lang === 'mermaid') out.push(`<figure class="fig mermaid"><div data-mermaid="${esc(f.source)}" data-cm-skip><pre>${esc(f.source)}</pre></div>${caption()}</figure>`)
@@ -145,7 +147,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
       continue
     }
     const callout = line.match(/^>\s*\[!(NOTE|TIP|WARNING)\]\s*(.*)/)
-    if (callout) { const body = [callout[2]]; i++; while (/^>/.test(lines[i] || '')) body.push(lines[i++].replace(/^>\s?/, '')); out.push(`<div class="callout ${callout[1].toLowerCase()}">${markdown(body.join('\n'), assets, assetBase)}</div>`); continue }
+    if (callout) { const body = [callout[2]]; i++; while (/^>/.test(lines[i] || '')) body.push(lines[i++].replace(/^>\s?/, '')); out.push(`<div class="callout ${callout[1].toLowerCase()}">${markdown(body.join('\n'), assets, assetBase, options)}</div>`); continue }
     if (/^>/.test(line)) {
       const quotes: string[] = []
       while (/^>/.test(lines[i] || '')) { const text = lines[i++].replace(/^>\s?/, ''); const src = /^>\s*—/.test(lines[i] || '') ? lines[i++].replace(/^>\s*/, '') : ''; quotes.push(`<li><q>${inline(text.replace(/^["“]|["”]$/g, ''))}</q>${src ? `<span class="src">${inline(src)}</span>` : ''}</li>`) }

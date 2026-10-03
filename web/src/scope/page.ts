@@ -8,6 +8,7 @@ import { demoNote, demoPins, readDemoMessage, type DemoNoteMessage, type DemoRea
 const moment = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
+import { answerHtml } from './answer.ts'
 import { approvalBannerHtml } from './approval-banner.js'
 import { prepareAudio } from '../lib/voice-audio'
 import type { ScopeVoiceUi, ScopeFeedLine } from '../../../src/scope-voice.js'
@@ -29,12 +30,15 @@ const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 
 let chrome: ReturnType<typeof mountPage> | null = null, chromeSignature = ''
 const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rails Admin' }
 function hostDrawsApprove() { try { return window.frameElement?.getAttribute('data-approve-host') === '1' } catch { return false } }
+function isExplainer() { return (scope as (ScopeV2 & { kind?: 'explainer' | 'scope' }) | null)?.kind === 'explainer' }
+const navList = () => isExplainer() ? ordered() : open()
 function chromeSpec() {
+  const ask = isExplainer()
   const actions: PageAction[] = []
-  if (boot.comment !== 'host') actions.push({ id: 'comment', label: 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: 'Comment on the whole doc.' } } })
-  if ((boot.approve !== 'host' || !hostDrawsApprove()) && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
+  if (boot.comment !== 'host') actions.push({ id: 'comment', label: ask ? 'Ask' : 'Comment', kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: ask ? 'Ask about the whole doc.' : 'Comment on the whole doc.' } } })
+  if (!ask && (boot.approve !== 'host' || !hostDrawsApprove()) && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
   if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: embed ? 'Talk' : 'Talk it through by voice', kind: 'screen-only', placement: embed ? 'title' : 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
-  return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const, forwardKeys: true }
+  return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: ask ? `Explainer · revision ${scope!.revision}` : `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : ask ? { label: 'Explainers', route: '/s/' } : { label: 'Scoping', route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const, forwardKeys: true }
 }
 function syncChrome() {
   if (!scope) return
@@ -158,7 +162,7 @@ function refreshCard(kept: HTMLElement, fresh: HTMLElement) {
   let nextReply = fresh.querySelector<HTMLElement>('.reply')
   if (kept.dataset.t && reply && textarea && (document.activeElement === textarea || textarea.value.trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t)) && (!fresh.classList.contains('open') || !nextReply)) {
     nextReply = document.createElement('div'); nextReply.className = 'reply'; nextReply.dataset.retainedReply = 'true'
-    nextReply.innerHTML = `<p class="composer-note">${fresh.classList.contains('parked') ? 'Parked' : 'Resolved'} while you were typing. Sending reopens it.</p><textarea></textarea>${imageStrip(getImages(kept.dataset.t), true, kept.dataset.t)}<p class="error" role="alert">${esc(errors.get(kept.dataset.t))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="reply">${fresh.classList.contains('comment') ? 'Reply' : 'Send'}</button></div>`
+    nextReply.innerHTML = `<p class="composer-note">${fresh.classList.contains('parked') ? 'Parked' : 'Resolved'} while you were typing. Sending reopens it.</p><textarea></textarea>${imageStrip(getImages(kept.dataset.t), true, kept.dataset.t)}<p class="error" role="alert">${esc(errors.get(kept.dataset.t))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="reply">${fresh.classList.contains('explainer') ? 'Ask' : fresh.classList.contains('comment') ? 'Reply' : 'Send'}</button></div>`
     fresh.append(nextReply)
   }
   const nextTextarea = nextReply?.querySelector('textarea'), note = reply?.querySelector<HTMLElement>('.composer-note')
@@ -197,6 +201,7 @@ type QueuedApproval = { clientId: string; comment: string; mode: string; failed:
 let queuedApproval: QueuedApproval | null = null
 function isApproved() { return scope?.approval?.mode === 'approve_to_try' || scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
 function approvalBanner() {
+  if (isExplainer()) return ''
   if (queuedApproval) return `<div class="approval" data-cm-skip role="status"><strong>${queuedApproval.failed ? "Couldn't approve. Try again." : 'Sending…'}</strong>${queuedApproval.comment ? `<div class="approval-note">${esc(queuedApproval.comment)}</div>` : ''}</div>`
   return approvalBannerHtml(scope?.approval)
 }
@@ -214,7 +219,7 @@ function updateApproveDialog() {
   button.disabled = approving || !['approve', 'approve_to_try'].includes(mode) && !$<HTMLTextAreaElement>('textarea', approveDialog).value.trim()
 }
 function openApproveDialog() {
-  if (!scope || isApproved() || queuedApproval && !queuedApproval.failed || approveDialog.open) return
+  if (!scope || isExplainer() || isApproved() || queuedApproval && !queuedApproval.failed || approveDialog.open) return
   $<HTMLInputElement>(`input[value="${queuedApproval?.failed ? queuedApproval.mode : (scope as ScopeV2 & { approve_default?: string }).approve_default === 'try' ? 'approve_to_try' : 'approve'}"]`, approveDialog).checked = true
   $<HTMLTextAreaElement>('textarea', approveDialog).value = queuedApproval?.failed ? queuedApproval.comment : ''
   $('.error', approveDialog).textContent = ''
@@ -361,9 +366,35 @@ function inflight() {
 const deleting = new Set<string>(), copiedLinks = new Set<string>()
 const checkButton = '<button type="button" class="check" data-action="resolve" aria-label="Resolve" title="Resolve"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button>'
 const moreButton = '<button class="more" data-action="menu" aria-label="More" aria-haspopup="menu">⋯</button>'
+type AnswerMessage = Thread['messages'][number] & { answerer?: boolean; pending?: boolean; needs_owner?: boolean; handoff?: boolean }
+const answerBody = (text: string) => `<div class="answer-body">${answerHtml(text)}</div>`
+function answerMessageHtml(message: AnswerMessage, latest: boolean) {
+  const pending = message.pending === true, text = (message.text || '').trim()
+  const partial = pending && text && !/^Answering(?:…|\.\.\.)?$/.test(text) ? message.text : ''
+  const body = pending ? `${partial ? answerBody(partial) : ''}<p class="answer-wait" role="status">Answering</p>` : answerBody(message.text)
+  const note = message.needs_owner || message.handoff ? '<p class="answer-note">Sent to the owner</p>' : ''
+  return `<div class="msg answer${pending ? ' pending' : ''}${latest ? ' latest' : ' only-on'}"><div class="from">Answer${pending ? '' : `<span>${time(message.at)}</span>`}</div>${body}${note}${imageStrip(message.images)}</div>`
+}
+// One exchange after another, in order. A card that is not focused shows the question, the follow-up that the newest
+// answer replies to (if any) and the start of that answer; focusing it shows the whole thread.
+function explainerCardHtml(t: Thread) {
+  const messages = t.messages as AnswerMessage[]
+  const newestAt = messages.reduce((found, message, i) => i > 0 && message.from === 'agent' && message.answerer ? i : found, -1)
+  const menu = threadMenu(t)
+  const reply = !sending.has(t.id) ? `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="Ask a follow-up">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="reply">Ask</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>` : ''
+  const state = [copiedLinks.has(t.id) ? 'Link copied' : '', t.anchor.general ? 'Whole doc' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
+  const thread = messages.slice(1).map((message, k) => {
+    const i = k + 1
+    if (message.from === 'agent' && message.answerer) return answerMessageHtml(message, i === newestAt)
+    if (message.from === 'alex') return `<div class="msg follow${i === newestAt - 1 ? '' : ' only-on'}"><div class="q">${esc(message.text)}</div>${imageStrip(message.images)}</div>`
+    return `<div class="msg only-on"><div class="from">Lane<span>${time(message.at)}</span></div><div>${esc(message.text)}</div>${imageStrip(message.images)}</div>`
+  }).join('')
+  return `<div class="head"><span class="kind"><span class="who">You asked</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q">${esc(messages[0]?.text)}</div>${imageStrip(messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}${thread}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : reply}`
+}
 function threadMenu(t: Thread) {
   if (!menus.has(t.id)) return ''
   if (deleting.has(t.id)) return '<div class="menu" role="menu"><p>Delete this note?</p><button role="menuitem" data-action="confirm-delete">Delete</button><button role="menuitem" data-action="menu-cancel">Cancel</button></div>'
+  if (isExplainer()) return `<div class="menu" role="menu"><button role="menuitem" data-action="menu-reply">Reply</button><button role="menuitem" data-action="copy-link">Copy link</button>${!missing.has(t.id) ? '<button role="menuitem" data-action="jump-text">Jump to text</button>' : ''}${(t.author ?? t.messages[0]?.from) === 'alex' ? '<button role="menuitem" data-action="delete">Delete</button>' : ''}</div>`
   return `<div class="menu" role="menu"><button role="menuitem" data-action="menu-reply">Reply</button><button role="menuitem" data-action="${t.status === 'open' ? 'resolve' : 'reopen'}">${t.status === 'open' ? 'Resolve' : 'Reopen'}</button>${t.status === 'open' && t.kind === 'question' ? '<button role="menuitem" class="tall" data-action="park">Not now<small>Park it without answering</small></button>' : ''}<button role="menuitem" data-action="copy-link">Copy link</button>${!missing.has(t.id) ? '<button role="menuitem" data-action="jump-text">Jump to text</button>' : ''}${(t.author ?? t.messages[0]?.from) === 'alex' ? '<button role="menuitem" data-action="delete">Delete</button>' : ''}</div>`
 }
 function closeMenus() { if (!menus.size) return; menus.clear(); deleting.clear(); renderCards() }
@@ -380,6 +411,7 @@ function openMenu(id: string, point?: { x: number; y: number }) {
   menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
 }
 function cardHtml(t: Thread) {
+  if (isExplainer()) return explainerCardHtml(t)
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
@@ -406,7 +438,7 @@ function cardHtml(t: Thread) {
   ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function card(t: Thread) {
-  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${unread(t) ? ' unread' : ''}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
+  const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${isExplainer() ? ' explainer' : ''}${unread(t) ? ' unread' : ''}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
 }
 function highlight() {
   missing.clear()
@@ -511,7 +543,7 @@ function renderCards() {
   syncFigureFocus()
   if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
   syncThreadClasses()
-  const visible = ordered().filter(t => t.status === 'open' || showResolved)
+  const visible = ordered().filter(t => isExplainer() || t.status === 'open' || showResolved)
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -530,16 +562,16 @@ function renderCards() {
   replaceAround(detached, detachedNodes, kept)
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
-    node.innerHTML = `<div class="head"><span class="who">You commented</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
+    node.innerHTML = `<div class="head"><span class="who">${isExplainer() ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
     if (item.anchor.general) cards.prepend(node); else cards.append(node)
   }
   if (composing) renderComposer()
-  document.body.classList.toggle('show-resolved', showResolved)
+  document.body.classList.toggle('show-resolved', isExplainer() || showResolved)
   const resolvedCount = ordered().filter(t => t.status !== 'open').length, resolvedLabel = `Resolved (${resolvedCount})`
-  const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
+  const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = isExplainer() || resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
   if (!composing && phone() && document.body.classList.contains('sheet-open')) {
     const thread = scope?.threads.find(t => t.id === focused)
-    if (thread && thread.status !== 'open' && !showResolved && !getDraft(thread.id).trim() && !getImages(thread.id).length && !uploading.get(thread.id)) closeSheet()
+    if (!isExplainer() && thread && thread.status !== 'open' && !showResolved && !getDraft(thread.id).trim() && !getImages(thread.id).length && !uploading.get(thread.id)) closeSheet()
     else renderSheet()
   }
   updateCount(); layout(); disablePending()
@@ -612,10 +644,13 @@ function layout() {
   cards.style.height = `${height}px`; showSelection()
 }
 function updateCount() {
-  const list = open(), i = list.findIndex(t => t.id === focused)
-  commentsBar.update({ open: list.length, index: i + 1, total: list.length, showResolved })
+  const list = navList(), i = list.findIndex(t => t.id === focused), ask = isExplainer()
+  document.body.classList.toggle('explainer', ask)
+  commentsBar.update({ open: list.length, index: i + 1, total: list.length, showResolved, label: ask ? 'Questions' : undefined, resolved: ask ? false : undefined })
   const resolvedToggle = document.querySelector<HTMLInputElement>('.side-head input[type="checkbox"]'); if (resolvedToggle) { resolvedToggle.id = 'showResolved'; const label = resolvedToggle.parentElement!; for (const node of [...label.childNodes]) if (node.nodeType === Node.TEXT_NODE) node.textContent = ` Resolved (${ordered().filter(t => t.status !== 'open').length})` }
-  $('#openLabel').textContent = `${list.length} open`
+  const openLabel = $('#openLabel')
+  if (ask) { const count = document.createElement('span'); count.className = 'q-count'; count.textContent = String(list.length); openLabel.replaceChildren('Questions', count) }
+  else openLabel.textContent = `${list.length} open`
 }
 // Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
 function seekMoment(id: string) {
@@ -658,13 +693,13 @@ function focus(id: string | null, scroll = false, openSheet = true) {
   if (phone() && id && openSheet) { document.body.classList.add('sheet-open'); renderSheet(); jumpThread(id) }
   updateCount(); layout()
 }
-function step(direction: number) { const list = open(); if (!list.length) return; const index = list.findIndex(t => t.id === focused); focus(list[Math.max(0, Math.min(list.length - 1, index < 0 ? 0 : index + direction))].id, true) }
+function step(direction: number) { const list = navList(); if (!list.length) return; const index = list.findIndex(t => t.id === focused); focus(list[Math.max(0, Math.min(list.length - 1, index < 0 ? 0 : index + direction))].id, true) }
 function renderSheet() {
   const t = scope?.threads.find(t => t.id === focused); if (!t) { closeSheet(); return }
-  const i = open().findIndex(x => x.id === t.id)
+  const list = navList(), i = list.findIndex(x => x.id === t.id)
   sheet.toggleAttribute('data-sending', sending.has(t.id)); if (sending.has(t.id)) sheet.dataset.sending = 'true'
   const fresh = document.createElement('div')
-  fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? 'General comment' : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${open().length} open</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
+  fresh.innerHTML = `<div class="grab"></div><div class="quote">${t.anchor.general ? (isExplainer() ? 'The whole doc' : 'General comment') : `On <q>${esc(t.anchor.quote)}</q>`}</div><div class="card on ${t.kind} ${t.status}${isExplainer() ? ' explainer' : ''}" data-t="${t.id}">${cardHtml(t)}</div>${i >= 0 ? `<div class="nav"><span>${i + 1} of ${list.length}${isExplainer() ? '' : ' open'}</span><span class="spacer"></span><button class="icon-btn" data-go="-1" aria-label="Previous">↑</button><button class="icon-btn" data-go="1" aria-label="Next">↓</button></div>` : ''}`
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...sheet.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -688,7 +723,7 @@ function showSelection() {
   const range = selectionRange?.startContainer.isConnected ? selectionRange : rangeFromAnchor(selection)?.range
   const rect = range && [...range.getClientRects()].filter(r => r.width > 0).at(-1)
   if (!rect) return
-  const button = document.createElement('button'); button.className = 'add'; button.dataset.action = 'comment'; button.textContent = 'Comment'
+  const button = document.createElement('button'); button.className = 'add'; button.dataset.action = 'comment'; button.textContent = isExplainer() ? 'Ask' : 'Comment'
   document.body.append(button)
   const width = button.offsetWidth, height = button.offsetHeight
   const top = rect.bottom + 6 + height > innerHeight - 8 ? rect.top - height - 6 : rect.bottom + 6
@@ -725,7 +760,7 @@ document.addEventListener('keydown', e => {
 function menuThread(target: EventTarget | null) {
   if (!(target instanceof Element)) return null
   const node = target.closest<HTMLElement>('.card[data-t],mark.hl[data-t]'), thread = scope?.threads.find(t => t.id === node?.dataset.t)
-  return thread && (thread.status === 'open' || showResolved || node?.classList.contains('card')) ? thread : null
+  return thread && (isExplainer() || thread.status === 'open' || showResolved || node?.classList.contains('card')) ? thread : null
 }
 document.addEventListener('contextmenu', e => {
   if (e.defaultPrevented || phone() || !zoom.hidden) return
@@ -779,7 +814,8 @@ function renderComposer() {
   const key = composerKey()
   let node = document.querySelector<HTMLElement>('.card.composer')
   if (node?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft !== key) { node?.remove(); node = null }
-  const fresh = document.createElement('div'); fresh.className = 'card composer comment on'; fresh.innerHTML = `<div class="head"><span class="dot comment"></span><span class="who">You commented</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea>${imageStrip(getImages(key), true, key)}<p class="error">${esc(errors.get(key))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="post">Comment</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
+  const ask = isExplainer()
+  const fresh = document.createElement('div'); fresh.className = `card composer comment on${ask ? ' explainer' : ''}`; fresh.innerHTML = `<div class="head">${ask ? '' : '<span class="dot comment"></span>'}<span class="who">${ask ? 'You asked' : 'You commented'}</span></div><div class="reply">${composing?.t != null ? `<div class="moment">At ${moment(composing.t)}</div>` : ''}<textarea rows="2" data-draft="${esc(key)}" placeholder="${ask ? (composing?.general ? 'Ask about the whole doc' : 'Ask about this text') : composing?.general ? 'Comment on the whole doc' : composing?.t != null ? 'Comment on this moment' : 'Comment on this text'}">${esc(getDraft(key))}</textarea>${imageStrip(getImages(key), true, key)}<p class="error">${esc(errors.get(key))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="post">${ask ? 'Ask' : 'Comment'}</button><button class="btn" data-action="cancel">Cancel</button></div></div>`
   if (node) refreshCard(node, fresh)
   else {
     node = fresh
@@ -1010,7 +1046,7 @@ document.addEventListener('click', e => {
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
-  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || isExplainer() || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
@@ -1018,7 +1054,7 @@ let selectionTimer = 0
 for (const event of ['selectionchange', 'pointerup', 'mouseup']) document.addEventListener(event, () => { clearTimeout(selectionTimer); selectionTimer = window.setTimeout(readSelection, 80) })
 $('#chipPrev').onclick = () => step(-1)
 $('#chipNext').onclick = () => step(1)
-$('#openLabel').onclick = () => focus(open().some(t => t.id === focused) ? focused : open()[0]?.id || null, true)
+$('#openLabel').onclick = () => { const list = isExplainer() ? navList() : open(); focus(list.some(t => t.id === focused) ? focused : list[0]?.id || null, true) }
 $('#scrim').onclick = closeSheet
 $('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); renderCards() }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
@@ -1080,7 +1116,14 @@ function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.u
 function failedRead() { if (lastOk && !stale) { stale = true; chrome?.update({ updatedAt: lastOk, staleAfterMs: 60_000, onRefresh: () => void poll() }) } }
 async function poll() { try { accept(await api(endpoint)); goodRead() } catch { failedRead() } }
 async function start() {
-  if (!slug) { const { scopes } = await api<{ scopes: any[] }>(apiBase); doc.innerHTML = scopes.map(s => `<a class="index-row" href="/s/${esc(s.slug)}">${esc(s.title || s.slug)}</a>`).join(''); chrome = mountPage($('#page'), { title: 'Scoping', initialize: false }); return }
+  if (!slug) {
+    const { scopes } = await api<{ scopes: { slug: string; title?: string; kind?: 'scope' | 'explainer' }[] }>(apiBase)
+    const row = (item: { slug: string; title?: string }) => `<a class="index-row" href="/s/${esc(item.slug)}">${esc(item.title || item.slug)}</a>`
+    const group = (title: string, items: { slug: string; title?: string }[]) => items.length ? `<section class="index-group"><h2>${esc(title)}</h2>${items.map(row).join('')}</section>` : ''
+    document.body.classList.add('index')
+    doc.innerHTML = group('Scoping', scopes.filter(item => item.kind !== 'explainer')) + group('Explainers', scopes.filter(item => item.kind === 'explainer'))
+    chrome = mountPage($('#page'), { title: 'Scoping', initialize: false }); return
+  }
   if (boot.events === false) { await poll(); setInterval(() => void poll(), 2000); return }
   accept(await api(endpoint)); goodRead()
   const events = new EventSource(`${endpoint}/events`)
