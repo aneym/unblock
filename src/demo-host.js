@@ -1,7 +1,9 @@
 /**
  * rails-demo/1, the messages between a sandboxed demo player and the scope page.
  * Pure: no DOM. The page and the tests share this so a note filed from the player
- * and a pin sent back to it cannot disagree about the shape.
+ * and a pin sent back to it cannot disagree about the shape. A player may report
+ * its own content height with rails-demo/size; that height is rounded and clamped
+ * to 160..2400 px, and the fence height stays the placeholder until it arrives.
  */
 import { cleanRegion, normalizeAnchor, locateAnchor, locateEmbed } from './scope-anchor.js'
 
@@ -87,12 +89,18 @@ function readTime(data) {
   return { type: 'rails-demo/time', v: 1, t: data.t, playing: data.playing }
 }
 
+function readSize(data) {
+  if (!Number.isFinite(data.h) || data.h <= 0) return null
+  return { type: 'rails-demo/size', v: 1, h: Math.min(2400, Math.max(160, Math.round(data.h))) }
+}
+
 /** A player message, or null when it is not a plain rails-demo/1 object with the fields that message requires. */
 export function readDemoMessage(data) {
   if (!plain(data) || data.v !== 1) return null
   if (data.type === 'rails-demo/note') return readNote(data)
   if (data.type === 'rails-demo/ready') return readReady(data)
   if (data.type === 'rails-demo/time') return readTime(data)
+  if (data.type === 'rails-demo/size') return readSize(data)
   return null
 }
 

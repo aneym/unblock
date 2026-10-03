@@ -510,7 +510,7 @@ function render() {
         clearTimeout(changeTimers.get(s.id))
         changeTimers.set(s.id, window.setTimeout(() => { node!.classList.remove('changed'); changeTimers.delete(s.id) }, 4000))
       }
-      node.querySelectorAll<HTMLElement>('.demo-stage').forEach(stage => { stage.style.height = `${stage.dataset.height}px`; stage.dataset.title = stage.closest('figure')?.querySelector('figcaption')?.textContent || 'Demo' })
+      node.querySelectorAll<HTMLElement>('.demo-stage').forEach(stage => { const remembered = stage.dataset.embedSrc ? demoHeights.get(stage.dataset.embedSrc) : undefined; stage.style.height = `${remembered ?? stage.dataset.height}px`; stage.dataset.title = stage.closest('figure')?.querySelector('figcaption')?.textContent || 'Demo' })
       node.querySelectorAll<HTMLVideoElement>('figure.video video').forEach(video => {
         const update = () => { const button = video.closest('figure')?.querySelector('button.fig-comment'); if (button) button.textContent = video.currentTime >= .5 ? `Comment at ${moment(video.currentTime)}` : 'Comment on this recording' }
         for (const event of ['timeupdate', 'seeked', 'pause']) video.addEventListener(event, update)
@@ -1032,9 +1032,20 @@ function highlightEmbed(id: string) {
     if (range) { range.startContainer.parentElement?.scrollIntoView({ block: 'center' }); const sel = frame.contentDocument!.getSelection()!; sel.removeAllRanges(); sel.addRange(range) }
   } else embedCommand(frame, { action: 'highlight', anchor: anchor.embed })
 }
+const demoHeights = new Map<string, number>()
 window.addEventListener('message', event => {
-  if (event.data?.type !== 'rails-embed') return
   const frame = [...doc.querySelectorAll<HTMLIFrameElement>('.demo-stage iframe')].find(frame => frame.contentWindow === event.source)
+  if (frame) {
+    const size = readDemoMessage(event.data)
+    if (size?.type === 'rails-demo/size') {
+      const stage = frame.closest<HTMLElement>('.demo-stage')!
+      stage.style.height = `${size.h}px`
+      if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, size.h)
+      layout()
+      return
+    }
+  }
+  if (event.data?.type !== 'rails-embed') return
   const connection = frame && embedConnections.get(frame)
   if (!frame || !connection || connection.direct || event.origin !== 'null' || event.data.token !== connection.token) return
   const stage = frame.closest<HTMLElement>('.demo-stage')!, data = event.data
