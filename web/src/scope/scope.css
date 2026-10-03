@@ -442,7 +442,7 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .sr-sep { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .lbl { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--tx2); }
 .eg { margin: 0; font-family: ui-serif, "New York", Georgia, serif; font-style: italic; color: var(--tx2); }
-.eg .lbl { font-family: var(--font-system); font-style: normal; text-transform: none; letter-spacing: 0; font-size: 12px; margin-right: 2px; }
+.eg::before { content: "e.g. "; user-select: none; font-family: var(--font-system); font-style: normal; text-transform: none; letter-spacing: 0; font-size: 12px; margin-right: 2px; }
 
 .terms { margin: 0; display: grid; }
 .term-row { display: grid; grid-template-columns: 11rem minmax(0, 1fr); column-gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }

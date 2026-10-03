@@ -31,7 +31,7 @@ const hiddenText = (text: string) => `<span class="sr-sep">${esc(text)}</span>`
 const label = (name: string, cls = '') => `<span class="lbl${cls ? ` ${cls}` : ''}">${esc(name)}</span>${hiddenText(':')} `
 const LABEL_LINE = /^([A-Z][A-Za-z']{0,14}(?: [a-z][A-Za-z']{0,10})?):\s+(.*)$/
 const splitPair = (line: string) => { const at = line.indexOf(' :: '); return at < 0 ? null : [line.slice(0, at).trim(), line.slice(at + 4).trim()] as const }
-const example = (text: string) => `<p class="eg"><span class="lbl">e.g.</span> ${inline(text)}</p>`
+const example = (text: string) => `<p class="eg">${inline(text)}</p>`
 function termsBlock(source: string): string {
   const items: { term: string; def: string; tags: string; lines: string[] }[] = []
   for (const raw of source.split('\n')) {
