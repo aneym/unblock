@@ -290,14 +290,53 @@ test('a second daemon start that loses the port leaves an in-flight answer alone
   } finally { await t.h.close() }
 })
 
-test('a daemon that starts serving turns a stale Answering… into a plain interrupted note, not a handoff', async () => {
-  const stale = explainer('t3-stale', { threads: [{ id: 'T1', anchor: anchorInSection(sections[1], 'websocket'), author: 'alex', kind: 'comment', status: 'open',
-    created_at: at, messages: [{ from: 'alex', text: 'Q-1 left over', at }, { from: 'agent', answerer: true, pending: true, text: 'Answering…', at }] }] })
-  const t = await boot(stale)
+test('a restart retries in-flight and legacy interrupted answers once, then leaves a twice-interrupted answer alone', async () => {
+  const t = await boot(explainer('t3-restart'), { STUB_ANSWER_MS: '1500', UNBLOCK_EXPLAINER_CONCURRENCY: '2', UNBLOCK_EXPLAINER_TIMEOUT_MS: '60000' })
   try {
-    await t.until(async () => !agentMessages((await t.get()).threads[0])[0].pending, 'stale pending recovered')
-    const message = agentMessages((await t.get()).threads[0])[0]
+    await t.ask('stream', 'websocket', 'Q-1 which websocket?', 'q-1')
+    await t.until(() => t.answerer.list().length === 1, 'first answer started')
+    await t.h.restart()
+    await t.until(async () => agentMessages((await t.get()).threads[0]).some((m) => !m.pending), 'retried answer')
+    assert.match(agentMessages((await t.get()).threads[0])[0].text, /^Answer for Q-1/)
+    assert.equal(t.answerer.list().filter((r) => r.prompt.includes('Q-1')).length, 2, 'the original question was re-asked once')
+
+    await t.ask('tools', 'Tool call', 'Q-2 SLOW', 'q-2')
+    await t.until(() => t.answerer.list().some((r) => r.prompt.includes('Q-2')), 'slow answer started')
+    const scope = await t.get()
+    scope.threads.push({ id: 'T3', anchor: anchorInSection(sections[1], 'websocket'), author: 'alex', kind: 'comment', status: 'open',
+      created_at: at, messages: [{ from: 'alex', text: 'Q-3 left over', at }, { from: 'agent', answerer: true, text: 'Interrupted: ask again', at }] })
+    t.h.writeScope(scope)
+    await t.h.restart()
+    await t.until(() => t.answerer.list().filter((r) => r.prompt.includes('Q-2')).length === 2, 'slow answer retried')
+    await t.until(async () => agentMessages((await t.get()).threads[2]).some((m) => !m.pending), 'legacy interrupted answer retried')
+    assert.match(agentMessages((await t.get()).threads[2])[0].text, /^Answer for Q-3/)
+    await t.h.restart()
+    const message = agentMessages((await t.get()).threads[1])[0]
     assert.equal(message.text, 'Interrupted: ask again')
-    assert.ok(!message.handoff && !message.needs_owner, 'nothing was sent to the owner, so it does not say so')
+    assert.ok(!message.pending && !message.handoff && !message.needs_owner)
+    await t.h.restart()
+    await new Promise((r) => setTimeout(r, 300))
+    assert.equal(t.answerer.list().filter((r) => r.prompt.includes('Q-2')).length, 2, 'later restarts do not retry a second interruption')
+  } finally { await t.h.close() }
+})
+
+test('restart: an old interrupted answer in a thread Alex already got answered is not re-asked', async () => {
+  const t = await boot(explainer('t3-probe'))
+  try {
+    const scope = await t.get()
+    scope.threads.push({ id: 'T9', anchor: anchorInSection(sections[1], 'websocket'), author: 'alex', kind: 'comment', status: 'resolved',
+      resolution: { decision: 'answered', alex_words: null, by: 'agent', at, confirmed_at: at, revision: 1 },
+      created_at: at, messages: [
+        { from: 'alex', text: 'Q-7 which websocket?', at },
+        { from: 'agent', answerer: true, text: 'Interrupted: ask again', at },
+        { from: 'alex', text: 'Q-8 asking again: which websocket?', at: '2026-10-03T21:05:00Z' },
+        { from: 'agent', answerer: true, text: 'Answer for Q-8: ws.', at: '2026-10-03T21:05:00Z' }] })
+    t.h.writeScope(scope)
+    await t.h.restart()
+    await new Promise((r) => setTimeout(r, 2500))
+    const after = (await t.get()).threads.find((th) => th.id === 'T9')
+    assert.equal(t.answerer.list().length, 0, 'no answerer re-run for an already answered thread')
+    assert.equal(after.messages[1].text, 'Interrupted: ask again')
+    assert.equal(after.messages.length, 4)
   } finally { await t.h.close() }
 })

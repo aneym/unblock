@@ -514,9 +514,9 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .steps li { counter-increment: step; display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); align-items: baseline; }
 .steps li::before { content: counter(step); font-size: 24px; font-weight: 300; line-height: 1; color: var(--tx2); font-variant-numeric: tabular-nums; }
 /* A grid li makes every inline child (bold lead, code, a question highlight) its own grid item, so the text after it
-   falls into the 2.25rem number column one word per line. Explainers flow the step as text with the number hung left. */
-body.explainer .steps li { display: block; position: relative; padding-left: 2.25rem; }
-body.explainer .steps li::before { position: absolute; left: 0; top: -2px; }
+   falls into the 2.25rem number column one word per line. Flow the step as text with the number hung left. */
+.steps li { display: block; position: relative; padding-left: 2.25rem; }
+.steps li::before { position: absolute; left: 0; top: -2px; }
 
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 20px 28px; }
 .stat p { margin: 0; }

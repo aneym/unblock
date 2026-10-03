@@ -37,7 +37,7 @@ export async function startScopeHarness(initial) {
   writeScope(initial)
   const { startDaemon, loadOrCreateSecret } = await import('../src/daemon.js')
   const bearer = { Authorization: `Bearer ${loadOrCreateSecret()}` }
-  const daemon = await startDaemon({ port: 0 })
+  let daemon = await startDaemon({ port: 0 })
   const streams = []
 
   function request(path, { method = 'GET', headers = {}, body } = {}) {
@@ -116,11 +116,17 @@ export async function startScopeHarness(initial) {
 
   const paneLines = () => { try { return readFileSync(paneLog, 'utf8') } catch { return '' } }
 
+  async function restart() {
+    for (const handle of streams) handle.close()
+    await daemon.close()
+    daemon = await startDaemon({ port: 0 })
+  }
+
   async function close() {
     for (const handle of streams) handle.close()
     await daemon.close()
     rmSync(temp, { recursive: true, force: true })
   }
 
-  return { request, stream, until, paneLines, writeScope, bearer, close, port: daemon.port }
+  return { request, stream, until, paneLines, writeScope, bearer, close, restart, get port() { return daemon.port } }
 }

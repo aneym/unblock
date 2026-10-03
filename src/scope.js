@@ -720,7 +720,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
   }
 
-  function interruptAnswerer() {
+  function recoverAnswerer() {
     let dirs
     try { dirs = readdirSync(root, { withFileTypes: true }) } catch { return }
     for (const dir of dirs) {
@@ -730,15 +730,27 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       try { scope = JSON.parse(readFileSync(path, 'utf8')) } catch { continue }
       if (!scope || scope.version !== 2 || !Array.isArray(scope.threads)) continue
       let changed = false
+      const jobs = []
       for (const thread of scope.threads) {
+        const last = thread.messages?.at(-1)
         for (const message of thread.messages ?? []) {
-          if (message?.answerer === true && message.pending === true) {
+          if (message?.answerer !== true || (!message.pending && message.text !== 'Interrupted: ask again')) continue
+          // Only the thread's last message is re-asked: anything after it means Alex already moved on.
+          const retry = answererOn(scope) && !message.restart_retried && message === last
+          if (!retry && !message.pending) continue
+          delete message.handoff
+          delete message.needs_owner
+          if (retry) {
+            // Persist the retry before enqueueing so another restart cannot repeat it.
+            message.restart_retried = true
+            message.pending = true
+            message.text = 'Answering…'
+            jobs.push({ slug: dir.name, threadId: thread.id, messageAt: message.at, scopeDir: join(root, dir.name) })
+          } else {
             message.text = 'Interrupted: ask again'
-            delete message.handoff
-            delete message.needs_owner
             delete message.pending
-            changed = true
           }
+          changed = true
         }
       }
       if (!changed) continue
@@ -746,6 +758,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       writeFileSync(join(root, dir.name, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
       renameSync(join(root, dir.name, 'scope.json.tmp'), path)
       cache.delete(dir.name)
+      for (const job of jobs) answerer.enqueue(job)
     }
   }
 
@@ -1186,5 +1199,5 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     for (const entry of listeners.values()) for (const client of entry.clients) client.write(': keepalive\n\n')
   }
 
-  return { handle, close, keepalive, recover: interruptAnswerer }
+  return { handle, close, keepalive, recover: recoverAnswerer }
 }
