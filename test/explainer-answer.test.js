@@ -272,7 +272,8 @@ test('unblock explain new writes an explainer with absolute sources; scope new s
 // Verifier repro (2026-10-03): MCP respawns a daemon on any connection error. A second start that loses the port must
 // not touch the live daemon's in-flight answers; only a daemon that actually serves recovers stale "Answering…".
 test('a second daemon start that loses the port leaves an in-flight answer alone', async () => {
-  const t = await boot(explainer('t3-squat'), { STUB_ANSWER_MS: '2500' })
+  // The answer must outlast the second process's daemon import, even on a loaded machine.
+  const t = await boot(explainer('t3-squat'), { STUB_ANSWER_MS: '8000' })
   try {
     await t.ask('stream', 'websocket', 'Q-1 which websocket?', 'q-1')
     await t.until(() => t.answerer.list().length === 1, 'answerer started')
@@ -284,7 +285,7 @@ test('a second daemon start that loses the port leaves an in-flight answer alone
     await new Promise((resolve) => second.on('close', resolve))
     assert.match(said, /lost/, 'the second daemon did not get the port')
     assert.equal(agentMessages((await t.get()).threads[0])[0].pending, true, 'still Answering… after the losing start')
-    await t.until(async () => agentMessages((await t.get()).threads[0]).some((m) => !m.pending), 'answer', 8000)
+    await t.until(async () => agentMessages((await t.get()).threads[0]).some((m) => !m.pending), 'answer', 15000)
     assert.match(agentMessages((await t.get()).threads[0])[0].text, /^Answer for Q-1/, 'the real answer landed in the thread')
   } finally { await t.h.close() }
 })

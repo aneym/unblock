@@ -113,6 +113,9 @@ export function createAnswerer({ readScope, writeAnswer, log = console.error }) 
     const env = { ...process.env }
     for (const key of DROP_ENV) delete env[key]
     env.ANTHROPIC_DEFAULT_HAIKU_MODEL ??= 'claude-sonnet-5-5'
+    // $HOME is a git repo on Studio. Under launchd, Claude Code's startup `git status` there walks TCC-guarded
+    // folders and hangs until the timeout (2026-10-03, every live answer). Stop git's repo search below $HOME.
+    if (!env.GIT_CEILING_DIRECTORIES) env.GIT_CEILING_DIRECTORIES = homedir()
     env.CLAUDE_LB_SESSION_ID = `explainer-${job.slug}-${job.threadId}-${Date.now()}`
     return env
   }
