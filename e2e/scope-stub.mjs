@@ -11,6 +11,7 @@
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
 // /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
+// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc),
 // /__remove_later (the Later section is deleted)
 import http from 'node:http'
 import fs from 'node:fs'
@@ -140,6 +141,9 @@ http.createServer((req, res) => {
     if (url.pathname === '/__detached_resolved') { const now = stamp(); threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: 'A sentence the lane deleted', prefix: '', suffix: '' }, kind: 'comment', status: 'resolved', by: 'alex', how: 'resolve', decision: 'Done', resolved_at: now, messages: [{ from: 'alex', text: 'A detached note.', at: now, via: 'admin' }] }); bump(); return send(200, { seq }) }
     if (url.pathname === '/__grow_title') { sections.title.body_md += '\n\nThe lane added a paragraph above everything, long enough to push the rest of the doc down by a few lines on any screen width.'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__edit_later') { const s = sections.later; s.body_md = s.body_md.replace('Later paragraph 16: settings and themes wait for pass 16', 'Later paragraph 16: settings, themes and fonts wait for pass 16'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
+    // pinned view (explainers lane, 2026-10-03): ten paragraphs land at the top of The plan, above T2's anchor; then T2's text goes away.
+    if (url.pathname === '/__grow_plan') { const s = sections.plan; s.body_md = Array.from({ length: 10 }, (_, i) => `New plan paragraph ${i + 1}: the lane wrote this while Alex was reading, and it runs to about three lines on a desktop screen so the anchor below moves down a long way.`).join('\n\n') + '\n\n' + s.body_md; s.updated_at = stamp(); bump(); return send(200, { seq }) }
+    if (url.pathname === '/__detach_t2') { const s = sections.plan; s.body_md = s.body_md.replace('Voice comes last.', 'Voice ships with the page.'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__remove_later') { delete sections.later; bump(); return send(200, { seq }) }
     if (url.pathname === '/__lane_reply') {
       const at = stamp(), on = anchorInSection({ id: 'plan', heading: sections.plan.heading, body_md: sections.plan.body_md }, 'Voice comes last')
