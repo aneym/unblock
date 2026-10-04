@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { anchorInSection } from '../src/scope-doc.js'
 import { human, startScopeHarness } from './scope-harness.js'
+import { authToken } from '../plugin/paths.js'
 
 const CLI = join(import.meta.dirname, '..', 'bin', 'unblock.js')
 const at = '2026-10-03T23:10:00Z'
@@ -178,11 +179,12 @@ test('a typing link is trimmed before it is checked and stored; blank or non-htt
     assert.equal(ok.status, 0, ok.err)
     await t.until(() => live.items('T1').some((i) => i.doing?.link), 'item with a link', 3000)
     assert.equal(live.items('T1').at(-1).doing.link, 'https://studio.example.ts.net/r/1', 'stored without the spaces')
+    const lane = () => ({ authorization: `Bearer ${authToken()}` }) // the lane's own token, as the CLI sends it
     for (const link of ['   ', '  javascript:alert(1)', '\thttps://x.example/\n'.replace('https', 'ftp')]) {
-      const res = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', body: { doing: 'x', link } })
+      const res = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', headers: lane(), body: { doing: 'x', link } })
       assert.equal(res.status, 400, `refused: ${JSON.stringify(link)}`)
     }
-    const raw = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', body: { doing: 'Reading', link: '\n https://studio.example.ts.net/r/2 ' } })
+    const raw = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', headers: lane(), body: { doing: 'Reading', link: '\n https://studio.example.ts.net/r/2 ' } })
     assert.equal(raw.status, 200, 'the route trims too, not only the CLI')
     assert.equal(raw.json.item.doing.link, 'https://studio.example.ts.net/r/2')
   } finally { live.close(); await t.h.close() }
