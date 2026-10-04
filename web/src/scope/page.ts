@@ -55,10 +55,10 @@ function syncChrome() {
 let selection: Anchor | null = null, selectionTop = 0, composing: Anchor | null = null
 let selectionRange: Range | null = null, selectionScrolling = false
 let embedSelectionRect: { top: number; bottom: number; right: number } | null = null
-type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number }
+type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number; route: string; body: Record<string, unknown>; failed?: { status: number; error: string } }
 const sending = new Map<string, Sending>()
 const pending = new Set<string>()
-function disablePending() { document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => { if (uploading.get(box.dataset.draft!)) { const button = box.closest('.reply')?.querySelector<HTMLButtonElement>('.btn.primary'); if (button) button.disabled = true; box.closest('.reply')?.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = true) } }); document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = true) }) }
+function disablePending() { document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => { if (uploading.get(box.dataset.draft!)) { const button = box.closest('.reply')?.querySelector<HTMLButtonElement>('.btn.primary'); if (button) button.disabled = true; box.closest('.reply')?.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = true) } }); document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t || card.dataset.client; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = pending.has(key) || !sending.get(key)?.failed || !['retry-send', 'dismiss-send'].includes(button.dataset.action!)) }) }
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
 function focusBox(id: string) {
   const input = (phone() ? sheet : document).querySelector<HTMLTextAreaElement>(`.card[data-t="${id}"] textarea`)
@@ -196,8 +196,10 @@ const ordered = () => scope ? orderThreads(scope) : []
 const open = () => ordered().filter(t => t.status === 'open')
 function unread(t: Thread) {
   const last = t.messages.at(-1), alex = t.messages.filter(m => m.from === 'alex').at(-1)
-  return t.status === 'open' && !!alex && last?.from === 'agent' && Date.parse(last.at) > Date.parse(alex.at) && Date.parse(last.at) > Date.parse(storage.get(`scope:seen:${slug}:${t.id}`) || '1970-01-01')
+  return !!alex && last?.from === 'agent' && Date.parse(last.at) > Date.parse(alex.at) && Date.parse(last.at) > Date.parse(storage.get(`scope:seen:${slug}:${t.id}`) || '1970-01-01')
 }
+let readingReply: string | null = null
+function replyMarker(t: Thread) { return unread(t) || focused === t.id && readingReply === `${t.id}:${t.messages.at(-1)?.at}` }
 function markSeen(id: string) { const t = scope?.threads.find(t => t.id === id); if (t && unread(t)) storage.set(`scope:seen:${slug}:${id}`, t.messages.at(-1)!.at) }
 function syncThreadClasses() {
   for (const t of ordered()) for (const mark of marks(t.id)) { mark.classList.toggle('unread', unread(t)) }
@@ -304,7 +306,8 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`)
   if (res.status === 202 || result.queued === true) {
     const key = id || client_id
-    if (!hasClientId(client_id)) sending.set(key, { clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
+    const { client_id: _, ...postedBody } = body
+    if (!hasClientId(client_id)) sending.set(key, { route, body: postedBody, clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
     if (!id && sending.has(key)) postedClient = client_id
     if (id) deleteDraft(id)
     if (id || !composing) renderCards()
@@ -322,11 +325,11 @@ async function postResolve(id: string, body: { decision: string; alex_words?: st
 async function postReject(id: string, body: { text: string; via?: 'voice'; images?: string[] }) { return write(`/${id}/reject`, body, id) }
 async function postPark(id: string, body: { via?: 'voice' } = {}) { return write(`/${id}/park`, body, id) }
 function hasClientId(clientId: string) { return scope?.threads.some(t => t.messages.some(m => (m as any).client_id === clientId) || (t.resolution as any)?.client_id === clientId || (t as any).parked_client_id === clientId) || false }
-function sendingLine(item: Sending) { return `<div class="waiting sending" data-client="${esc(item.clientId)}" role="status">${Date.now() - item.at >= 120_000 ? 'Still sending. Admin will keep trying.' : 'Sending…'}${item.text ? ` &quot;${esc(item.text)}&quot;` : ''}</div>` }
+function sendingLine(item: Sending) { if (item.failed) return `<div class="not-sent" data-client="${esc(item.clientId)}" role="alert"><strong>Not sent.</strong> ${item.failed.status === 404 ? 'That comment is gone.' : item.failed.status === 409 ? 'The page changed first.' : "Admin couldn't deliver it."}${item.text ? ` &quot;${esc(item.text)}&quot;` : ''} <button class="btn small" data-action="retry-send">Try again</button> <button class="btn small" data-action="dismiss-send">Dismiss</button></div>`; return `<div class="waiting sending" data-client="${esc(item.clientId)}" role="status">${Date.now() - item.at >= 120_000 ? 'Still sending. Admin will keep trying.' : 'Sending…'}${item.text ? ` &quot;${esc(item.text)}&quot;` : ''}</div>` }
 setInterval(() => {
   document.querySelectorAll<HTMLElement>('.sending[data-client]').forEach(line => {
     const item = [...sending.values()].find(item => item.clientId === line.dataset.client)
-    if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
+    if (item && !item.failed && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
 type LiveItem = { id: string; type: 'reply'; thread: string; to: string; by: string; status: 'seen' | 'thinking' | 'streaming' | 'done' | 'failed'; doing: { text: string; link?: string } | null; text: string; error?: string; seq: number; updated_at: string }
@@ -512,22 +515,22 @@ function baseCardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span>${replyMarker(t) ? '<span class="unread-dot" aria-label="New reply" title="New reply"></span>' : ''}<span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : ''}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' && !t.recommendation ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
   const menu = threadMenu(t)
   let body = ''
-  if (compose && (isOpen || mode === 'reply')) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
+  if (compose && (isOpen || mode === 'reply')) body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="${modes.has(t.id) ? 2 : 1}" placeholder="${esc(compose[0])}">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn primary" data-action="${t.kind === 'comment' ? 'reply' : 'send'}">${compose[1]}</button>${isOpen && docFlags().resolve ? '<button class="btn" data-action="resolve">Resolve</button>' : ''}${modes.has(t.id) ? '<button class="btn" data-action="cancel">Cancel</button>' : ''}</div></div>`
   else if (isOpen && t.rejected_at) body = '<div class="waiting"><span class="dot"></span>Rejected, waiting for a new option</div>'
   else if (isOpen && (t.kind === 'question' || t.recommendation)) {
     // Alex, 2026-10-02 19:45 ET: a note is a reply to the lane, never a decision; Approve takes the recommendation.
     const approve = t.recommendation ? '<button class="btn primary" data-action="take">Approve</button>' : ''
-    body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="Reply to the lane · ⌘Enter sends">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn${approve ? '' : ' primary'}" data-action="reply">Reply</button>${approve}${approve && t.kind !== 'question' ? '<button class="btn" data-action="no">Reject</button>' : ''}</div>${approve ? '<p class="pick-hint">Approve takes the recommendation; a note goes with it.</p>' : ''}</div>`
+    body = `<div class="reply only-on"><textarea data-draft="${t.id}" rows="1" placeholder="Reply to the lane · ⌘Enter sends">${esc(getDraft(t.id))}</textarea>${imageStrip(getImages(t.id), true, t.id)}<p class="error" role="alert">${esc(errors.get(t.id))}</p><div class="actions">${attachControl}<button class="btn${approve ? '' : ' primary'}" data-action="reply">Reply</button>${docFlags().resolve ? '<button class="btn" data-action="resolve">Resolve</button>' : ''}${approve}${approve && t.kind !== 'question' ? '<button class="btn" data-action="no">Reject</button>' : ''}</div>${approve ? '<p class="pick-hint">Approve takes the recommendation; a note goes with it.</p>' : ''}</div>`
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.embed ? `<button class="btn small" data-action="jump-text">${missing.has(t.id) ? 'Embed changed' : 'Embed ' + esc(t.anchor.embed.src)} · <q>${esc(t.anchor.embed.quote)}</q></button>` : t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${replyMarker(t) ? '<span class="unread-dot" aria-label="New reply" title="New reply"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<div class="other-option"><span>${esc(option)}</span><button class="btn small" data-action="option" data-option="${i + 1}">Pick this</button></div>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
@@ -664,7 +667,7 @@ function renderCards() {
   syncThreadClasses()
   const byId = new Map(scope?.threads.map(t => [t.id, t]))
   const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
-  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused)
+  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused || unread(t) || sending.has(t.id))
   const focusedNode = focusedCard()
   // While a new comment is being written the composer leads; a detached focused card goes to the Detached list as on main.
   const holds = (id: string) => !phone() && !composing && id === focused
@@ -697,7 +700,7 @@ function renderCards() {
   replaceAround(detached, detachedNodes, kept)
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
-    node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
+    node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine(item.failed ? item : { ...item, text: '' })}`
     insertAtAnchor(node, item.anchor)
   }
   if (composing) renderComposer()
@@ -812,6 +815,8 @@ function threadOnScreen(id: string) {
 }
 function focus(id: string | null, scroll = false, openSheet = true) {
   if (id) document.dispatchEvent(new CustomEvent('scope-thread-focus', { detail: id }))
+  const thread = scope?.threads.find(t => t.id === id)
+  if (id !== focused) readingReply = thread && unread(thread) ? `${thread.id}:${thread.messages.at(-1)!.at}` : null
   postedClient = null; focused = id
   if (id) markSeen(id)
   renderCards()
@@ -961,6 +966,18 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
   if (name === 'general-comment') { openGeneralComment(); return }
   if (name === 'comment') { openSelectionComment(); return }
   const id = target.closest<HTMLElement>('[data-t]')?.dataset.t, t = scope?.threads.find(t => t.id === id), key = target.closest('.composer') ? target.closest('.composer')?.querySelector<HTMLElement>('[data-draft]')?.dataset.draft || 'composer' : id!
+  if (name === 'retry-send' || name === 'dismiss-send') {
+    const client = target.closest<HTMLElement>('[data-client]')?.dataset.client, entry = [...sending].find(([, item]) => item.clientId === client)
+    if (!entry) return
+    const [sendKey, item] = entry
+    if (name === 'dismiss-send') { sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null; renderCards(); return }
+    if (pending.has(sendKey)) return
+    pending.add(sendKey); target.closest('.not-sent')?.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = true)
+    try { await write(item.route, item.body, item.id); if (sending.get(sendKey) === item) sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null }
+    catch (error) { item.failed = { status: 0, error: error instanceof Error ? error.message : 'Could not send' } }
+    finally { pending.delete(sendKey); renderCards() }
+    return
+  }
   if (name === 'attach') { target.closest('.reply')?.querySelector<HTMLInputElement>('[data-images]')?.click(); return }
   if (name === 'remove-image') { saveImages(key, getImages(key).filter((_, i) => i !== Number(target.dataset.image))); updateImageBox(key); return }
   if (pending.has(key) || sending.has(key) || uploading.get(key)) return
@@ -1278,7 +1295,7 @@ document.addEventListener('click', e => {
   const button = target.closest<HTMLElement>('[data-action]')
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
-  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || !docFlags().resolve || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
+  const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || !docFlags().resolve || showResolved || mark.classList.contains('unread'))) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
   const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { if (node.dataset.t === focused && node.classList.contains('on')) return; focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
@@ -1335,13 +1352,15 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; failed?: { client_id: string; status: number; error: string; at: string }[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes, failed: payload.failed }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
   publishApproval()
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]).concat((payload.notes || []).map(note => note.client_id)))
-  for (const [key, item] of sending) if (settled.has(item.clientId)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
+  const resolvedWrite = (item: Sending) => { const t = scope!.threads.find(t => t.id === item.id), r = t?.resolution; return !item.failed && !payload.failed?.some(f => f.client_id === item.clientId) && item.route === `/${item.id}/resolve` && t?.status === 'resolved' && r?.by === 'alex' && !(r as any).client_id && r.decision === item.body.decision && r.how === (item.body.how || 'resolve') && Date.parse(r.at) >= item.at }
+  for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId) || item.id && !scope.threads.some(t => t.id === item.id)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
+  for (const item of sending.values()) { const failure = payload.failed?.find(f => f.client_id === item.clientId); if (failure) item.failed = { status: failure.status, error: failure.error } }
   for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
 let lastOk = 0, stale = false
 function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }

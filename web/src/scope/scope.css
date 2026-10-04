@@ -126,12 +126,12 @@ mark.hl { color: inherit; background: var(--hl-q); border-radius: 3px; padding: 
 mark.hl.comment { background: var(--hl-c); }
 mark.hl.on { background: var(--hl-q-on); box-shadow: 0 1.5px 0 var(--ask); }
 mark.hl.comment.on { background: var(--hl-c-on); box-shadow: 0 1.5px 0 var(--ac); }
-mark.hl.resolved, mark.hl.resolved.on { background: none; box-shadow: none; cursor: text; }
-body.show-resolved mark.hl.resolved { background: var(--hl-r); cursor: pointer; }
-body.show-resolved mark.hl.resolved.on { box-shadow: 0 1.5px 0 var(--tx2); }
+mark.hl.resolved:not(.unread), mark.hl.resolved.on:not(.unread) { background: none; box-shadow: none; cursor: text; }
+body.show-resolved mark.hl.resolved, mark.hl.resolved.unread { background: var(--hl-r); cursor: pointer; }
+body.show-resolved mark.hl.resolved.on, mark.hl.resolved.unread.on { box-shadow: 0 1.5px 0 var(--tx2); }
 mark.hl.unread { position: relative; }
 mark.hl.unread::after { content: ""; position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
-.unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ac); flex: none; }
+.unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ac); flex: none; }
 /* explainer: questions in the margin, answers that read like the doc */
 .side-head .pc-comments-count, .open-chip .q-count { color: var(--tx2); font-weight: 500; font-variant-numeric: tabular-nums; }
 /* index: one quiet heading per group, title rows on hairlines; no comment counter, chip or voice without a doc */
@@ -316,7 +316,7 @@ button:disabled { opacity:.5; cursor:default; }
 .waiting .dot { background: var(--ask); }
 .rec.new .lbl::after { content: " · new"; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ac); }
 
-.choices .btn { flex:1 1 0; } mark.hl.parked { background:none; box-shadow:none; } body.show-resolved mark.hl.parked { background:var(--hl-r); cursor:pointer; } .card.parked { background:var(--card); }
+.choices .btn { flex:1 1 0; } mark.hl.parked:not(.unread) { background:none; box-shadow:none; } body.show-resolved mark.hl.parked { background:var(--hl-r); cursor:pointer; } .card.parked { background:var(--card); }
 
 .fig.mermaid svg .node text { text-anchor:middle; }
 body > .talk { position: fixed; z-index: 20; right: 16px; bottom: max(16px, calc(env(safe-area-inset-bottom) + 16px)); background: var(--page); box-shadow: var(--shadow-2); }
