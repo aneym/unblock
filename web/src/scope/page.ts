@@ -664,23 +664,11 @@ function layout() {
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
-  if (!composing && nodes[pivot]?.dataset.t === focused) {
-    const below: number[] = []
-    let above = top[pivot], bottom = top[pivot] + heights[pivot] + 10
-    for (let i = pivot - 1; i >= 0; i--) {
-      const candidate = Math.min(want[i], above - heights[i] - 10)
-      if (candidate < 8) below.unshift(i)
-      else { top[i] = candidate; above = candidate }
-    }
-    below.push(...nodes.map((_, i) => i).slice(pivot + 1))
-    for (const i of below) { top[i] = Math.max(want[i], bottom); bottom = top[i] + heights[i] + 10 }
-  } else {
-    for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
-    for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
-    if (top[0] < 8) {
-      top[0] = 8
-      for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
-    }
+  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
+  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
+  if (top[0] < 8) {
+    top[0] = 8
+    for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
   }
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0

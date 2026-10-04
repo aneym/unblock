@@ -43,12 +43,14 @@ def desktop(label):
     steps = [{'wait_for': 'mark.hl[data-t="T2"]'}, {'wait': 800},
              {'click': f'{card} .q'}, {'wait': 1200},
              {'fill': [f'{card} textarea[data-draft="T2"]', DRAFT]},
-             {'eval': f"(() => {{ const c = {CARD}; window.__top = c.getBoundingClientRect().top; window.__y0 = scrollY; return window.__top }})()"}]
+             {'eval': f"(() => {{ const c = {CARD}; window.__top = c.getBoundingClientRect().top; window.__y0 = scrollY; window.__m0 = document.querySelector('mark.hl[data-t=\"T2\"]').getBoundingClientRect().top + scrollY; return window.__top }})()"}]
     steps += hook('grow_plan')
     steps.append(C(f'{label}: the open card keeps its screen position when 800 px land above its anchor',
                    f"const c = {CARD}; const top = c && c.getBoundingClientRect().top; return {{ok: !!c && Math.abs(top - window.__top) <= 2, top, was: window.__top}}"))
-    steps.append(C(f'{label}: the content above really grew (the page scrolled to hold the card)',
-                   "return {ok: scrollY - window.__y0 > 600, scrolled: scrollY - window.__y0}"))
+    # The anchor's text moved 600+ px down the document; the page scrolls less than that when the card was
+    # stacked below its text before the update and sits on it after (cards stay on their text, ceb1683).
+    steps.append(C(f'{label}: the content above really grew (the anchor moved down and the page scrolled to hold the card)',
+                   "const m = document.querySelector('mark.hl[data-t=\\\"T2\\\"]').getBoundingClientRect().top + scrollY; return {ok: m - window.__m0 > 600 && scrollY - window.__y0 > 200, moved: m - window.__m0, scrolled: scrollY - window.__y0}"))
     steps.append(C(f'{label}: the open card stays open', f"return {{ok: !!{CARD}?.classList.contains('on')}}"))
     steps.append(C(f'{label}: the draft and the focus survive',
                    f"const ta = {CARD}?.querySelector('textarea[data-draft=\"T2\"]'); return {{ok: ta?.value === {DRAFT!r} && document.activeElement === ta, value: ta?.value, active: document.activeElement?.tagName}}"))
