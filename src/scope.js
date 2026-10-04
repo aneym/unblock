@@ -11,6 +11,7 @@ import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './sc
 import { kindOf, kindSpec } from './doc-kinds.js'
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
+import { createLiveItems } from './live-items.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -26,6 +27,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   const root = process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
   const cache = new Map()
   const listeners = new Map()
+  const liveItems = createLiveItems({ emit })
   const delivering = new Map()
   const writes = new Map()
   let answerer
@@ -105,7 +107,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       listeners.set(slug, entry)
     }
     entry.clients.add(res)
-    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: scopeNotes(slug) })}\n\n`)
+    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: scopeNotes(slug), items: liveItems.list(slug) })}\n\n`)
     req.on('close', () => {
       entry.clients.delete(res)
       if (!entry.clients.size) {
@@ -392,7 +394,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       schedule(slug)
       return sendJson(res, 200, { note })
     }
-    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: scopeNotes(slug) })
+    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: scopeNotes(slug), items: liveItems.list(slug) })
     if (req.method === 'GET' && parts.length === 2 && action === 'events') return watch(slug, req, res)
     if (req.method === 'GET' && parts.length === 2 && action === 'notes') {
       const raw = url.searchParams.get('since') ?? '0'
@@ -472,6 +474,36 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (action === 'pm-approve') res.once('finish', () => { void moveApprovedTab(slug, result.revision, true) })
         return sendJson(res, 200, result)
       } finally { if (writes.get(slug) === pending) writes.delete(slug) }
+    }
+    if (req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['typing', 'stream'].includes(verb)) {
+      if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'lanes stream through the CLI' })
+      const body = await readJson(req)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) bad('invalid body')
+      if (verb === 'typing') {
+        if (body.doing !== undefined && (typeof body.doing !== 'string' || body.doing.trim().length > 120)) bad('invalid doing')
+        if (body.link !== undefined) {
+          let url
+          try { url = new URL(body.link) } catch { bad('invalid link') }
+          if (typeof body.link !== 'string' || body.link.length > 500 || !['http:', 'https:'].includes(url.protocol)) bad('invalid link')
+        }
+      } else if (typeof body.chunk !== 'string' || body.chunk.length > 4000) bad('invalid chunk')
+      const by = await readerName(state.scope.pane)
+      const previous = writes.get(slug) ?? Promise.resolve()
+      const pending = previous.catch(() => {}).then(() => {
+        const thread = readDisk(slug).scope.threads.find(t => t.id === threadId)
+        if (!thread) bad('no such thread', 404)
+        const to = [...thread.messages].reverse().find(m => m.from === 'alex')?.at
+        if (!to) bad('no Alex message')
+        const current = liveItems.list(slug).find(item => item.id === `${threadId}@${to}`)
+        const patch = { thread: threadId, to, by }
+        const item = verb === 'typing'
+          ? liveItems.upsert(slug, { ...patch, status: current && current.status !== 'seen' ? current.status : 'thinking', doing: body.doing !== undefined || body.link !== undefined ? { text: body.doing?.trim() ?? '', ...(body.link !== undefined ? { link: body.link } : {}) } : null })
+          : liveItems.upsert(slug, { ...patch, status: 'streaming', text: (current?.text ?? '') + body.chunk, doing: null })
+        return { item }
+      })
+      writes.set(slug, pending)
+      try { return sendJson(res, 200, await pending) }
+      finally { if (writes.get(slug) === pending) writes.delete(slug) }
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const kpiWrite = req.method === 'PUT' && parts.length === 2 && action === 'kpis'
@@ -1040,6 +1072,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    if (!human && verb === 'reply') {
+      const to = [...thread.messages].reverse().find(message => message.from === 'alex')?.at
+      // Never wait on herdr here: the turn's item already names the lane; a reply with no item uses the cached name or the pane.
+      if (to) {
+        const existing = liveItems.list(slug).find((item) => item.id === `${thread.id}@${to}`)
+        liveItems.upsert(slug, { thread: thread.id, to, ...(existing ? {} : { by: paneNames.get(scope.pane)?.name ?? scope.pane }), status: 'done', doing: null, text: thread.messages.at(-1).text })
+      }
+    }
     if (noteData) {
       const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
       if (answerJob) {
@@ -1170,7 +1210,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { scanningReads = false }
   }
 
-  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer })
+  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer, liveItems })
 
   readTimer = setInterval(() => { void scanBulletinReads() }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
   readTimer.unref()

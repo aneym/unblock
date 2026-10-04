@@ -498,6 +498,8 @@ unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "te
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
 unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...] [--text "text"] [--json]
+unblock scope typing <slug> T# [--doing <text>] [--link <url>]
+unblock scope reply <slug> T# --stream
 unblock scope react <slug> T# [--clear]
 unblock scope resolve <slug> T# [--decision "text"]
 unblock scope reopen <slug> T# [--reason "text"]
@@ -572,6 +574,51 @@ async function scope(args, mode = 'scope') {
   }
   if (args[0] === 'new') return scopeNew(args, usage, mode)
   const [sub = 'list', slug, ...words] = args
+  if (sub === 'typing') {
+    const { rest, opts } = flags(args, { '--doing': true, '--link': true })
+    const [, name, threadId, ...extra] = rest
+    if (!name || !THREAD_ID.test(threadId ?? '') || extra.length) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/threads/${threadId}/typing`, {
+      ...(opts['--doing'] !== undefined ? { doing: opts['--doing'] } : {}),
+      ...(opts['--link'] !== undefined ? { link: opts['--link'] } : {}),
+    })
+    return output(data, `typing ${threadId}`)
+  }
+  if (sub === 'reply' && words.includes('--stream')) {
+    if (!slug || words.length !== 2 || !THREAD_ID.test(words[0] ?? '') || words[1] !== '--stream') fail(usage)
+    const base = `/api/scope/${encodeURIComponent(slug)}/threads/${words[0]}`
+    let whole = '', pending = '', lastAt = 0, ended = false, wake
+    process.stdin.setEncoding('utf8')
+    const ready = () => { wake?.(); wake = undefined }
+    const onData = (chunk) => { whole += chunk; pending += chunk; ready() }
+    const onEnd = () => { ended = true; ready() }
+    let inputError
+    const onError = (error) => { inputError = error; ended = true; ready() }
+    process.stdin.on('data', onData)
+    process.stdin.once('end', onEnd)
+    process.stdin.once('error', onError)
+    try {
+      while (!ended || pending) {
+        if (!pending) { await new Promise(resolve => { wake = resolve }); continue }
+        const wait = 100 - (Date.now() - lastAt)
+        if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait))
+        let size = Math.min(4000, pending.length)
+        if (size < pending.length && /[\uD800-\uDBFF]/.test(pending[size - 1])) size--
+        const chunk = pending.slice(0, size)
+        pending = pending.slice(size)
+        lastAt = Date.now()
+        await request(`${base}/stream`, { chunk })
+      }
+      if (inputError) throw inputError
+      if (!whole.trim()) fail('empty stdin')
+      const data = await request(`${base}/reply`, { text: whole })
+      return output(data, `replied ${data.thread.id}`)
+    } finally {
+      process.stdin.removeListener('data', onData)
+      process.stdin.removeListener('end', onEnd)
+      process.stdin.removeListener('error', onError)
+    }
+  }
   if (sub === 'react') {
     const { rest, opts } = flags(args, { '--clear': false })
     const [, name, threadId, ...extra] = rest
