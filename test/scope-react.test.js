@@ -75,9 +75,11 @@ test('a comment goes out at once through lane-post; the lane marks it 👀 seen;
     assert.equal((await react(id, null)).status, 200)
     assert.equal((await thread(id)).reaction, undefined)
 
-    // 5. A lane resolve clears it; so does Alex resolving a question.
+    // 5. A lane resolve clears it; so does Alex resolving a question. (2026-10-03 resolve-rule: the lane closes his
+    //    comment only with his close words, so he says them first.)
+    assert.equal((await request(`/api/scope/demo/threads/${id}/reply`, { method: 'POST', headers: human, body: { text: 'ok, close it', client_id: 'c-2b' } })).status, 200)
     await react(id, '👀')
-    assert.equal((await request(`/api/scope/demo/threads/${id}/resolve`, { method: 'POST', headers: bearer, body: { decision: 'Sol 6.1 medium builds.' } })).status, 200)
+    assert.equal((await request(`/api/scope/demo/threads/${id}/resolve`, { method: 'POST', headers: bearer, body: { decision: 'Sol 6.1 medium builds.', quote: 'ok, close it' } })).status, 200)
     assert.equal((await thread(id)).reaction, undefined)
     await react('T1', '👀')
     assert.equal((await request('/api/scope/demo/threads/T1/resolve', { method: 'POST', headers: human, body: { decision: 'Sonnet', alex_words: 'Sonnet', how: 'take', client_id: 'c-3' } })).status, 200)
