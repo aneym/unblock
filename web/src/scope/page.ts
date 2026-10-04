@@ -27,6 +27,7 @@ const phone = () => matchMedia('(max-width:899px)').matches
 const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} }, remove(key: string) { try { localStorage.removeItem(key) } catch {} } }
 const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
+let postedClient: string | null = null
 let detachedPin: { id: string; top: number } | null = null
 function focusedCard() { return [...cards.querySelectorAll<HTMLElement>('.card[data-t]'), ...detached.querySelectorAll<HTMLElement>('.card[data-t]')].find(n => n.dataset.t === focused) }
 let showResolved = storage.get('scope:showResolved') === 'true'
@@ -304,8 +305,9 @@ async function write(route: string, body: Record<string, unknown>, id?: string) 
   if (res.status === 202 || result.queued === true) {
     const key = id || client_id
     if (!hasClientId(client_id)) sending.set(key, { clientId: client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.now() })
+    if (!id && sending.has(key)) postedClient = client_id
     if (id) deleteDraft(id)
-    renderCards()
+    if (id || !composing) renderCards()
   } else if (typeof result.thread?.anchor?.section === 'string' && result.thread.created_at) upsert(result.thread)
   else {
     let refreshed: Parameters<typeof accept>[0] | undefined
@@ -652,6 +654,10 @@ function render() {
   postDemoPins()
   refreshEmbedMatches()
 }
+function insertAtAnchor(node: HTMLElement, anchor: Anchor) {
+  if (anchor.general) cards.prepend(node)
+  else { const range = rangeFromAnchor(anchor)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
+}
 function renderCards() {
   syncFigureFocus()
   if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
@@ -692,7 +698,7 @@ function renderCards() {
   for (const item of sending.values()) if (!item.id && item.anchor) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
-    if (item.anchor.general) cards.prepend(node); else cards.append(node)
+    insertAtAnchor(node, item.anchor)
   }
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', !docFlags().resolve || showResolved)
@@ -757,7 +763,8 @@ function layout() {
     return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
   const heights = nodes.map(n => n.offsetHeight)
-  const pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused)
+  const posted = !composing && nodes.find(n => postedClient && n.dataset.client === postedClient)
+  const pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : posted ? n === posted : n.dataset.t === focused)
   const top = placeCards(nodes.map((n, i) => ({ want: want[i], height: n.offsetHeight })), pivot, detachedPin?.id === focused && !composing)
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0
@@ -805,7 +812,7 @@ function threadOnScreen(id: string) {
 }
 function focus(id: string | null, scroll = false, openSheet = true) {
   if (id) document.dispatchEvent(new CustomEvent('scope-thread-focus', { detail: id }))
-  focused = id
+  postedClient = null; focused = id
   if (id) markSeen(id)
   renderCards()
   if (id && scope?.threads.some(t => t.id === id && t.status === 'open' && t.anchor.section === 'ask')) { const fold = doc.querySelector<HTMLDetailsElement>('.ask-fold'); if (fold) fold.open = true }
@@ -862,7 +869,7 @@ function openSelectionComment(anchor = selection, range = selectionRange) {
   if (!anchor) return
   selection = anchor; selectionRange = range?.cloneRange() || null
   if (range) selectionTop = range.getBoundingClientRect().top + scrollY
-  composing = anchor; renderCards(); showSelection()
+  postedClient = null; composing = anchor; renderCards(); showSelection()
   $('.composer textarea', phone() ? sheet : cards).focus({ preventScroll: true })
 }
 doc.addEventListener('contextmenu', e => {
@@ -925,7 +932,7 @@ function openGeneralComment() {
   const quote = scope?.doc.sections.find(s => s.id === 'title')?.heading.trim().slice(0, 300)
   if (!quote) return
   getSelection()?.removeAllRanges(); selection = null
-  composing = { section: 'title', quote, prefix: '', suffix: '', general: true }
+  postedClient = null; composing = { section: 'title', quote, prefix: '', suffix: '', general: true }
   renderCards(); $('.composer textarea', phone() ? sheet : cards).focus()
 }
 window.addEventListener('scope:comment-open', openGeneralComment)
@@ -943,7 +950,7 @@ function renderComposer() {
     node = fresh
     if (phone()) sheet.replaceChildren(node)
     else if (composing?.general || !scope?.doc.sections.some(s => s.id === composing?.section)) cards.prepend(node)
-    else { const range = composing && rangeFromAnchor(composing)?.range; const after = [...cards.children].find(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return range && mark && range.comparePoint(mark.firstChild!, 0) > 0 }); cards.insertBefore(node, after || null) }
+    else if (composing) insertAtAnchor(node, composing)
   }
   const message = !composing?.general && !scope?.doc.sections.some(s => s.id === composing?.section) ? 'This section was removed. Your draft is kept.' : changedComposer === composing ? 'This section changed since you started.' : ''
   let note = node.querySelector<HTMLElement>('.composer-note')
@@ -1265,7 +1272,7 @@ document.addEventListener('click', e => {
     const figure = figureButton.closest('figure')
     const anchor = figure && captionAnchorOf(figure)
     if (!figure || !anchor) return
-    composing = anchor; selection = null; selectionTop = figure.getBoundingClientRect().top + scrollY
+    postedClient = null; composing = anchor; selection = null; selectionTop = figure.getBoundingClientRect().top + scrollY
     renderCards(); $('.composer textarea', phone() ? sheet : cards).focus(); return
   }
   const button = target.closest<HTMLElement>('[data-action]')
@@ -1334,7 +1341,7 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; er
   settleQueuedApproval()
   publishApproval()
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]).concat((payload.notes || []).map(note => note.client_id)))
-  for (const [key, item] of sending) if (settled.has(item.clientId)) sending.delete(key)
+  for (const [key, item] of sending) if (settled.has(item.clientId)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
   for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
 let lastOk = 0, stale = false
 function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }
