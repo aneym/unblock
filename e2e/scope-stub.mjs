@@ -17,6 +17,10 @@
 // Relay mode (env STUB_RELAY_MS, 2026-10-03 comment-flicker): Rails Admin's mirrored scopes. boot events:false (the page polls
 // every 2 s); a POST answers 202 {queued, client_id} and lands STUB_RELAY_MS later with the client_id on its message, the way
 // the outbox relay delivers to unblock and pushes the scope back. /__fail_next makes the next POST answer 500.
+// Relay failures (2026-10-03 resolve-rule): /__relay_fail_next?status=403&error=RELAY_SCOPE_ONLY makes the next queued write
+// answer 202 and then not land: the relay acks it as failed and the view lists it in failed[] {client_id, status, error, at},
+// the way Rails Admin's mirror read reports a write unblock refused. A relayed reopen or delete leaves a note with its
+// client_id, as the daemon's scope notes do.
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -33,12 +37,12 @@ const LATER = Array.from({ length: 16 }, (_, i) => `Later paragraph ${i + 1}: se
 const SHOT = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800"><rect width="600" height="800" fill="#8fa9b3"/><rect x="40" y="60" width="520" height="80" rx="12" fill="#e9eef0"/></svg>'
 
 const RELAY_MS = Number(process.env.STUB_RELAY_MS || 0)
-let failNext = false
+let failNext = false, relayFail = null, failed = []
 let doc, seq, sections, threads, notes, listeners, items, itemSeq, timers = []
 const images = new Map()
 function reset() {
   const at = '2026-09-29T20:00:00.000Z'
-  seq = 3; listeners?.forEach((l) => l.end()); listeners = new Set(); notes = []; items = new Map(); itemSeq = 0; timers.forEach(clearTimeout); timers = []
+  seq = 3; failed = []; relayFail = null; listeners?.forEach((l) => l.end()); listeners = new Set(); notes = []; items = new Map(); itemSeq = 0; timers.forEach(clearTimeout); timers = []
   doc = { slug: 'demo', title: 'Scope page fixes', pane: 'w5H:pT1', created_at: at, updated_at: at }
   sections = {
     title: { heading: 'Scope page fixes', body_md: 'A doc the page keeps live.', updated_at: at },
@@ -66,7 +70,7 @@ function view() {
   })
   const assets = { shot1: { type: 'image', width: 600, height: 800 }, shot2: { type: 'image', width: 600, height: 800 } }
   const scope = { version: 2, slug: doc.slug, title: doc.title, pane: doc.pane, revision: seq, updated_at: doc.updated_at, doc: { sections: list, assets }, threads: projected, presence: [] }
-  return { generated_at: doc.updated_at, source: 'live-docs', received_at: doc.updated_at, data: scope, scope, notes: notes.map((n) => ({ ...n })), items: [...items.values()] }
+  return { generated_at: doc.updated_at, source: 'live-docs', received_at: doc.updated_at, data: scope, scope, notes: notes.map((n) => ({ ...n })), items: [...items.values()], ...(RELAY_MS ? { failed: failed.map((f) => ({ ...f })) } : {}) }
 }
 
 function bump() {
@@ -103,6 +107,7 @@ function write(route, body) {
     if (verb === 'park') t.status = 'parked'
     if (verb === 'reopen') { if (t.status === 'open') return [400, { error: 'only resolved or parked threads reopen' }]; t.status = 'open'; for (const k of ['decision', 'by', 'how', 'resolved_at', 'images']) delete t[k] }
     if (verb === 'delete') { if (t.messages[0].from !== 'alex') return [403, { error: 'only his own notes' }]; threads = threads.filter((x) => x !== t) }
+    if (RELAY_MS && body.client_id && (verb === 'reopen' || verb === 'delete')) notes = notes.concat([{ id: `N-${body.client_id}`, thread: t.id, from: 'alex', event: verb, at: now, client_id: body.client_id, delivery: 'delivered', delivered_at: now }])
   }
   bump()
   const store = { id: t.id, anchor: { block: 'B1', quote: t.anchor.quote, prefix: t.anchor.prefix, suffix: t.anchor.suffix }, section: t.anchor.section, kind: t.kind, status: t.status, messages: t.messages, updated_seq: seq }
@@ -133,6 +138,7 @@ http.createServer((req, res) => {
     const q = url.searchParams
     if (url.pathname === '/__reset') { reset(); images.clear(); failNext = false; return send(200, { ok: true }) }
     if (url.pathname === '/__fail_next') { failNext = true; return send(200, { seq }) }
+    if (url.pathname === '/__relay_fail_next') { relayFail = { status: Number(q.get('status') || 403), error: q.get('error') || 'RELAY_SCOPE_ONLY' }; return send(200, { seq }) }
     if (url.pathname === '/__delivery') { threads.find((t) => t.id === q.get('thread')).delivery = q.get('state'); bump(); return send(200, { seq }) }
     if (url.pathname === '/__note') {
       const id = `N-${q.get('thread')}`, at = stamp()
@@ -233,7 +239,7 @@ http.createServer((req, res) => {
       if (req.headers.origin !== ORIGIN) return send(403, { error: 'origin_mismatch' })
       if (!body || typeof body.client_id !== 'string') return send(400, { error: 'invalid_write' })
       if (failNext) { failNext = false; return send(500, { error: 'Admin could not queue it' }) }
-      if (RELAY_MS) { timers.push(setTimeout(() => write(m[1], body), RELAY_MS)); return send(202, { queued: true, client_id: body.client_id }) }
+      if (RELAY_MS) { const fail = relayFail; relayFail = null; timers.push(setTimeout(() => { if (fail) { failed.push({ client_id: body.client_id, ...fail, at: stamp() }); bump() } else write(m[1], body) }, RELAY_MS)); return send(202, { queued: true, client_id: body.client_id }) }
       const [status, data] = write(m[1], body)
       return send(status, data)
     }

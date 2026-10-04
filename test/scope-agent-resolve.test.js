@@ -48,7 +48,8 @@ test('a lane closes a thread once settled, says why, and can reopen it; his ques
     const t3 = await comment('We run Sol medium for the build', 'sol 6.1 right?', 'c-1')
     assert.equal((await post(t3, 'reply', { text: 'Yes: Sol is GPT-6.1 Sol.' })).status, 200)
     assert.equal((await post(t3, 'reply', { text: 'ok good', client_id: 'c-2' }, human)).status, 200)
-    const closed = await post(t3, 'resolve', { decision: 'Alex agreed: Sol is GPT-6.1 Sol.' })
+    // 2026-10-03 resolve-rule: the lane passes his close words (scope-resolve-rule.test.js has the rule itself).
+    const closed = await post(t3, 'resolve', { decision: 'Alex agreed: Sol is GPT-6.1 Sol.', quote: 'ok good' })
     assert.equal(closed.status, 200, closed.text)
     let t = await thread(t3)
     assert.equal(t.status, 'resolved')
