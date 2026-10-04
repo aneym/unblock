@@ -74,6 +74,16 @@ def scenario(label):
     steps += hook('note?thread=T3&delivery=delivered&read_by=Scope%20PM')
     steps.append(C(f'{label}: a lane read receipt is a 👀 "Seen by Scope PM", not a Read by line',
                    "const c = [...document.querySelectorAll('#cards .card[data-t=\"T3\"]')].find((n) => n.getClientRects().length); return {ok: c?.querySelector('.reaction')?.getAttribute('title') === 'Seen by Scope PM' && !/Read by/.test(c.textContent), text: c?.textContent.slice(0, 160)}"))
+    # Follow-up (team-lead 2026-10-03): a refused or abandoned reply ends the item failed with a short reason; the
+    # partial text goes and a quiet line says why, so nothing is left streaming forever.
+    item = lambda q: [{'eval': "fetch('/__item?%s').then((r) => r.ok)" % q}, {'wait': 700}]
+    steps += item('thread=T4&status=streaming&by=Rooms%20PM&text=Half%20a%20reply')
+    steps.append(C(f'{label}: a streaming reply on T4 shows its partial text',
+                   "const c = [...document.querySelectorAll('#cards .card[data-t=\"T4\"]')].find((n) => n.getClientRects().length); return {ok: (c?.querySelector('.live .live-text')?.textContent || '').includes('Half a reply')}"))
+    steps += item('thread=T4&status=failed&by=Rooms%20PM&error=your%20answer%20is%20too%20long%20(700%20of%20600%20characters)')
+    steps.append(C(f'{label}: failed: no live block or thinking line, the partial text is gone, a quiet line gives the reason',
+                   "const c = [...document.querySelectorAll('#cards .card[data-t=\"T4\"]')].find((n) => n.getClientRects().length); const f = c?.querySelector('.live-failed'); "
+                   "return {ok: !!c && !c.querySelector('.live') && !c.querySelector('.thinking') && !c.textContent.includes('Half a reply') && !!f && f.textContent.includes('too long') && getComputedStyle(f).backgroundColor === 'rgba(0, 0, 0, 0)', text: c?.textContent.slice(0, 200)}"))
     steps.append(C(f'{label}: no page error', "const e = window.__errs || []; return {ok: e.length === 0, e}"))
     return steps
 

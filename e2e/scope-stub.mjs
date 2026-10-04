@@ -11,7 +11,7 @@
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
 // /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
-// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?thread&status[&by&doing&link&text]
+// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?thread&status[&by&doing&link&text&error]
 // (one live item frame), /__stream_reply?thread[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
 // /__remove_later (the Later section is deleted), /__spread (eight threads down Later)
 import http from 'node:http'
@@ -156,7 +156,7 @@ http.createServer((req, res) => {
     if (url.pathname === '/__grow_plan') { const s = sections.plan; s.body_md = Array.from({ length: 10 }, (_, i) => `New plan paragraph ${i + 1}: the lane wrote this while Alex was reading, and it runs to about three lines on a desktop screen so the anchor below moves down a long way.`).join('\n\n') + '\n\n' + s.body_md; s.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__detach_t2') { const s = sections.plan; s.body_md = s.body_md.replace('Voice comes last.', 'Voice ships with the page.'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
     // live items: one item frame; or a scripted lane turn on a thread (seen, thinking, doing, five chunks, done, then the message lands).
-    if (url.pathname === '/__item') { upsertItem(q.get('thread'), { status: q.get('status'), by: q.get('by') || 'Rooms PM', ...(q.get('doing') ? { doing: { text: q.get('doing'), ...(q.get('link') ? { link: q.get('link') } : {}) } } : {}), ...(q.get('text') ? { text: q.get('text') } : {}) }); return send(200, { seq }) }
+    if (url.pathname === '/__item') { upsertItem(q.get('thread'), { status: q.get('status'), by: q.get('by') || 'Rooms PM', ...(q.get('doing') ? { doing: { text: q.get('doing'), ...(q.get('link') ? { link: q.get('link') } : {}) } } : {}), ...(q.get('text') ? { text: q.get('text') } : {}), ...(q.get('error') ? { error: q.get('error') } : {}) }); return send(200, { seq }) }
     if (url.pathname === '/__stream_reply') {
       const thread = q.get('thread'), by = q.get('by') || 'Rooms PM'
       const at = (ms, fn) => timers.push(setTimeout(fn, ms))
