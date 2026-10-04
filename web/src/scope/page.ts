@@ -392,7 +392,7 @@ function patchLiveCard(card: HTMLElement, t: Thread, places: Map<string, string>
   let queue = card.querySelector<HTMLElement>('.queue-place')
   const place = places.get(t.id)
   if (!place) queue?.remove()
-  else { if (!queue) { queue = document.createElement('p'); queue.className = 'queue-place'; message.after(queue) }; queue.textContent = place }
+  else { if (!queue) { queue = document.createElement('span'); queue.className = 'queue-place'; card.querySelector('.head .kind')?.after(queue) }; queue.textContent = place }
   if (by) { const chip = card.querySelector('.delivery-chip'); if (chip && /^(Sent|Read by|Seen)/.test(chip.textContent || '')) chip.remove() }
 }
 function patchLive() {
@@ -746,6 +746,11 @@ function layout() {
     const composerRange = n.classList.contains('composer') && composing && rangeFromAnchor(composing)?.range
     return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
+  const pinned = detachedPin?.id === focused ? nodes.findIndex(n => n.dataset.t === focused) : -1
+  if (pinned >= 0) {
+    const [node] = nodes.splice(pinned, 1), [at] = want.splice(pinned, 1), before = want.findIndex(w => w > at)
+    nodes.splice(before < 0 ? nodes.length : before, 0, node); want.splice(before < 0 ? want.length : before, 0, at)
+  }
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
   for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
