@@ -129,7 +129,8 @@ test('a lane stream that goes quiet ends failed instead of streaming forever', a
     await t.until(() => live.items('T1').some((i) => i.status === 'streaming'), 'streaming item', 2000)
     await t.until(() => live.items('T1').at(-1)?.status === 'failed', 'failed item', 5000)
     const last = live.items('T1').at(-1)
-    assert.ok(last.t - killedAt >= 1000, 'it waits for the quiet window, not the first gap')
+    const lastChunk = live.items('T1').filter((i) => i.status === 'streaming').at(-1)
+    assert.ok(killedAt > 0 && last.t - lastChunk.t >= 1200, `it waits for the quiet window after the last chunk, not the first gap (${last.t - lastChunk.t} ms)`)
     assert.ok(typeof last.error === 'string' && last.error.length > 0 && last.error.length <= 200, 'a short reason')
   } finally { delete process.env.UNBLOCK_LIVE_STALE_MS; live.close(); await t.h.close() }
 })
