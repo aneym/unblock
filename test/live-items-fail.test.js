@@ -5,7 +5,8 @@
 // Contract: a refused lane reply (any 4xx on POST threads/T#/reply from a lane) ends that turn's thinking or streaming
 // item failed, error = the refusal message (at most 200 characters). A lane stream that goes quiet for
 // UNBLOCK_LIVE_STALE_MS (default 90 s) ends failed. A lane stream past 12000 characters is refused with 413 and the item
-// ends failed. An explainer's streamed text never shows any part of a NEEDS_OWNER line.
+// ends failed. An explainer's streamed text never shows any part of a NEEDS_OWNER line. A typing --link is trimmed
+// before it is checked and stored (team-lead, 2026-10-03: "a link with leading spaces gets rejected or normalized").
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -163,5 +164,26 @@ test('an explainer answer never shows any part of a NEEDS_OWNER line while it st
     assert.ok(items.some((i) => i.status === 'streaming' && i.text.includes('Voice waits')), 'the answer streamed')
     for (const i of items) assert.ok(!/NEED|\nN\s*$/.test(i.text ?? ''), `no NEEDS_OWNER fragment, saw ${JSON.stringify(i.text)}`)
     assert.equal(items.at(-1).text, ANSWER)
+  } finally { live.close(); await t.h.close() }
+})
+
+test('a typing link is trimmed before it is checked and stored; blank or non-http links are refused', async () => {
+  const slug = 'live-link-trim'
+  const t = await boot(laneScope(slug))
+  const live = record(t.h.port, `/api/scope/${slug}/events`)
+  try {
+    await new Promise((r) => setTimeout(r, 200))
+    assert.ok([200, 201].includes((await t.ask('Why last?', 'c-1')).status))
+    const ok = await t.cli(['scope', 'typing', slug, 'T1', '--doing', 'Reading the plan', '--link', '   https://studio.example.ts.net/r/1  '])
+    assert.equal(ok.status, 0, ok.err)
+    await t.until(() => live.items('T1').some((i) => i.doing?.link), 'item with a link', 3000)
+    assert.equal(live.items('T1').at(-1).doing.link, 'https://studio.example.ts.net/r/1', 'stored without the spaces')
+    for (const link of ['   ', '  javascript:alert(1)', '\thttps://x.example/\n'.replace('https', 'ftp')]) {
+      const res = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', body: { doing: 'x', link } })
+      assert.equal(res.status, 400, `refused: ${JSON.stringify(link)}`)
+    }
+    const raw = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', body: { doing: 'Reading', link: '\n https://studio.example.ts.net/r/2 ' } })
+    assert.equal(raw.status, 200, 'the route trims too, not only the CLI')
+    assert.equal(raw.json.item.doing.link, 'https://studio.example.ts.net/r/2')
   } finally { live.close(); await t.h.close() }
 })
