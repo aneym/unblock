@@ -976,7 +976,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (!anchor) bad(`quote not found in §${source.section}`)
       const kind = source.kind ?? 'question'
       if (!['question', 'comment'].includes(kind) || (kind === 'comment' && (source.recommendation !== undefined || source.why !== undefined))) bad('invalid kind')
-      const thread = { id: nextThreadId(scope), anchor, author: 'agent', kind, status: 'open', messages: [{ from: 'agent', text: text(source.text), at, ...via, ...client, ...pictures }], created_at: at }
+      const thread = { id: nextThreadId(scope), anchor, author: 'agent', intent: 'ask', kind, status: 'open', messages: [{ from: 'agent', text: text(source.text), at, ...via, ...client, ...pictures }], created_at: at }
       if (source.recommendation !== undefined) thread.recommendation = text(source.recommendation, 600)
       if (source.why !== undefined) thread.why = text(source.why, 600)
       if (source.options !== undefined) {
@@ -1006,7 +1006,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const section = scope.doc.sections.find((s) => s.id === anchor?.section)
         if (!section || !(anchor.embed ? hasEmbedFence(section, anchor.embed.src) : locateAnchor(sectionPlain(section), anchor))) bad('invalid anchor')
         if (body.recommendation !== undefined || body.why !== undefined) bad('invalid kind')
-        thread = { id: nextThreadId(scope), anchor, author: 'alex', kind: 'comment', status: 'open', messages: [{ from: 'alex', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
+        thread = { id: nextThreadId(scope), anchor, author: 'alex', intent: text(body.text).includes('?') ? 'question' : 'change', kind: 'comment', status: 'open', messages: [{ from: 'alex', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
         if (body.options !== undefined) bad('options require an agent recommendation')
         scope.threads.push(thread)
         noteData = { event: 'new', text: thread.messages[0].text }
@@ -1103,14 +1103,51 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
         }
       } else if (thread.status === 'open') {
-        // Alex, 2026-10-02 19:45 ET: "agents can close cards by themselves if we agree". A lane resolves his comment
-        // once it is answered and agreed; the one-line reason shows on the card and he can reopen it.
+        let evidence = {}
         if ((thread.author ?? thread.messages[0]?.from) === 'alex') {
           if (typeof body.decision !== 'string' || !body.decision.trim()) bad(`say why it is settled: unblock scope resolve ${slug} ${thread.id} --decision "why"`)
+          const refuse = (reason) => {
+            try { bad(`${thread.id}: ${reason}. Alex resolves his own comments (his Resolve button). A lane closes one only with his close words from his latest message there (--quote "<his exact words>") or, for a change he asked for, the doc revision that made it (--revision N).`, 403) }
+            catch (error) { error.code = 'ALEX_RESOLVES'; throw error }
+          }
+          const messages = thread.messages.filter(message => message.from === 'alex'), latest = messages.at(-1)
+          if ((body.quote !== undefined) === (body.revision !== undefined)) refuse('pass exactly one of his close words or a revision')
+          if (body.quote !== undefined) {
+            if (typeof body.quote !== 'string') refuse('quote must be his words')
+            const normalize = value => value.toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim()
+            const quote = normalize(body.quote), words = normalize(latest?.text ?? '')
+            if (!quote || !words.includes(quote)) refuse(quote && messages.some(message => normalize(message.text).includes(quote)) ? 'only his latest message counts' : `not his words in ${thread.id}`)
+            if (!/\b(?:ok|okay|close|closed|resolve|resolved|approve|approved|take it|lgtm|sounds good|ship it)\b/.test(quote) || /\b(?:not|don't|dont|no|never)\b/.test(quote)) refuse('his words must say close, approve, take it or ok')
+            // Map the normalized match back to the exact substring he wrote.
+            const original = latest.text, offset = words.indexOf(quote)
+            let start = 0, end = original.length
+            for (let i = 0; i <= original.length; i++) {
+              const length = normalize(original.slice(0, i)).length
+              if (length <= offset) start = i
+              if (length === offset + quote.length) { end = i; break }
+            }
+            evidence = { quote: original.slice(start, end).trim() }
+          } else {
+            const intent = thread.intent ?? (thread.messages[0]?.text.includes('?') ? 'question' : 'change')
+            if (intent !== 'change') refuse('a question closes with his words or his own Resolve')
+            const n = body.revision
+            if (!Number.isInteger(n) || n < 2 || n > scope.revision) refuse(`invalid revision ${n}`)
+            let before, after
+            try { before = JSON.parse(readFileSync(join(dir, 'revisions', `${n - 1}.json`))); after = JSON.parse(readFileSync(join(dir, 'revisions', `${n}.json`))) }
+            catch { refuse(`revision ${n} snapshots are missing or invalid`) }
+            if (!(Date.parse(after.at) > Date.parse(latest?.at))) refuse(`revision ${n} was made before he asked`)
+            const ids = thread.anchor.general ? new Set([...before.sections, ...after.sections].map(section => section.id)) : [thread.anchor.section]
+            const changed = [...ids].some(id => {
+              const old = before.sections.find(section => section.id === id), next = after.sections.find(section => section.id === id)
+              return !!old !== !!next || old?.heading !== next?.heading || old?.body_md !== next?.body_md
+            })
+            if (!changed) refuse(`revision ${n} did not change §${headingOf(scope, thread.anchor.section)}`)
+            evidence = { revision: n }
+          }
           if (thread.messages.at(-1)?.from !== 'agent') thread.messages.push({ from: 'agent', text: text(body.decision, 600), at, ...client })
         }
         thread.status = 'resolved'
-        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client }
+        thread.resolution = { decision: text(body.decision, 600), alex_words: null, by: 'agent', at, confirmed_at: at, revision: scope.revision, ...client, ...evidence }
       } else if (thread.resolution?.by === 'alex' && !thread.resolution.confirmed_at) {
         if (thread.resolution.how === 'own' && thread.resolution.alex_words?.includes('?')) bad(`Alex's answer is a question; reopen it and answer: unblock scope reopen ${slug} ${thread.id}`)
         thread.resolution.confirmed_at = at; thread.resolution.revision = scope.revision

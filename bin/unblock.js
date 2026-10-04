@@ -502,7 +502,7 @@ unblock scope edit <slug> T# [--section id --quote "text"] [--option "text" ...]
 unblock scope typing <slug> T# [--doing <text>] [--link <url>]
 unblock scope reply <slug> T# --stream
 unblock scope react <slug> T# [--clear]
-unblock scope resolve <slug> T# [--decision "text"]
+unblock scope resolve <slug> T# [--decision "text"] [--quote "his exact words" | --revision N]
 unblock scope reopen <slug> T# [--reason "text"]
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
 unblock scope unapprove <slug> --reason "<why>"
@@ -681,7 +681,7 @@ async function scope(args, mode = 'scope') {
   if (['ask', 'reply', 'resolve', 'reopen', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
-    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision'] : sub === 'reopen' ? ['--reason'] : ['--rec', '--why', '--option']
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision', '--quote', '--revision'] : sub === 'reopen' ? ['--reason'] : ['--rec', '--why', '--option']
     for (let i = 0; i < words.length; i++) {
       if (words[i] !== '--keep') continue
       if (words[i + 1] === undefined) fail('--keep needs a value')
@@ -727,8 +727,8 @@ async function scope(args, mode = 'scope') {
       return output(data, `asked ${data.thread.id} on §${opts['--section']}`)
     }
     if (sub === 'resolve') {
-      if (!threadId || words.length) fail(usage)
-      const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}) })
+      if (!threadId || words.length || (opts['--revision'] !== undefined && (!/^-?\d+$/.test(opts['--revision']) || !Number.isSafeInteger(Number(opts['--revision']))))) fail(usage)
+      const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}), ...(opts['--quote'] !== undefined ? { quote: opts['--quote'] } : {}), ...(opts['--revision'] !== undefined ? { revision: Number(opts['--revision']) } : {}) })
       return output(data, `resolved ${data.thread.id}`)
     }
     if (sub === 'reopen') {

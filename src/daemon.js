@@ -764,7 +764,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const slug = '[a-z0-9][a-z0-9-]{0,63}'
       const allowed = req.method === 'GET'
         ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}(?:/assets/${ASSET_ID.source.slice(1, -1)})?$`).test(pathname)
-        : req.method === 'POST' && (routeTicket(pathname, '/answer') || new RegExp(`^/api/scope/${slug}/(?:assets|approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park))?)$`).test(pathname))
+        : req.method === 'POST' && (routeTicket(pathname, '/answer') || new RegExp(`^/api/scope/${slug}/(?:assets|approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park|reopen|delete))?)$`).test(pathname))
       if (!allowed) return sendJson(res, 403, { code: 'RELAY_SCOPE_ONLY' })
     }
 
@@ -1267,7 +1267,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       if (error.code === 'ALREADY_PARKED' || error.code === 'ALREADY_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, ticket: error.ticket })
       }
-      if (['HUMAN_ONLY', 'STALE_REVISION', 'RELAY_NO_SECRETS', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
+      if (['ALEX_RESOLVES', 'HUMAN_ONLY', 'STALE_REVISION', 'RELAY_NO_SECRETS', 'WHOLE_ASK_ONLY', 'NOTE_MEANS_CHANGE', 'INVALID_VERDICT', 'RECEIPT_NOT_ALLOWED', 'PAY_NOT_ALLOWED'].includes(error.code)) return sendJson(res, error.status || (error.code === 'PAY_NOT_ALLOWED' || error.code === 'RECEIPT_NOT_ALLOWED' ? 409 : 400), { error: error.message, code: error.code, ...(error.details || {}) })
       if (error.code === 'ASK_NOT_OPEN') {
         return sendJson(res, 409, { error: error.message, code: error.code, status: error.askStatus })
       }
