@@ -184,6 +184,13 @@ test('a typing link is trimmed before it is checked and stored; blank or non-htt
       const res = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', headers: lane(), body: { doing: 'x', link } })
       assert.equal(res.status, 400, `refused: ${JSON.stringify(link)}`)
     }
+    // Control characters inside or at the edges of a link are refused, not silently dropped by URL parsing.
+    for (const link of ['\x01https://x.example/', 'https://x.example/\x00', 'https://x.example/a\nb', 'https://x.example/\x7f']) {
+      const res = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', headers: lane(), body: { doing: 'x', link } })
+      assert.equal(res.status, 400, `refused: ${JSON.stringify(link)}`)
+    }
+    const ctrl = await t.cli(['scope', 'typing', slug, 'T1', '--doing', 'x', '--link', 'https://x.example/a\x01b'])
+    assert.notEqual(ctrl.status, 0, 'the CLI refuses a control character locally')
     const raw = await t.h.request(`/api/scope/${slug}/threads/T1/typing`, { method: 'POST', headers: lane(), body: { doing: 'Reading', link: '\n https://studio.example.ts.net/r/2 ' } })
     assert.equal(raw.status, 200, 'the route trims too, not only the CLI')
     assert.equal(raw.json.item.doing.link, 'https://studio.example.ts.net/r/2')
