@@ -132,6 +132,7 @@ body.show-resolved mark.hl.resolved.on, mark.hl.resolved.unread.on { box-shadow:
 mark.hl.unread { position: relative; }
 mark.hl.unread::after { content: ""; position: absolute; right: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ac); flex: none; }
+.new-reply { font-size: 12px; font-weight: 600; color: var(--ac); flex: none; }
 /* explainer: questions in the margin, answers that read like the doc */
 .side-head .pc-comments-count, .open-chip .q-count { color: var(--tx2); font-weight: 500; font-variant-numeric: tabular-nums; }
 /* index: one quiet heading per group, title rows on hairlines; no comment counter, chip or voice without a doc */
@@ -314,6 +315,11 @@ button:disabled { opacity:.5; cursor:default; }
 .menu .tall { height: auto; padding: 6px 10px; }
 .waiting { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--tx2); }
 .waiting .dot { background: var(--ask); }
+/* A write Admin could not deliver (2026-10-03): the words that need him in danger text, his own words muted, actions on their own row. No fill, no stripe. */
+.not-sent { font-size: 13px; line-height: 1.45; color: var(--tx2); margin: 4px 0 8px; }
+.not-sent strong { color: var(--danger); font-weight: 600; }
+.not-sent .btn { margin-top: 8px; }
+.not-sent .btn + .btn { margin-left: 6px; }
 .rec.new .lbl::after { content: " · new"; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ac); }
 
 .choices .btn { flex:1 1 0; } mark.hl.parked:not(.unread) { background:none; box-shadow:none; } body.show-resolved mark.hl.parked { background:var(--hl-r); cursor:pointer; } .card.parked { background:var(--card); }
