@@ -488,9 +488,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (verb === 'typing') {
         if (body.doing !== undefined && (typeof body.doing !== 'string' || body.doing.trim().length > 120)) bad('invalid doing')
         if (body.link !== undefined) {
+          if (typeof body.link !== 'string') bad('invalid link')
+          body.link = body.link.trim()
+          if (!body.link || body.link.length > 500) bad('invalid link')
           let url
           try { url = new URL(body.link) } catch { bad('invalid link') }
-          if (typeof body.link !== 'string' || body.link.length > 500 || !['http:', 'https:'].includes(url.protocol)) bad('invalid link')
+          if (!['http:', 'https:'].includes(url.protocol)) bad('invalid link')
         }
       } else if (typeof body.chunk !== 'string' || body.chunk.length > 4000) bad('invalid chunk')
       const configuredStaleMs = Number(process.env.UNBLOCK_LIVE_STALE_MS)
