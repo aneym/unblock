@@ -13,6 +13,7 @@ import { lintDoc } from '../src/scope-lint.js'
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
+import { KIND_IDS, kindOf } from '../src/doc-kinds.js'
 import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope } from '../src/scope-doc.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
@@ -492,7 +493,7 @@ async function scopeLinks(health, slug) {
 }
 
 const SCOPE_USAGE = `unblock scope [list|url|notes|threads]           scoping docs and anchored threads
-unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer] [--sources <dir>...] [--answerer on|off]
+unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|report] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
@@ -538,7 +539,7 @@ function scopeNew(args, usage, mode = 'scope') {
   }
   const slug = words[0]
   if (words.length !== 1 || !slugRe.test(slug ?? '') || !paneRe.test(pane ?? '') || (app !== undefined && !APPS.includes(app))) fail(usage)
-  if (kind !== undefined && kind !== 'scope' && kind !== 'explainer') fail(usage)
+  if (kind !== undefined && !KIND_IDS.includes(kind)) fail(usage)
   if (answerer !== undefined && answerer !== 'on' && answerer !== 'off') fail(usage)
   const resolved = sources.map((dir) => {
     const abs = resolve(dir)
@@ -675,7 +676,7 @@ async function scope(args, mode = 'scope') {
     const { scopes } = await request('/api/scope')
     const want = mode === 'explain' ? 'explainer' : 'scope'
     const health = await request('/api/health')
-    const listed = await Promise.all(scopes.filter((item) => (item.kind === 'explainer' ? 'explainer' : 'scope') === want).map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
+    const listed = await Promise.all(scopes.filter((item) => kindOf(item) === want).map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
     return output({ scopes: listed }, listed.map((item) => want === 'explainer' ? `${item.slug}  ${item.title}  ${item.url}` : `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
   }
   if (verb === 'app') {

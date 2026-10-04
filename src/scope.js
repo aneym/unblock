@@ -8,6 +8,7 @@ import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
+import { kindOf, kindSpec } from './doc-kinds.js'
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 
@@ -72,7 +73,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const threads = Array.isArray(scope.threads) ? scope.threads : []
       return [{ slug: dir.name, app: appOf(scope), title: scope.title ?? '', updated_at: scope.updated_at ?? '',
         pane: scope.pane ?? '', revision: scope.revision, open: threads.filter((t) => t.status === 'open').length,
-        kind: scope.kind === 'explainer' ? 'explainer' : 'scope' }]
+        kind: kindOf(scope) }]
     }).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
   }
 
@@ -542,6 +543,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   }
 
   function approveScope(slug, scope, body, human) {
+    if (!kindSpec(scope).approve) bad('this doc kind has no approval', 409)
     const comment = (body.comment ?? '').replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
     if (comment.length > 4000 || (!['approve', 'approve_to_try'].includes(body.mode) && !comment)) bad('invalid comment')
     if (body.client_id && body.client_id === scope.approval?.client_id) return { approval: scope.approval, duplicate: true }
@@ -582,6 +584,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function relayApproval(slug, body) {
     const { dir, scope } = readDisk(slug)
+    if (!kindSpec(scope).approve) bad('this doc kind has no approval', 409)
     const quote = body.quote.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
     if (!quote || quote.length > 4000) bad('invalid quote')
     const now = Date.now()
@@ -679,7 +682,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   function answererOn(scope) {
     if (scope.answerer === 'on') return true
     if (scope.answerer === 'off') return false
-    return scope.kind === 'explainer'
+    return kindSpec(scope).answerer
   }
 
   function writeAnswer(slug, patch) {

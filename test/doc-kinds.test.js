@@ -30,8 +30,9 @@ test('the registry names the five kinds, and an unknown or missing kind reads as
 })
 
 test('every registered kind validates; anything else is refused', () => {
-  for (const kind of KIND_IDS) assert.doesNotThrow(() => validateScope(doc(`k-${kind}`, { kind })), kind)
-  assert.throws(() => validateScope(doc('k-memo', { kind: 'memo' })))
+  // validateScope returns the list of problems (callers answer 400 with the first one); it never throws.
+  for (const kind of KIND_IDS) assert.deepEqual(validateScope(doc(`k-${kind}`, { kind })), [], kind)
+  assert.deepEqual(validateScope(doc('k-memo', { kind: 'memo' })), ['invalid kind'])
 })
 
 async function boot(scope) {
