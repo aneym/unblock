@@ -14,6 +14,9 @@
 // /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?thread&status[&by&doing&link&text&error]
 // (one live item frame), /__stream_reply?thread[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
 // /__remove_later (the Later section is deleted), /__spread (eight threads down Later)
+// Relay mode (env STUB_RELAY_MS, 2026-10-03 comment-flicker): Rails Admin's mirrored scopes. boot events:false (the page polls
+// every 2 s); a POST answers 202 {queued, client_id} and lands STUB_RELAY_MS later with the client_id on its message, the way
+// the outbox relay delivers to unblock and pushes the scope back. /__fail_next makes the next POST answer 500.
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -29,6 +32,8 @@ const stamp = () => new Date().toISOString().replace(/(\.\d{3})\d*Z$/, '$1Z')
 const LATER = Array.from({ length: 16 }, (_, i) => `Later paragraph ${i + 1}: settings and themes wait for pass ${i + 1}, after the page ships to phones and the lane has read every note.`).join('\n\n')
 const SHOT = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800"><rect width="600" height="800" fill="#8fa9b3"/><rect x="40" y="60" width="520" height="80" rx="12" fill="#e9eef0"/></svg>'
 
+const RELAY_MS = Number(process.env.STUB_RELAY_MS || 0)
+let failNext = false
 let doc, seq, sections, threads, notes, listeners, items, itemSeq, timers = []
 const images = new Map()
 function reset() {
@@ -83,7 +88,7 @@ const REPLY = ['Voice waits ', 'because the ', 'phone page ', 'ships first, ', '
 function write(route, body) {
   const now = stamp(), pics = (Array.isArray(body.images) ? body.images : []).map((id) => images.get(id)).filter(Boolean).map(({ id, width, height }) => ({ id, width, height }))
   if (Array.isArray(body.images) && (body.images.length > 6 || pics.length !== body.images.length)) return [400, { error: 'invalid_images' }]
-  const msg = (text) => ({ from: 'alex', text, at: now, via: 'admin', ...(pics.length ? { images: pics } : {}) })
+  const msg = (text) => ({ from: 'alex', text, at: now, via: 'admin', ...(RELAY_MS && body.client_id ? { client_id: body.client_id } : {}), ...(pics.length ? { images: pics } : {}) })
   const [, id, verb] = route.match(/^threads(?:\/(T[1-9]\d*)\/(reply|resolve|reject|park|reopen|delete))?$/) || []
   let t
   if (!id) {
@@ -108,7 +113,7 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 const boot = (slug, host) => `window.__csp = [];
 addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.effectiveDirective + ' ' + (e.blockedURI || '')));
 window.__errs = []; addEventListener('error', (e) => window.__errs.push(String(e.message))); addEventListener('unhandledrejection', (e) => window.__errs.push(String(e.reason)));
-window.__SCOPE_BOOT__ = ${JSON.stringify({ ...(slug ? { slug } : {}), api: '/w/api/live-scopes', events: true, embed: mode === 'embed', voice: false, ...(host ? { approve: 'host', comment: 'host' } : {}) })};`
+window.__SCOPE_BOOT__ = ${JSON.stringify({ ...(slug ? { slug } : {}), api: '/w/api/live-scopes', events: !RELAY_MS, embed: mode === 'embed', voice: false, ...(host ? { approve: 'host', comment: 'host' } : {}) })};`
 
 reset()
 http.createServer((req, res) => {
@@ -126,7 +131,8 @@ http.createServer((req, res) => {
       res.end(type === 'application/json' ? JSON.stringify(data) : data)
     }
     const q = url.searchParams
-    if (url.pathname === '/__reset') { reset(); images.clear(); return send(200, { ok: true }) }
+    if (url.pathname === '/__reset') { reset(); images.clear(); failNext = false; return send(200, { ok: true }) }
+    if (url.pathname === '/__fail_next') { failNext = true; return send(200, { seq }) }
     if (url.pathname === '/__delivery') { threads.find((t) => t.id === q.get('thread')).delivery = q.get('state'); bump(); return send(200, { seq }) }
     if (url.pathname === '/__note') {
       const id = `N-${q.get('thread')}`, at = stamp()
@@ -226,6 +232,8 @@ http.createServer((req, res) => {
     if (m && req.method === 'POST' && m[1]) {
       if (req.headers.origin !== ORIGIN) return send(403, { error: 'origin_mismatch' })
       if (!body || typeof body.client_id !== 'string') return send(400, { error: 'invalid_write' })
+      if (failNext) { failNext = false; return send(500, { error: 'Admin could not queue it' }) }
+      if (RELAY_MS) { timers.push(setTimeout(() => write(m[1], body), RELAY_MS)); return send(202, { queued: true, client_id: body.client_id }) }
       const [status, data] = write(m[1], body)
       return send(status, data)
     }
