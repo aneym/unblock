@@ -94,6 +94,17 @@ export function normalizeTrustedProxy(value) {
   return value === 'tailscale' ? 'tailscale' : null
 }
 
+/** Comma string or array of origins → comma string of unique public origins, or null. */
+export function normalizeRailsOrigins(value) {
+  const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : []
+  const origins = []
+  for (const item of list) {
+    const origin = normalizePublicOrigin(item)
+    if (origin && !origins.includes(origin)) origins.push(origin)
+  }
+  return origins.length ? origins.join(',') : null
+}
+
 /** Comma string or array of logins → comma string, or null when empty. */
 export function normalizeAllowedUsers(value) {
   const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : []
@@ -129,6 +140,7 @@ export function applyConfig({ env = process.env, path = configPath() } = {}) {
   const applied = []
   const settings = [
     ['UNBLOCK_PUBLIC_ORIGIN', normalizePublicOrigin(file.public_origin)],
+    ['UNBLOCK_RAILS_ORIGINS', normalizeRailsOrigins(file.rails_origins)],
     ['UNBLOCK_SCOPE_LINK_TEMPLATE', normalizeScopeLinkTemplate(file.scope_link_template)],
     ['UNBLOCK_TRUSTED_PROXY', normalizeTrustedProxy(file.trusted_proxy)],
     ['UNBLOCK_ALLOWED_USERS', normalizeAllowedUsers(file.allowed_users)],

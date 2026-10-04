@@ -266,7 +266,7 @@ hook, an MCP server's auto-start, the CLI, launchd) starts the same daemon:
 ```
 
 `public_origin` is exactly one https URL; wildcards, paths, and plaintext off
-loopback are rejected. Requests whose Host is neither loopback nor that origin
+loopback are rejected. `rails_origins` (env `UNBLOCK_RAILS_ORIGINS`) lists extra https parent origins for the demo embed bridge; a comma-separated string works, invalid entries are dropped, and an already-set environment variable wins. Requests whose Host is neither loopback nor that origin
 get 403 before authentication runs. `trusted_proxy` only ever means Tailscale,
 and only for requests that arrived on the public origin carrying a
 `tailscale-user-login` in `allowed_users`. `root` names the checkout the daemon

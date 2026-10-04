@@ -137,10 +137,11 @@ export function demoPins(threads, captionAnchor) {
 
 // HTML assets retain their opaque sandbox. A per-load capability binds replies to
 // the exact iframe; the child accepts commands only from its URL's parent origin.
-export function embedBridgeScript() {
-  return `<script>(() => { const fold = text => text.split('').map(ch => ch.toLowerCase().length === 1 ? ch.toLowerCase() : ch).join(''); const locateAnchor = ${locateAnchor.toString()};(${embedBridge.toString()})(${locateEmbed.toString()}); })()</script>`
+export function embedBridgeScript(parents = []) {
+  const list = JSON.stringify(parents).replaceAll('<', '\\u003c')
+  return `<script>(() => { const fold = text => text.split('').map(ch => ch.toLowerCase().length === 1 ? ch.toLowerCase() : ch).join(''); const locateAnchor = ${locateAnchor.toString()};(${embedBridge.toString()})(${locateEmbed.toString()}, ${list}); })()</script>`
 }
-function embedBridge(matcher) {
+function embedBridge(matcher, parents = []) {
   const locate = matcher
   let token = '', parentOrigin = ''
   const textMap = () => {
@@ -167,7 +168,7 @@ function embedBridge(matcher) {
     return range
   }
   window.addEventListener('message', event => {
-    if (event.source !== parent || event.origin !== location.origin || event.data?.type !== 'rails-embed') return
+    if (!(event.source === parent && (event.origin === location.origin || parents.includes(event.origin)) && event.data?.type === 'rails-embed')) return
     const data = event.data
     if (data.action === 'init' && typeof data.token === 'string') { token = data.token; parentOrigin = event.origin; send({ action: 'ready' }); return }
     if (!token || data.token !== token) return

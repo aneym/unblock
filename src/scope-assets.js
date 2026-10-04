@@ -1,3 +1,4 @@
+import { normalizePublicOrigin } from './config.js'
 import { embedBridgeScript } from './demo-host.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -194,7 +195,9 @@ export function storeAsset(dir, bytes, contentType, { human = false } = {}) {
 
 export function serveAsset(req, res, asset) {
   const type = asset.metadata.content_type
-  const body = type === 'text/html' ? Buffer.concat([asset.bytes, Buffer.from(embedBridgeScript())]) : asset.bytes
+  // Bridge text may differ by config; fine for a private tailnet cache.
+  const parents = (process.env.UNBLOCK_RAILS_ORIGINS || '').split(',').map(normalizePublicOrigin).filter(Boolean)
+  const body = type === 'text/html' ? Buffer.concat([asset.bytes, Buffer.from(embedBridgeScript(parents))]) : asset.bytes
   const total = body.length
   const headers = {
     'Content-Type': `${type}${['text/html', 'image/svg+xml'].includes(type) ? '; charset=utf-8' : ''}`,
