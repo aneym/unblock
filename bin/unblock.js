@@ -579,7 +579,7 @@ async function scope(args, mode = 'scope') {
     const [, name, threadId, ...extra] = rest
     if (!name || !THREAD_ID.test(threadId ?? '') || extra.length) fail(usage)
     const link = opts['--link']?.trim()
-    if (link === '') fail('invalid link')
+    if (link === '' || /[\x00-\x1f\x7f]/.test(link)) fail('invalid link')
     const data = await request(`/api/scope/${encodeURIComponent(name)}/threads/${threadId}/typing`, {
       ...(opts['--doing'] !== undefined ? { doing: opts['--doing'] } : {}),
       ...(link !== undefined ? { link } : {}),

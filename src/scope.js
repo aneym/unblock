@@ -490,6 +490,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (body.link !== undefined) {
           if (typeof body.link !== 'string') bad('invalid link')
           body.link = body.link.trim()
+          if (/[\x00-\x1f\x7f]/.test(body.link)) bad('invalid link')
           if (!body.link || body.link.length > 500) bad('invalid link')
           let url
           try { url = new URL(body.link) } catch { bad('invalid link') }
