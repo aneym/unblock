@@ -551,3 +551,5 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .card:not(.on) .msgs:has([data-live-turn]) { display: grid; }
 .card:not(.on) .msgs:has([data-live-turn]) > .msg:not([data-live-turn]):not(.live) { display: none; }
 .card:not(.on) .msg.follow[data-live-turn] { display: grid; }
+
+.live-failed { color: var(--tx2); font-size: 12.5px; background: none; border: 0; }

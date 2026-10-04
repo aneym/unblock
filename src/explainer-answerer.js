@@ -143,8 +143,13 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
     const settle = async (outcome) => {
       if (stopped) return
-      await patch(outcome)
-      item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
+      try {
+        await patch(outcome)
+        item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
+      } catch (error) {
+        item({ status: 'failed', doing: null, error: `Couldn't save the answer: ${error.message}`.slice(0, 200) })
+        log(`unblock: explainer save failed: ${error.message}`)
+      }
       if (!stopped) await postOwner(scope, thread, outcome)
     }
     if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
@@ -171,7 +176,12 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
         partialTimer = null
         partialAt = Date.now()
         if (stopped || settled || !partial) return
-        item({ status: 'streaming', text: partial.split('\n').filter(line => !line.startsWith('NEEDS_OWNER')).join('\n'), doing: null })
+        const lines = partial.split('\n')
+        if (!partial.endsWith('\n')) {
+          const tail = lines.at(-1).trimStart()
+          if (tail && 'NEEDS_OWNER'.startsWith(tail)) lines.pop()
+        }
+        item({ status: 'streaming', text: lines.filter(line => !line.trimStart().startsWith('NEEDS_OWNER')).join('\n').trimEnd(), doing: null })
       }
       const schedulePartial = () => {
         if (stopped || settled) return

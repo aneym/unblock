@@ -11,7 +11,7 @@ import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './sc
 import { kindOf, kindSpec } from './doc-kinds.js'
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
-import { createLiveItems } from './live-items.js'
+import { createLiveItems, MAX_TEXT } from './live-items.js'
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -333,6 +333,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const parts = url.pathname.slice('/api/scope/'.length).split('/')
     const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/scope/')
     const refused = (status, message) => {
+      if (write && status >= 400 && status < 500 && req.method === 'POST' && parts.length === 4 && parts[1] === 'threads' && THREAD_ID.test(parts[2]) && parts[3] === 'reply' && !proxyIdentity(req) && !relayIdentity(req)) {
+        const thread = readScope(parts[0])?.scope?.threads.find(t => t.id === parts[2])
+        const to = thread?.messages.filter(m => m.from === 'alex').at(-1)?.at
+        const item = liveItems.list(parts[0]).find(i => i.id === `${parts[2]}@${to}`)
+        if (item && ['thinking', 'streaming'].includes(item.status)) liveItems.upsert(parts[0], { id: item.id, status: 'failed', error: String(message).slice(0, 200), doing: null })
+      }
       if (write && status >= 400 && status < 500) console.error(`unblock: scope write refused slug=${parts[0]} thread=${parts[1] === 'threads' && THREAD_ID.test(parts[2]) ? parts[2] : '-'} verb=${parts[3] || parts[1] || '-'} status=${status} error=${String(message).replace(/[\r\n]/g, ' ')}`)
     }
     try {
@@ -487,6 +493,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           if (typeof body.link !== 'string' || body.link.length > 500 || !['http:', 'https:'].includes(url.protocol)) bad('invalid link')
         }
       } else if (typeof body.chunk !== 'string' || body.chunk.length > 4000) bad('invalid chunk')
+      const configuredStaleMs = Number(process.env.UNBLOCK_LIVE_STALE_MS)
+      const staleMs = Number.isSafeInteger(configuredStaleMs) && configuredStaleMs > 0 ? configuredStaleMs : 90000
       const by = await readerName(state.scope.pane)
       const previous = writes.get(slug) ?? Promise.resolve()
       const pending = previous.catch(() => {}).then(() => {
@@ -496,9 +504,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (!to) bad('no Alex message')
         const current = liveItems.list(slug).find(item => item.id === `${threadId}@${to}`)
         const patch = { thread: threadId, to, by }
+        if (verb === 'stream' && (current?.text ?? '').length + body.chunk.length > MAX_TEXT) {
+          const error = 'The reply is too long to stream (12000 characters max)'
+          liveItems.upsert(slug, { ...patch, status: 'failed', error, doing: null })
+          bad(error, 413)
+        }
         const item = verb === 'typing'
           ? liveItems.upsert(slug, { ...patch, status: current && current.status !== 'seen' ? current.status : 'thinking', doing: body.doing !== undefined || body.link !== undefined ? { text: body.doing?.trim() ?? '', ...(body.link !== undefined ? { link: body.link } : {}) } : null })
-          : liveItems.upsert(slug, { ...patch, status: 'streaming', text: (current?.text ?? '') + body.chunk, doing: null })
+          : liveItems.upsert(slug, { ...patch, status: 'streaming', text: (current?.text ?? '') + body.chunk, doing: null }, { staleMs })
         return { item }
       })
       writes.set(slug, pending)

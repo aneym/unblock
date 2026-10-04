@@ -1,4 +1,5 @@
 import './scope.css'
+import { placeCards } from './card-layout'
 import '../vendor/page-chrome/v1.css'
 import './page-chrome.css'
 import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
@@ -326,7 +327,7 @@ setInterval(() => {
     if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
-type LiveItem = { id: string; type: 'reply'; thread: string; to: string; by: string; status: 'seen' | 'thinking' | 'streaming' | 'done' | 'failed'; doing: { text: string; link?: string } | null; text: string; seq: number; updated_at: string }
+type LiveItem = { id: string; type: 'reply'; thread: string; to: string; by: string; status: 'seen' | 'thinking' | 'streaming' | 'done' | 'failed'; doing: { text: string; link?: string } | null; text: string; error?: string; seq: number; updated_at: string }
 const items = new Map<string, LiveItem>()
 const liveRank = { seen: 0, thinking: 1, streaming: 2, done: 3, failed: 3 }
 function mergeItem(item: LiveItem) {
@@ -388,6 +389,13 @@ function patchLiveCard(card: HTMLElement, t: Thread, places: Map<string, string>
     let thinking = live.querySelector<HTMLElement>('.thinking')
     if (item.status !== 'thinking' && !(item.status === 'streaming' && item.doing)) thinking?.remove()
     else { if (!thinking) { thinking = document.createElement('p'); thinking.className = 'thinking'; thinking.setAttribute('role', 'status'); live.append(thinking) }; const html = thinkingHtml(item.doing); if (thinking.innerHTML !== html) thinking.innerHTML = html }
+  }
+  let failed = card.querySelector<HTMLElement>('.live-failed')
+  if (item?.status !== 'failed' || replied) failed?.remove()
+  else {
+    card.querySelectorAll('.live, .thinking').forEach(n => n.remove())
+    if (!failed) { failed = document.createElement('p'); failed.className = 'live-failed'; message.after(failed) }
+    failed.textContent = `${item.by || 'the lane'} couldn't reply: ${item.error || 'it stopped'}`
   }
   let queue = card.querySelector<HTMLElement>('.queue-place')
   const place = places.get(t.id)
@@ -748,19 +756,9 @@ function layout() {
     const composerRange = n.classList.contains('composer') && composing && rangeFromAnchor(composing)?.range
     return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
-  const pinned = detachedPin?.id === focused && !composing ? nodes.findIndex(n => n.dataset.t === focused) : -1
-  if (pinned >= 0) {
-    const [node] = nodes.splice(pinned, 1), [at] = want.splice(pinned, 1), before = want.findIndex(w => w > at)
-    nodes.splice(before < 0 ? nodes.length : before, 0, node); want.splice(before < 0 ? want.length : before, 0, at)
-  }
-  const heights = nodes.map(n => n.offsetHeight), top = [...want]
-  let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
-  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
-  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
-  if (top[0] < 8) {
-    top[0] = 8
-    for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
-  }
+  const heights = nodes.map(n => n.offsetHeight)
+  const pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused)
+  const top = placeCards(nodes.map((n, i) => ({ want: want[i], height: n.offsetHeight })), pivot, detachedPin?.id === focused && !composing)
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0
   cards.style.height = `${height}px`; showSelection()
