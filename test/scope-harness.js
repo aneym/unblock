@@ -19,6 +19,7 @@ export async function startScopeHarness(initial) {
     UNBLOCK_STATE_DIR: join(temp, 'state'),
     UNBLOCK_CONFIG_DIR: join(temp, 'config'),
     UNBLOCK_SECRET_BACKEND: 'env',
+    UNBLOCK_ALEX_FEED: '0',
     UNBLOCK_SCOPING_DIR: scopes,
     UNBLOCK_SCOPE_POLL_MS: '100',
     UNBLOCK_SCOPE_RETRY_MS: '100',

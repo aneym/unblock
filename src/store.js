@@ -11,6 +11,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
 
 import { APPROVAL_PURPOSES, matchesProfile, missingRequired } from './schema.js'
 
@@ -286,7 +287,25 @@ export class Store {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(slug, author, kind, qid ?? null, text, who ?? null, at, author === 'alex' ? 'queued' : null, anchor ? JSON.stringify(anchor) : null, reply_to, via, thread, event, words, client_id, JSON.stringify(images))
     const insertTarget = this.#db.prepare('INSERT INTO scope_note_targets (note_id, pane) VALUES (?, ?)')
     for (const pane of new Set(targets)) insertTarget.run(result.lastInsertRowid, pane)
-    return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))
+    const note = this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(result.lastInsertRowid))
+    if (author === 'alex' && process.env.UNBLOCK_ALEX_FEED !== '0') {
+      // The note is already durable; a feed failure must never fail the write.
+      let logged = false
+      const failed = () => {
+        if (logged) return
+        logged = true
+        console.error(`[unblock] Alex feed append failed for scope_notes:${note.id}`)
+      }
+      try {
+        const child = execFile(process.env.UNBLOCK_ALEX_FEED_BIN || join(homedir(), '.local', 'bin', 'alex-said'), ['--feed-append'],
+          { timeout: 5000 }, (error) => { if (error) failed() })
+        child.stdin.on('error', failed)
+        child.stdin.end(JSON.stringify({ source: 'scope', slug: note.slug, thread: note.thread,
+          event: note.event, text: note.text, words: note.words, anchor: note.anchor?.quote ?? null,
+          at: note.at, ref: `scope_notes:${note.id}` }))
+      } catch { failed() }
+    }
+    return note
   }
 
   scopeNoteByClientId(slug, clientId) {
