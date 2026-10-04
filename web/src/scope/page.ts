@@ -326,6 +326,86 @@ setInterval(() => {
     if (item && Date.now() - item.at >= 120_000) line.textContent = `Still sending. Admin will keep trying.${item.id && item.text ? ` "${item.text}"` : ''}`
   })
 }, 10_000)
+type LiveItem = { id: string; type: 'reply'; thread: string; to: string; by: string; status: 'seen' | 'thinking' | 'streaming' | 'done' | 'failed'; doing: { text: string; link?: string } | null; text: string; seq: number; updated_at: string }
+const items = new Map<string, LiveItem>()
+const liveRank = { seen: 0, thinking: 1, streaming: 2, done: 3, failed: 3 }
+function mergeItem(item: LiveItem) {
+  const previous = items.get(item.id)
+  if (previous && (item.seq <= previous.seq || liveRank[item.status] < liveRank[previous.status])) return false
+  items.set(item.id, item); return true
+}
+const latestAlex = (t: Thread) => t.messages.filter(m => m.from === 'alex').at(-1)
+const currentItem = (t: Thread) => { const at = latestAlex(t)?.at; return [...items.values()].find(item => item.thread === t.id && item.to === at) }
+function seenBy(t: Thread) {
+  const item = currentItem(t)
+  if (item) return item.by || 'the lane'
+  const note = [...notes.values()].filter(n => n.thread === t.id && n.from === 'alex' && !['lane_note', 'approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
+  if (note?.read_by) return note.read_by
+  return t.reaction?.emoji === '👀' ? 'the lane' : ''
+}
+function queuePlaces() {
+  const places = new Map<string, string>()
+  if (!scope || docFlags().answerer || (scope as ScopeV2 & { answerer?: string }).answerer === 'on') return places
+  const waiting = scope.threads.filter(t => { const last = latestAlex(t); return t.status === 'open' && last && !t.messages.some(m => m.from !== 'alex' && m.at > last.at) }).sort((a, b) => latestAlex(a)!.at.localeCompare(latestAlex(b)!.at) || Number(a.id.slice(1)) - Number(b.id.slice(1)))
+  if (waiting.length < 2) return places
+  let previous: Thread | undefined
+  for (const t of waiting) {
+    if (['thinking', 'streaming'].includes(currentItem(t)?.status || '')) continue
+    places.set(t.id, previous ? `After ${previous.id}` : 'Next'); previous = t
+  }
+  return places
+}
+function thinkingHtml(doing: LiveItem['doing']) {
+  // Activity links, like answer links, must not turn an item into executable markup.
+  const link = doing?.link && /^https?:\/\//i.test(doing.link) ? doing.link : ''
+  return `<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="doing">${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(doing!.text)}</a>` : esc(doing?.text || 'Thinking')}</span>`
+}
+function patchLiveCard(card: HTMLElement, t: Thread, places: Map<string, string>) {
+  const last = latestAlex(t)
+  const message = [...card.querySelectorAll<HTMLElement>('[data-alex-at]')].find(n => n.dataset.alexAt === last?.at)
+  if (!message) return
+  message.dataset.liveTurn = ''
+  const by = seenBy(t)
+  let reaction = card.querySelector<HTMLElement>('.reaction')
+  if (!by) reaction?.remove()
+  else {
+    if (!reaction) { reaction = document.createElement('span'); reaction.className = 'reaction'; reaction.setAttribute('role', 'img'); reaction.textContent = '👀'; message.append(reaction) }
+    reaction.title = `Seen by ${by}`; reaction.setAttribute('aria-label', reaction.title)
+  }
+  const item = currentItem(t)
+  const pending = card.querySelector<HTMLElement>('.answer.pending')
+  if (item) pending?.remove()
+  const replied = t.messages.some(m => m.from !== 'alex' && m.at > last!.at && !(m as AnswerMessage).pending)
+  const show = item && !replied && ['thinking', 'streaming', 'done'].includes(item.status)
+  let live = card.querySelector<HTMLElement>('.live:not(.pending)')
+  if (!show) live?.remove()
+  else {
+    if (!live) { live = document.createElement('div'); live.className = 'msg live'; live.setAttribute('aria-live', 'polite'); live.innerHTML = `<div class="from">${docFlags().qa ? 'Answer' : 'Lane'}</div>`; message.after(live) }
+    live.dataset.status = item.status
+    let text = live.querySelector<HTMLElement>('.live-text')
+    if (!item.text) text?.remove()
+    else { if (!text) { text = document.createElement('div'); text.className = 'live-text answer-body'; live.append(text) }; if (text.dataset.source !== item.text) { text.innerHTML = answerHtml(item.text); text.dataset.source = item.text } }
+    let thinking = live.querySelector<HTMLElement>('.thinking')
+    if (item.status !== 'thinking' && !(item.status === 'streaming' && item.doing)) thinking?.remove()
+    else { if (!thinking) { thinking = document.createElement('p'); thinking.className = 'thinking'; thinking.setAttribute('role', 'status'); live.append(thinking) }; const html = thinkingHtml(item.doing); if (thinking.innerHTML !== html) thinking.innerHTML = html }
+  }
+  let queue = card.querySelector<HTMLElement>('.queue-place')
+  const place = places.get(t.id)
+  if (!place) queue?.remove()
+  else { if (!queue) { queue = document.createElement('p'); queue.className = 'queue-place'; message.after(queue) }; queue.textContent = place }
+  if (by) { const chip = card.querySelector('.delivery-chip'); if (chip && /^(Sent|Read by|Seen)/.test(chip.textContent || '')) chip.remove() }
+}
+function patchLive() {
+  if (!scope) return
+  const places = queuePlaces(); let changed = false
+  document.querySelectorAll<HTMLElement>('.card[data-t]').forEach(card => {
+    const t = scope!.threads.find(t => t.id === card.dataset.t); if (!t) return
+    const height = card.offsetHeight; patchLiveCard(card, t, places); changed ||= height !== card.offsetHeight
+  })
+  const line = inflight(), titleLine = doc.querySelector<HTMLElement>('.inflight')
+  if (titleLine && titleLine.textContent !== line) { titleLine.textContent = line; titleLine.hidden = !line; changed = true }
+  if (changed) layout()
+}
 type CommentState = 'Sending…' | 'Sent' | `Read by ${string}` | 'Seen 👀' | 'Answered' | 'Retrying' | 'Not sent' | 'No lane pane'
 const commentStates = new Map<string, { state: CommentState; takenAt?: number; timer?: number }>()
 function delivery(id: string): CommentState | '' {
@@ -334,14 +414,13 @@ function delivery(id: string): CommentState | '' {
   if (!note) {
     const state = (thread as Thread & { delivery?: string })?.delivery
     if (state === 'in_doc') return 'Answered'
-    if (state !== 'with_lane' && state !== 'queued') return thread?.reaction?.emoji === '👀' ? 'Seen 👀' : ''
+    if (state !== 'with_lane' && state !== 'queued') return thread && seenBy(thread) ? 'Seen 👀' : ''
     const lastAlex = thread?.messages.filter(m => m.from === 'alex').at(-1)
     const taken = lastAlex && (thread?.messages.some(m => m.from !== 'alex' && m.at > lastAlex.at) || (section as DocSection & { updated_at?: string })?.updated_at! > lastAlex.at) || thread?.status === 'resolved' && thread.resolution?.confirmed_at
-    return taken ? 'Answered' : thread?.reaction?.emoji === '👀' ? 'Seen 👀' : state === 'queued' ? 'Sending…' : 'Sent'
+    return taken ? 'Answered' : thread && seenBy(thread) ? 'Seen 👀' : state === 'queued' ? 'Sending…' : 'Sent'
   }
   if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'Answered'
-  if (thread?.reaction?.emoji === '👀' && !['retrying', 'failed', 'no_pane'].includes(note.delivery)) return 'Seen 👀'
-  if (note.delivery === 'delivered' && note.read_at && note.read_by) return `Read by ${note.read_by}`
+  if (thread && seenBy(thread) && !['retrying', 'failed', 'no_pane'].includes(note.delivery)) return 'Seen 👀'
   return ({ held: 'Sending…', delivered: 'Sent', queued: 'Sending…', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
 }
 function updateCommentStates() {
@@ -360,16 +439,16 @@ function updateCommentStates() {
 }
 function deliveryChip(id: string) {
   const entry = commentStates.get(id)
-  return entry && (entry.state !== 'Answered' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${esc(entry.state)}</span>` : ''
+  return entry && !entry.state.startsWith('Read by ') && entry.state !== 'Seen 👀' && (entry.state !== 'Answered' || entry.takenAt && Date.now() - entry.takenAt < 30_000) ? `<span class="delivery-chip">${esc(entry.state)}</span>` : ''
 }
 function inflight() {
   const states = scope!.threads.map(t => delivery(t.id))
   const count = (state: CommentState) => states.filter(s => s === state).length
   const read = states.filter(s => s.startsWith('Read by ')).length
-  const sending = count('Sending…'), sent = count('Sent'), seen = count('Seen 👀'), answered = count('Answered')
+  const sending = count('Sending…'), sent = count('Sent'), seen = count('Seen 👀') + read, answered = count('Answered')
   if (!read && !sending && !sent && !seen) return ''
-  const total = read + sending + sent + seen + answered
-  return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen 👀'], [read, 'Read'], [sent, 'Sent'], [sending, 'Sending…']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
+  const total = sending + sent + seen + answered
+  return `${total} comment${total === 1 ? '' : 's'} · ` + [[answered, 'Answered'], [seen, 'Seen'], [sent, 'Sent'], [sending, 'Sending…']].filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ')
 }
 const deleting = new Set<string>(), copiedLinks = new Set<string>()
 const checkButton = '<button type="button" class="check" data-action="resolve" aria-label="Resolve" title="Resolve"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4 10-10"/></svg></button>'
@@ -379,9 +458,9 @@ const answerBody = (text: string) => `<div class="answer-body">${answerHtml(text
 function answerMessageHtml(message: AnswerMessage, latest: boolean) {
   const pending = message.pending === true, text = (message.text || '').trim()
   const partial = pending && text && !/^Answering(?:…|\.\.\.)?$/.test(text) ? message.text : ''
-  const body = pending ? `${partial ? answerBody(partial) : ''}<p class="answer-wait" role="status">Answering</p>` : answerBody(message.text)
+  const body = pending ? `${partial ? `<div class="live-text answer-body">${answerHtml(partial)}</div>` : ''}<p class="thinking" role="status">${thinkingHtml(null)}</p>` : answerBody(message.text)
   const note = message.needs_owner || message.handoff ? '<p class="answer-note">Sent to the owner</p>' : ''
-  return `<div class="msg answer${pending ? ' pending' : ''}${latest ? ' latest' : ' only-on'}"><div class="from">Answer${pending ? '' : `<span>${time(message.at)}</span>`}</div>${body}${note}${imageStrip(message.images)}</div>`
+  return `<div${pending ? ' data-status="thinking" aria-live="polite"' : ''} class="msg answer${pending ? ' pending live' : ''}${latest ? ' latest' : ' only-on'}"><div class="from">Answer${pending ? '' : `<span>${time(message.at)}</span>`}</div>${body}${note}${imageStrip(message.images)}</div>`
 }
 // One exchange after another, in order. A card that is not focused shows the question, the follow-up that the newest
 // answer replies to (if any) and the start of that answer; focusing it shows the whole thread.
@@ -394,10 +473,10 @@ function explainerCardHtml(t: Thread) {
   const thread = messages.slice(1).map((message, k) => {
     const i = k + 1
     if (message.from === 'agent' && message.answerer) return answerMessageHtml(message, i === newestAt)
-    if (message.from === 'alex') return `<div class="msg follow${i === newestAt - 1 ? '' : ' only-on'}"><div class="q">${esc(message.text)}</div>${imageStrip(message.images)}</div>`
+    if (message.from === 'alex') return `<div data-alex-at="${esc(message.at)}" class="msg follow${i === newestAt - 1 ? '' : ' only-on'}"><div class="q">${esc(message.text)}</div>${imageStrip(message.images)}</div>`
     return `<div class="msg only-on"><div class="from">Lane<span>${time(message.at)}</span></div><div>${esc(message.text)}</div>${imageStrip(message.images)}</div>`
   }).join('')
-  return `<div class="head"><span class="kind"><span class="who">You asked</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q">${esc(messages[0]?.text)}</div>${imageStrip(messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}${thread}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : reply}`
+  return `<div class="head"><span class="kind"><span class="who">You asked</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q" data-alex-at="${messages[0]?.from === 'alex' ? esc(messages[0].at) : ''}">${esc(messages[0]?.text)}</div>${imageStrip(messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}${thread}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : reply}`
 }
 function threadMenu(t: Thread) {
   if (!menus.has(t.id)) return ''
@@ -418,12 +497,12 @@ function openMenu(id: string, point?: { x: number; y: number }) {
   }
   menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
 }
-function cardHtml(t: Thread) {
+function baseCardHtml(t: Thread) {
   if (docFlags().qa) return explainerCardHtml(t)
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' && !t.recommendation ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
@@ -438,12 +517,17 @@ function cardHtml(t: Thread) {
   }
   const newRec = !t.rejected_at && t.messages.some(m => m.kind === 'option')
   const state = [copiedLinks.has(t.id) ? 'Link copied' : deliveryChip(t.id), t.anchor.embed ? `<button class="btn small" data-action="jump-text">${missing.has(t.id) ? 'Embed changed' : 'Embed ' + esc(t.anchor.embed.src)} · <q>${esc(t.anchor.embed.quote)}</q></button>` : t.anchor.general ? 'General comment' : t.anchor.t != null ? `<span class="moment">at ${moment(t.anchor.t)}</span>` : ''].filter(Boolean).join(' · ')
-  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
+  return `<div class="head"><span class="kind"><span class="dot ${isOpen ? t.kind : 'resolved'}"></span><span class="who">${label}</span></span>${unread(t) ? '<span class="unread-dot" aria-label="New answer"></span>' : ''}<span class="when">${time(t.created_at)}</span>${isOpen ? checkButton : ''}${moreButton}</div>${menu}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}
   ${isOpen && t.recommendation ? `<div class="rec${newRec ? ' new' : ''}"><span class="lbl">Recommended</span><span class="txt">${esc(t.recommendation)}</span></div>` : ''}
   ${isOpen && t.kind === 'question' && t.options?.length ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<div class="other-option"><span>${esc(option)}</span><button class="btn small" data-action="option" data-option="${i + 1}">Pick this</button></div>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
-  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
+  ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div${m.from === 'alex' ? ` data-alex-at="${esc(m.at)}"` : ''} class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
   ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+}
+function cardHtml(t: Thread) {
+  const card = document.createElement('div'); card.innerHTML = baseCardHtml(t)
+  patchLiveCard(card, t, queuePlaces())
+  return card.innerHTML
 }
 function card(t: Thread) {
   const node = document.createElement('div'); node.className = `card ${t.kind} ${t.status}${docFlags().qa ? ' explainer' : ''}${unread(t) ? ' unread' : ''}${focused === t.id ? ' on' : ''}`; node.dataset.t = t.id; if (sending.has(t.id)) node.dataset.sending = 'true'; node.innerHTML = cardHtml(t); return node
@@ -1239,7 +1323,7 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; error?: string }) { if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
@@ -1263,6 +1347,7 @@ async function start() {
   if (boot.events === false) { await poll(); setInterval(() => void poll(), 2000); return }
   accept(await api(endpoint)); goodRead()
   const events = new EventSource(`${endpoint}/events`)
+  events.addEventListener('item', e => { if (mergeItem(JSON.parse((e as MessageEvent).data))) patchLive(); goodRead() })
   events.addEventListener('state', e => { accept(JSON.parse((e as MessageEvent).data)); goodRead() })
   events.addEventListener('scope', e => { const data = JSON.parse((e as MessageEvent).data); accept(data.scope ? data : { scope: data }); goodRead() })
   events.addEventListener('note', e => { const note = JSON.parse((e as MessageEvent).data); notes.set(note.id, note); render(); goodRead() })
