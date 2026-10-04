@@ -545,7 +545,8 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 .dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes live-pulse { 0%, 80%, 100% { opacity: .35; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .dots i { animation: none; } }
-.queue-place { font-size: 12px; color: var(--tx3); white-space: nowrap; }
+/* Floats on the question's first line so a waiting card grows no taller and the head keeps its time. */
+.queue-place { float: right; margin-left: 8px; font-size: 12px; font-weight: 400; line-height: inherit; color: var(--tx3); white-space: nowrap; }
 /* The latest turn remains visible even when older exchanges are folded. */
 .card:not(.on) .msgs:has([data-live-turn]) { display: grid; }
 .card:not(.on) .msgs:has([data-live-turn]) > .msg:not([data-live-turn]):not(.live) { display: none; }

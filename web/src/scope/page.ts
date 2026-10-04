@@ -392,7 +392,7 @@ function patchLiveCard(card: HTMLElement, t: Thread, places: Map<string, string>
   let queue = card.querySelector<HTMLElement>('.queue-place')
   const place = places.get(t.id)
   if (!place) queue?.remove()
-  else { if (!queue) { queue = document.createElement('span'); queue.className = 'queue-place'; card.querySelector('.head .kind')?.after(queue) }; queue.textContent = place }
+  else { if (!queue) { queue = document.createElement('span'); queue.className = 'queue-place'; const q = card.querySelector('.q'); if (q) q.prepend(queue); else card.querySelector('.head')?.append(queue) }; queue.textContent = place }
   if (by) { const chip = card.querySelector('.delivery-chip'); if (chip && /^(Sent|Read by|Seen)/.test(chip.textContent || '')) chip.remove() }
 }
 function patchLive() {
