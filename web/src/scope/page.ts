@@ -622,7 +622,7 @@ function render() {
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
   document.title = scope.title; syncChrome(); highlight()
-  if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null) detachedPin = { id: pin.id, top: pinnedLayoutTop }
+  if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null && !composing) detachedPin = { id: pin.id, top: pinnedLayoutTop }
   syncFigureFocus(); renderCards(); renderFeed()
   const restoreReference = () => {
     if (pin && focused === pin.id && !phone() && !composing) {
@@ -652,8 +652,10 @@ function renderCards() {
   const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
   const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused)
   const focusedNode = focusedCard()
-  if (detachedPin?.id !== focused || !missing.has(focused || '')) detachedPin = null
-  if (!phone() && focusedNode && focused && missing.has(focused) && !detachedPin) detachedPin = { id: focused, top: focusedNode.parentElement === cards ? parseFloat(focusedNode.style.top) || 8 : focusedNode.getBoundingClientRect().top - cards.getBoundingClientRect().top }
+  // While a new comment is being written the composer leads; a detached focused card goes to the Detached list as on main.
+  const holds = (id: string) => !phone() && !composing && id === focused
+  if (detachedPin?.id !== focused || !missing.has(focused || '') || composing) detachedPin = null
+  if (!phone() && !composing && focusedNode && focused && missing.has(focused) && !detachedPin) detachedPin = { id: focused, top: focusedNode.parentElement === cards ? parseFloat(focusedNode.style.top) || 8 : focusedNode.getBoundingClientRect().top - cards.getBoundingClientRect().top }
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
@@ -663,11 +665,11 @@ function renderCards() {
   if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
   const makeCard = (t: Thread) => {
     const fresh = card(t)
-    if (!phone() && t.id === focused && missing.has(t.id)) { const note = document.createElement('p'); note.className = 'anchor-note'; note.textContent = 'Section changed'; fresh.append(note) }
+    if (holds(t.id) && missing.has(t.id)) { const note = document.createElement('p'); note.className = 'anchor-note'; note.textContent = 'Section changed'; fresh.append(note) }
     const existing = kept?.dataset.t === t.id ? kept : focusedNode?.dataset.t === t.id ? focusedNode : null
     return existing ? refreshCard(existing, fresh) : fresh
   }
-  const mainNodes: Node[] = visible.filter(t => !missing.has(t.id) || !phone() && t.id === focused).map(makeCard)
+  const mainNodes: Node[] = visible.filter(t => !missing.has(t.id) || holds(t.id)).map(makeCard)
   if (composer?.parentElement === cards) {
     const range = composing && !composing.general && rangeFromAnchor(composing)?.range
     const at = !range ? 0 : mainNodes.findIndex(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return mark && range.comparePoint(mark.firstChild!, 0) > 0 })
@@ -675,7 +677,7 @@ function renderCards() {
   }
   if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) mainNodes.push(kept)
   replaceAround(cards, mainNodes, kept?.parentElement === cards ? kept : composer)
-  const gone = visible.filter(t => missing.has(t.id) && (phone() || t.id !== focused))
+  const gone = visible.filter(t => missing.has(t.id) && !holds(t.id))
   const detachedNodes: Node[] = gone.length ? [document.createTextNode('Detached · the text it was on changed'), ...gone.map(makeCard)] : []
   if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept) && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) detachedNodes.push(kept)
   replaceAround(detached, detachedNodes, kept)
@@ -736,7 +738,7 @@ function layout() {
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
   for (const node of nodes) node.style.transitionProperty = node.dataset.t === focused ? 'background, border-color, box-shadow' : ''
   const want = nodes.map(n => {
-    if (detachedPin && n.dataset.t === focused && detachedPin.id === focused) return detachedPin.top
+    if (detachedPin && !composing && n.dataset.t === focused && detachedPin.id === focused) return detachedPin.top
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
     if (queued?.anchor?.general || n.classList.contains('composer') && composing?.general) return 8
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
@@ -746,7 +748,7 @@ function layout() {
     const composerRange = n.classList.contains('composer') && composing && rangeFromAnchor(composing)?.range
     return Math.max(8, (n.classList.contains('composer') ? composerRange ? composerRange.getBoundingClientRect().top + scrollY : selectionTop : range ? range.getBoundingClientRect().top + scrollY : anchor ? anchor.getBoundingClientRect().top + scrollY : base + scrollY) - scrollY - base - (n.classList.contains('composer') ? 0 : 12))
   })
-  const pinned = detachedPin?.id === focused ? nodes.findIndex(n => n.dataset.t === focused) : -1
+  const pinned = detachedPin?.id === focused && !composing ? nodes.findIndex(n => n.dataset.t === focused) : -1
   if (pinned >= 0) {
     const [node] = nodes.splice(pinned, 1), [at] = want.splice(pinned, 1), before = want.findIndex(w => w > at)
     nodes.splice(before < 0 ? nodes.length : before, 0, node); want.splice(before < 0 ? want.length : before, 0, at)
