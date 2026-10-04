@@ -25,8 +25,10 @@ const phone = () => matchMedia('(max-width:899px)').matches
 const storage = { get(key: string) { try { return localStorage.getItem(key) } catch { return null } }, set(key: string, value: string) { try { localStorage.setItem(key, value) } catch {} }, remove(key: string) { try { localStorage.removeItem(key) } catch {} } }
 const time = (iso: string) => `${new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET`
 let scope: ScopeV2 | null = null, focused: string | null = null, initialized = false
+let detachedPin: { id: string; top: number } | null = null
+function focusedCard() { return [...cards.querySelectorAll<HTMLElement>('.card[data-t]'), ...detached.querySelectorAll<HTMLElement>('.card[data-t]')].find(n => n.dataset.t === focused) }
 let showResolved = storage.get('scope:showResolved') === 'true'
-const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 0, showResolved, onPrev: () => step(-1), onNext: () => step(1), onShowResolved: checked => { showResolved = checked; storage.set('scope:showResolved', String(checked)); renderCards() } })
+const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 0, showResolved, onPrev: () => step(-1), onNext: () => step(1), onShowResolved: checked => { showResolved = checked; storage.set('scope:showResolved', String(checked)); if (!checked && scope?.threads.find(t => t.id === focused)?.status !== 'open') focused = null; renderCards() } })
 let chrome: ReturnType<typeof mountPage> | null = null, chromeSignature = ''
 const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rails Admin' }
 function hostDrawsApprove() { try { return window.frameElement?.getAttribute('data-approve-host') === '1' } catch { return false } }
@@ -476,6 +478,11 @@ function signature(s: DocSection, line: string) {
 function render() {
   if (!scope) return
   const active = document.activeElement as HTMLTextAreaElement | null, activeKey = active?.dataset.draft, caret = active?.selectionStart, caretEnd = active?.selectionEnd, direction = active?.selectionDirection
+  const pinnedCard = !phone() && !composing ? focusedCard() : null
+  const pinnedRect = pinnedCard?.getBoundingClientRect()
+  const pinnedLayoutTop = pinnedCard ? pinnedRect!.top - cards.getBoundingClientRect().top : null
+  const pin = pinnedCard && pinnedRect && pinnedRect.bottom > 0 && pinnedRect.top < innerHeight ? { id: focused, top: pinnedRect.top } : null
+  document.documentElement.style.overflowAnchor = pin ? 'none' : ''
   const first = !initialized
   if (first) { focused = phone() ? null : open().find(t => t.anchor.section !== 'ask')?.id || null; initialized = true }
   updateCommentStates()
@@ -529,14 +536,20 @@ function render() {
   sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
-  document.title = scope.title; syncChrome(); highlight(); syncFigureFocus(); renderCards(); renderFeed()
-  const restoreReading = () => {
+  document.title = scope.title; syncChrome(); highlight()
+  if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null) detachedPin = { id: pin.id, top: pinnedLayoutTop }
+  syncFigureFocus(); renderCards(); renderFeed()
+  const restoreReference = () => {
+    if (pin && focused === pin.id && !phone() && !composing) {
+      const node = focusedCard()
+      if (node) { const difference = node.getBoundingClientRect().top - pin.top; if (Math.abs(difference) > 1) scrollBy({ top: difference, behavior: 'instant' }); return }
+    }
     const section = readingSection ? document.getElementById(readingSection) : null
     const anchor = composerAnchor && rangeFromAnchor(composerAnchor)?.range || (reading?.isConnected ? reading : section?.querySelectorAll('h1,h2,p,li,figure,pre,table')[readingIndex] || section?.querySelector('h1,h2'))
     if (anchor && readingTop != null) { const difference = anchor.getBoundingClientRect().top - readingTop; if (Math.abs(difference) > 1) scrollBy({ top: difference, behavior: 'instant' }) }
   }
-  restoreReading()
-  for (const node of redrawn) void renderMermaid(node, () => { layout(); restoreReading() })
+  restoreReference()
+  for (const node of redrawn) void renderMermaid(node, () => { layout(); restoreReference() })
   if (keepSelection) {
     const range = rangeFromAnchor(keepSelection)?.range
     if (range && sel) sel.setBaseAndExtent(backward ? range.endContainer : range.startContainer, backward ? range.endOffset : range.startOffset, backward ? range.startContainer : range.endContainer, backward ? range.startOffset : range.endOffset)
@@ -552,16 +565,24 @@ function renderCards() {
   syncThreadClasses()
   const byId = new Map(scope?.threads.map(t => [t.id, t]))
   const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
-  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => isExplainer() || t.status === 'open' || showResolved)
+  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => isExplainer() || t.status === 'open' || showResolved || t.id === focused)
+  const focusedNode = focusedCard()
+  if (detachedPin?.id !== focused || !missing.has(focused || '')) detachedPin = null
+  if (!phone() && focusedNode && focused && missing.has(focused) && !detachedPin) detachedPin = { id: focused, top: focusedNode.parentElement === cards ? parseFloat(focusedNode.style.top) || 8 : focusedNode.getBoundingClientRect().top - cards.getBoundingClientRect().top }
   const active = document.activeElement as HTMLElement | null
   const activeCard = active?.matches('textarea[data-draft]') ? active.closest<HTMLElement>('.card') : null
   const retained = [...cards.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea'), ...detached.querySelectorAll<HTMLTextAreaElement>('[data-retained-reply] textarea')].find(input => input.value.trim())?.closest<HTMLElement>('.card')
-  const kept = activeCard && (activeCard.parentElement === cards || activeCard.parentElement === detached) ? activeCard : retained || null
+  const kept = activeCard && (activeCard.parentElement === cards || activeCard.parentElement === detached) ? activeCard : retained || focusedNode || null
   const composer = composing ? document.querySelector<HTMLElement>('.card.composer') : null
   const keptThread = kept?.dataset.t && scope?.threads.find(t => t.id === kept.dataset.t)
   if (keptThread && !visible.includes(keptThread)) refreshCard(kept!, card(keptThread))
-  const makeCard = (t: Thread) => kept?.dataset.t === t.id ? refreshCard(kept, card(t)) : card(t)
-  const mainNodes: Node[] = visible.filter(t => !missing.has(t.id)).map(makeCard)
+  const makeCard = (t: Thread) => {
+    const fresh = card(t)
+    if (!phone() && t.id === focused && missing.has(t.id)) { const note = document.createElement('p'); note.className = 'anchor-note'; note.textContent = 'Section changed'; fresh.append(note) }
+    const existing = kept?.dataset.t === t.id ? kept : focusedNode?.dataset.t === t.id ? focusedNode : null
+    return existing ? refreshCard(existing, fresh) : fresh
+  }
+  const mainNodes: Node[] = visible.filter(t => !missing.has(t.id) || !phone() && t.id === focused).map(makeCard)
   if (composer?.parentElement === cards) {
     const range = composing && !composing.general && rangeFromAnchor(composing)?.range
     const at = !range ? 0 : mainNodes.findIndex(n => { const mark = marks((n as HTMLElement).dataset.t!)[0]; return mark && range.comparePoint(mark.firstChild!, 0) > 0 })
@@ -569,7 +590,7 @@ function renderCards() {
   }
   if (kept?.parentElement === cards && !mainNodes.includes(kept) && kept.dataset.t && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) mainNodes.push(kept)
   replaceAround(cards, mainNodes, kept?.parentElement === cards ? kept : composer)
-  const gone = visible.filter(t => missing.has(t.id))
+  const gone = visible.filter(t => missing.has(t.id) && (phone() || t.id !== focused))
   const detachedNodes: Node[] = gone.length ? [document.createTextNode('Detached · the text it was on changed'), ...gone.map(makeCard)] : []
   if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept) && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) detachedNodes.push(kept)
   replaceAround(detached, detachedNodes, kept)
@@ -584,8 +605,7 @@ function renderCards() {
   const chip = $('#resolvedChip'); chip.textContent = resolvedLabel; chip.hidden = isExplainer() || resolvedCount === 0; chip.setAttribute('aria-pressed', String(showResolved))
   if (!composing && phone() && document.body.classList.contains('sheet-open')) {
     const thread = scope?.threads.find(t => t.id === focused)
-    if (!isExplainer() && thread && thread.status !== 'open' && !showResolved && !getDraft(thread.id).trim() && !getImages(thread.id).length && !uploading.get(thread.id)) closeSheet()
-    else renderSheet()
+    if (thread) renderSheet()
   }
   updateCount(); layout(); disablePending()
 }
@@ -629,7 +649,9 @@ function layout() {
   if (phone()) return
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
+  for (const node of nodes) node.style.transitionProperty = node.dataset.t === focused ? 'background, border-color, box-shadow' : ''
   const want = nodes.map(n => {
+    if (detachedPin && n.dataset.t === focused && detachedPin.id === focused) return detachedPin.top
     const queued = [...sending.values()].find(item => !item.id && item.clientId === n.dataset.client), range = queued?.anchor && rangeFromAnchor(queued.anchor)?.range
     if (queued?.anchor?.general || n.classList.contains('composer') && composing?.general) return 8
     const mark = marks(n.dataset.t!)[0], anchor = mark && !hidden(mark) && mark.getClientRects().length ? figureFor(mark) || mark : mark?.closest('details:not([open])')?.querySelector('summary')
@@ -641,11 +663,23 @@ function layout() {
   })
   const heights = nodes.map(n => n.offsetHeight), top = [...want]
   let pivot = nodes.findIndex(n => composing ? n.classList.contains('composer') : n.dataset.t === focused); if (pivot < 0) pivot = 0
-  for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
-  for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
-  if (top[0] < 8) {
-    top[0] = 8
-    for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
+  if (!composing && nodes[pivot]?.dataset.t === focused) {
+    const below: number[] = []
+    let above = top[pivot], bottom = top[pivot] + heights[pivot] + 10
+    for (let i = pivot - 1; i >= 0; i--) {
+      const candidate = Math.min(want[i], above - heights[i] - 10)
+      if (candidate < 8) below.unshift(i)
+      else { top[i] = candidate; above = candidate }
+    }
+    below.push(...nodes.map((_, i) => i).slice(pivot + 1))
+    for (const i of below) { top[i] = Math.max(want[i], bottom); bottom = top[i] + heights[i] + 10 }
+  } else {
+    for (let i = pivot + 1; i < nodes.length; i++) top[i] = Math.max(want[i], top[i - 1] + heights[i - 1] + 10)
+    for (let i = pivot - 1; i >= 0; i--) top[i] = Math.min(want[i], top[i + 1] - heights[i] - 10)
+    if (top[0] < 8) {
+      top[0] = 8
+      for (let i = 1; i < nodes.length; i++) top[i] = Math.max(top[i], top[i - 1] + heights[i - 1] + 10)
+    }
   }
   nodes.forEach((n, i) => n.style.top = `${top[i]}px`)
   const height = nodes.length ? Math.max(...top.map((t, i) => t + heights[i])) + 20 : 0
@@ -1160,7 +1194,7 @@ document.addEventListener('click', e => {
   if (button) { void action(button.dataset.action!, button); return }
   const go = target.closest<HTMLElement>('[data-go]'); if (go) { step(Number(go.dataset.go)); return }
   const mark = target.closest<HTMLElement>('mark[data-t]'); if (mark && (!mark.classList.contains('resolved') || isExplainer() || showResolved)) { focus(mark.dataset.t!); seekMoment(mark.dataset.t!); return }
-  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
+  const node = target.closest<HTMLElement>('.card[data-t]'); if (node && !target.closest('textarea,button,a,summary,details')) { if (node.dataset.t === focused && node.classList.contains('on')) return; focus(node.dataset.t!, true); seekMoment(node.dataset.t!); if (!phone()) focusBox(node.dataset.t!) }
 })
 document.addEventListener('input', e => { const input = e.target as HTMLTextAreaElement; if (!input.dataset.draft) return; setDraft(input.dataset.draft, input.value); const reply = input.closest('.card')?.querySelector<HTMLButtonElement>('[data-action="reply"]'); if (reply) { reply.hidden = !phone() && !input.value.trim() && !getImages(input.dataset.draft).length; reply.disabled = pending.has(input.dataset.draft) || !!uploading.get(input.dataset.draft) || !input.value.trim() && !getImages(input.dataset.draft).length }; layout() })
 let selectionTimer = 0
@@ -1169,7 +1203,7 @@ $('#chipPrev').onclick = () => step(-1)
 $('#chipNext').onclick = () => step(1)
 $('#openLabel').onclick = () => { const list = isExplainer() ? navList() : open(); focus(list.some(t => t.id === focused) ? focused : list[0]?.id || null, true) }
 $('#scrim').onclick = closeSheet
-$('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); renderCards() }
+$('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('scope:showResolved', String(showResolved)); if (!showResolved && scope?.threads.find(t => t.id === focused)?.status !== 'open') focused = null; renderCards() }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('button,a,summary,select,textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && focused && !phone()) { e.preventDefault(); focusBox(focused) } })
 addEventListener('resize', () => { layout(); showSelection() }); document.fonts.ready.then(layout)
@@ -1181,7 +1215,7 @@ new ResizeObserver(() => {
   cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layout)
 }).observe(doc)
 let scrollTimer = 0
-addEventListener('scroll', () => { selectionScrolling = true; showSelection(); clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { selectionScrolling = false; if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; if (focused && threadOnScreen(focused)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 150) })
+addEventListener('scroll', () => { selectionScrolling = true; showSelection(); clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { selectionScrolling = false; if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; const cardRect = !phone() && focusedCard()?.getBoundingClientRect(); if (focused && (threadOnScreen(focused) || cardRect && cardRect.bottom > 0 && cardRect.top < innerHeight)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 150) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
 function voiceUi(ui: ScopeVoiceUi) { if (ui.do === 'focus_thread') focus(ui.thread, true); if (ui.do === 'focus_section') document.getElementById(ui.section)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); if (ui.do === 'show_resolved') { showResolved = ui.on; storage.set('scope:showResolved', String(showResolved)); renderCards() }; if (ui.do === 'scroll') scrollBy({ top: innerHeight * .8 * (ui.direction === 'up' ? -1 : 1), behavior: 'smooth' }) }
 const feedRows: (ScopeFeedLine & { at: Date })[] = []
