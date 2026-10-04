@@ -15,6 +15,10 @@ export function appOf(scope) {
   return 'rails-admin'
 }
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
+export const DOC_KINDS = [...KIND_IDS, 'writing']
+export const DOC_WHERES = ['published', 'sent', 'posted', 'submitted']
+const VERSION_KEYS = ['version', 'revision', 'at', 'by', 'where', 'target', 'client_id']
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
 const slugify = (text) => {
   let id = String(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'section'
@@ -185,7 +189,24 @@ export function validateScope(scope) {
         && (asset.type !== 'mock' || (assetId(asset.light) && (asset.dark === null || assetId(asset.dark)) && assetId(asset.html) && ['desktop', 'phone'].includes(asset.frame))), 'invalid asset metadata')
     }
   }
-  if (scope.kind !== undefined) check(KIND_IDS.includes(scope.kind), 'invalid kind')
+  if (scope.kind !== undefined) check(DOC_KINDS.includes(scope.kind), 'invalid kind')
+  if (scope.state !== undefined) check(scope.state === 'draft' || scope.state === 'published', 'invalid state')
+  if (scope.parent !== undefined) check(typeof scope.parent === 'string' && SLUG.test(scope.parent), 'invalid parent')
+  if (scope.destination !== undefined) {
+    const destination = scope.destination
+    check(object(destination) && Object.keys(destination).every((key) => key === 'where' || key === 'target') && DOC_WHERES.includes(destination.where)
+      && (destination.target === undefined || (typeof destination.target === 'string' && destination.target.length >= 1 && destination.target.length <= 200)), 'invalid destination')
+  }
+  if (scope.versions !== undefined) {
+    check(Array.isArray(scope.versions), 'invalid versions')
+    if (Array.isArray(scope.versions)) for (const [index, stamp] of scope.versions.entries()) {
+      check(object(stamp) && Object.keys(stamp).every((key) => VERSION_KEYS.includes(key)) && stamp.version === index + 1
+        && Number.isInteger(stamp.revision) && stamp.revision >= 1 && typeof stamp.at === 'string' && Number.isFinite(Date.parse(stamp.at))
+        && (stamp.by === 'alex' || stamp.by === 'agent') && DOC_WHERES.includes(stamp.where)
+        && (stamp.target === undefined || (typeof stamp.target === 'string' && stamp.target.length >= 1 && stamp.target.length <= 200))
+        && (stamp.client_id === undefined || (typeof stamp.client_id === 'string' && CLIENT_ID.test(stamp.client_id))), 'invalid version')
+    }
+  }
   if (scope.answerer !== undefined) check(scope.answerer === 'on' || scope.answerer === 'off', 'invalid answerer')
   if (scope.sources !== undefined) check(Array.isArray(scope.sources) && scope.sources.length >= 1 && scope.sources.length <= 8 && scope.sources.every((dir) => typeof dir === 'string' && isAbsolute(dir)), 'invalid sources')
   if (scope.approve_default !== undefined) check(['try', 'ship'].includes(scope.approve_default), 'invalid approve_default')

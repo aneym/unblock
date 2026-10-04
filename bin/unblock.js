@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** The CLI is a local client. Only reveal resolves a secret, and only here. */
+import { randomUUID } from 'node:crypto'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -13,8 +14,8 @@ import { lintDoc } from '../src/scope-lint.js'
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
-import { KIND_IDS, kindOf } from '../src/doc-kinds.js'
-import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope } from '../src/scope-doc.js'
+import { kindOf } from '../src/doc-kinds.js'
+import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES } from '../src/scope-doc.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -493,7 +494,7 @@ async function scopeLinks(health, slug) {
 }
 
 const SCOPE_USAGE = `unblock scope [list|url|notes|threads]           scoping docs and anchored threads
-unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|report] [--sources <dir>...] [--answerer on|off]
+unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|writing|report] [--parent <slug>] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
@@ -505,6 +506,8 @@ unblock scope resolve <slug> T# [--decision "text"]
 unblock scope reopen <slug> T# [--reason "text"]
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
 unblock scope unapprove <slug> --reason "<why>"
+unblock scope publish <slug> [--where published|sent|posted|submitted] [--target "text"]
+unblock scope destination <slug> --where published|sent|posted|submitted [--target "text"]
 unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope kpi <slug> set --from <file.json>
 unblock scope kpi <slug> list [--json]
@@ -517,7 +520,7 @@ unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>
 function scopeNew(args, usage, mode = 'scope') {
   const slugRe = /^[a-z0-9][a-z0-9-]{0,63}$/
   const paneRe = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
-  let pane, app, title, kind = mode === 'explain' ? 'explainer' : undefined, answerer
+  let pane, app, title, kind = mode === 'explain' ? 'explainer' : undefined, answerer, parent
   const sources = []
   const words = []
   for (let i = 1; i < args.length; i++) {
@@ -528,20 +531,22 @@ function scopeNew(args, usage, mode = 'scope') {
       if (!sources.length) fail(usage)
       continue
     }
-    if (word === '--pane' || word === '--app' || word === '--title' || word === '--kind' || word === '--answerer') {
+    if (word === '--pane' || word === '--app' || word === '--title' || word === '--kind' || word === '--answerer' || word === '--parent') {
       const value = args[++i]
       if (value === undefined) fail(usage)
       if (word === '--pane') pane = value
       else if (word === '--app') app = value
       else if (word === '--kind') kind = value
       else if (word === '--answerer') answerer = value
+      else if (word === '--parent') parent = value
       else title = value
     } else if (word.startsWith('-')) fail(usage)
     else words.push(word)
   }
   const slug = words[0]
   if (words.length !== 1 || !slugRe.test(slug ?? '') || !paneRe.test(pane ?? '') || (app !== undefined && !APPS.includes(app))) fail(usage)
-  if (kind !== undefined && !KIND_IDS.includes(kind)) fail(usage)
+  if (kind !== undefined && !DOC_KINDS.includes(kind)) fail(usage)
+  if (parent !== undefined && !slugRe.test(parent)) fail(usage)
   if (answerer !== undefined && answerer !== 'on' && answerer !== 'off') fail(usage)
   const resolved = sources.map((dir) => {
     const abs = resolve(dir)
@@ -557,7 +562,7 @@ function scopeNew(args, usage, mode = 'scope') {
   const path = join(dir, 'scope.json')
   if (existsSync(path)) fail(`${path} exists`, 4)
   const heading = title ?? slug
-  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), ...(kind ? { kind } : {}), ...(answerer ? { answerer } : {}), ...(resolved.length ? { sources: resolved } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
+  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), ...(kind ? { kind } : {}), ...(parent ? { parent } : {}), ...(answerer ? { answerer } : {}), ...(resolved.length ? { sources: resolved } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
   const problems = validateScope(scope)
   if (problems.length) fail(problems.join('\n'), 1)
   mkdirSync(dir, { recursive: true })
@@ -651,6 +656,28 @@ async function scope(args, mode = 'scope') {
     const data = await request(`/api/scope/${encodeURIComponent(slug)}/unapprove`, { reason, ...(process.env.HERDR_PANE_ID ? { pane: process.env.HERDR_PANE_ID } : {}) })
     return output(data, `unapproved ${slug}`)
   }
+  if (sub === 'publish' || sub === 'destination') {
+    if (!slug) fail(usage)
+    const opts = {}
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]
+      if (word === '--json') { json = true; continue }
+      if (word !== '--where' && word !== '--target') fail(usage)
+      const value = words[++i]
+      if (value === undefined) fail(usage)
+      opts[word] = value
+    }
+    const where = opts['--where'], target = opts['--target']
+    if ((where !== undefined && !DOC_WHERES.includes(where)) || (sub === 'destination' && where === undefined)) fail(usage)
+    const base = `/api/scope/${encodeURIComponent(slug)}`
+    if (sub === 'destination') {
+      const data = await request(`${base}/destination`, { where, ...(target !== undefined ? { target } : {}) }, { method: 'PUT' })
+      return output(data, `destination ${data.destination.where}${data.destination.target ? ` ${data.destination.target}` : ''}`)
+    }
+    const { scope: current } = await request(base)
+    const data = await request(`${base}/publish`, { revision: current.revision, client_id: randomUUID(), ...(where !== undefined ? { where } : {}), ...(target !== undefined ? { target } : {}) })
+    return output(data, `published v${data.version}`)
+  }
   if (['ask', 'reply', 'resolve', 'reopen', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
@@ -725,7 +752,7 @@ async function scope(args, mode = 'scope') {
     const { scopes } = await request('/api/scope')
     const want = mode === 'explain' ? 'explainer' : 'scope'
     const health = await request('/api/health')
-    const listed = await Promise.all(scopes.filter((item) => kindOf(item) === want).map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
+    const listed = await Promise.all(scopes.filter((item) => (item.kind === 'writing' ? 'writing' : kindOf(item)) === want).map(async (item) => ({ ...item, ...await scopeLinks(health, item.slug) })))
     return output({ scopes: listed }, listed.map((item) => want === 'explainer' ? `${item.slug}  ${item.title}  ${item.url}` : `${item.slug}  ${item.app}  ${item.open} open  ${item.title}  ${item.url}`).join('\n'))
   }
   if (verb === 'app') {

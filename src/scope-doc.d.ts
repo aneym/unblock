@@ -109,6 +109,24 @@ export interface ScopeApproval {
   client_id?: string
 }
 
+export type DocKind = 'scope' | 'explainer' | 'review' | 'draft' | 'writing' | 'report'
+export type DocWhere = 'published' | 'sent' | 'posted' | 'submitted'
+
+export interface DocVersion {
+  version: number
+  revision: number
+  /** ISO time. */
+  at: string
+  by: 'alex' | 'agent'
+  where: DocWhere
+  /** 1–200 characters. */
+  target?: string
+  client_id?: string
+}
+
+export const DOC_KINDS: ['scope', 'explainer', 'review', 'draft', 'report', 'writing']
+export const DOC_WHERES: ['published', 'sent', 'posted', 'submitted']
+
 export interface ScopeV2 {
   version: 2
   app?: 'recruiter' | 'closer' | 'rails-admin'
@@ -119,6 +137,15 @@ export interface ScopeV2 {
   revision: number
   updated_at: string
   doc: { sections: DocSection[]; assets?: Record<string, DocAsset> }
+  /** Absent means scope. */
+  kind?: DocKind
+  /** Absent means draft. Publish sets published; a later doc rewrite sets draft. */
+  state?: 'draft' | 'published'
+  /** Oldest first, append-only. */
+  versions?: DocVersion[]
+  destination?: { where: DocWhere; target?: string }
+  /** Optional parent slug. Validated only; set by `scope new --parent`. */
+  parent?: string
   approval?: ScopeApproval
   threads: Thread[]
 }
