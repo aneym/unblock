@@ -1,13 +1,22 @@
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { kindOf } from './doc-kinds.js'
 import { headingOf } from './scope-doc.js'
 import { quoteSnippet } from './scope-anchor.js'
 
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
 const DROP_ENV = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
 const ROLE = 'You answer Alex\'s margin questions about an explainer doc. Answer in plain short prose: two to five sentences, no headings, and a short list only when you name three or more parallel things. Lead with the direct answer. Cite file:line or the URL for every claim you take from a source. Read the sources before answering when the doc alone does not settle it. If the answer needs a decision or new work from the doc\'s owner, end with one line `NEEDS_OWNER: <why>`.'
+
+// A scope doc's responder answers one margin comment in its own run, so a busy lane never holds it.
+// It may rewrite the one section the comment sits on; restructures and open calls stay with the lane.
+const SCOPE_ROLE = 'You answer one of Alex\'s margin comments on a scoping doc, on behalf of the lane that owns the doc. The lane is busy; you run in parallel with it and with other responders, so answer this comment only. Reply in plain short prose: one to four sentences, no headings. Lead with the direct answer. Read the scope folder (ALEX-WORDS.md, ALEX-FEED.md, RESUME.md, facts/) when the doc alone does not settle it. Treat a comment as a reply or a question, never a decision. If the comment asks for a change to the section it sits on and you are sure what he wants, make it: after your reply, write a line `EDIT <section-id>`, then the whole new section starting with its `## Heading {#id}` line, then a line `END_EDIT`. Change only what the comment asks; keep the rest of the section word for word. Plain words, short sentences, no em dashes, no semicolons. If the comment needs a restructure, a new mock, research longer than a few reads, or a call only the lane can make, say in one sentence what the lane will do and end with one line `NEEDS_OWNER: <why>`.'
+const isScope = (scope) => kindOf(scope) === 'scope'
 
 const compact = (text) => String(text ?? '').replace(/\s+/g, ' ').trim()
 const positiveInt = (value, fallback) => { const n = Number(value); return Number.isInteger(n) && n > 0 ? n : fallback }
@@ -20,13 +29,34 @@ function docMarkdown(scope) {
   return doc
 }
 
-function promptFor(scope, thread) {
+function otherThreads(scope, thread) {
+  const lines = []
+  for (const other of scope.threads ?? []) {
+    if (other.id === thread.id) continue
+    const said = (other.messages ?? []).filter((message) => !message.pending).slice(-3)
+      .map((message) => `${message.from === 'alex' ? 'Alex' : 'Lane'}: ${compact(message.text).slice(0, 300)}`)
+    const decided = other.resolution?.decision ? ` -> ${compact(other.resolution.decision).slice(0, 200)}` : ''
+    lines.push(`${other.id} [${other.status}] §${other.anchor?.section ?? 'title'} "${quoteSnippet(other.anchor?.quote ?? '', 60)}"${decided}`, ...said.map((line) => `  ${line}`))
+  }
+  return lines
+}
+
+function promptFor(scope, thread, scopeDir) {
   const sources = Array.isArray(scope.sources) ? scope.sources : []
   const quote = thread.anchor?.general ? '(whole doc)' : (thread.anchor?.quote ?? '')
   const said = []
   for (const message of thread.messages ?? []) {
     if (message.pending) continue
     said.push(`${message.from === 'alex' ? 'Alex' : 'You'}: ${message.text}`)
+  }
+  if (isScope(scope)) {
+    // The stable part (role, doc, other threads) comes first so the prompt cache covers it across comments.
+    return [
+      SCOPE_ROLE, '', `Scope folder: ${scopeDir}`, ...(sources.length ? ['Source dirs:', ...sources] : []), '',
+      `# Doc (revision ${scope.revision})`, docMarkdown(scope), '', '# Other threads', ...otherThreads(scope, thread), '',
+      `# This thread (${thread.id}, section id: ${thread.anchor?.section ?? 'title'})`,
+      headingOf(scope, thread.anchor?.section ?? 'title'), quote, ...said, '', 'Answer Alex\'s last message.', '',
+    ].join('\n')
   }
   return [
     ROLE, '', 'Source dirs:', ...sources, '', '# Doc', docMarkdown(scope), '', '# Thread',
@@ -35,7 +65,18 @@ function promptFor(scope, thread) {
 }
 
 function takeAnswer(raw) {
-  const trimmed = String(raw ?? '').replace(/\s+$/, '')
+  let trimmed = String(raw ?? '').replace(/\s+$/, '')
+  let edit = null
+  const block = trimmed.match(/(?:^|\n)EDIT ([A-Za-z0-9_-]+)\n([\s\S]*?)\nEND_EDIT[ \t]*(?=\n|$)/)
+  if (block) {
+    edit = { id: block[1], markdown: block[2].trim() }
+    trimmed = (trimmed.slice(0, block.index) + trimmed.slice(block.index + block[0].length)).replace(/\s+$/, '')
+  }
+  const answer = takeText(trimmed)
+  return edit ? { ...answer, edit } : answer
+}
+
+function takeText(trimmed) {
   const match = trimmed.match(/(?:^|\n)NEEDS_OWNER:\s*(.*)$/)
   const body = (match ? trimmed.slice(0, match.index) : trimmed).trim()
   if (!body) return { text: '(no answer)', needs_owner: true, why: match ? match[1].trim() : 'no answer' }
@@ -47,19 +88,22 @@ function postLine(scope, thread, outcome) {
   const question = [...(thread.messages ?? [])].reverse().find((message) => message.from === 'alex' && !message.pending)?.text ?? ''
   const task = outcome.needs_owner || outcome.handoff
   const why = outcome.why || (outcome.reason === 'timeout' ? 'timed out' : 'failed')
-  const suffix = task ? ` NEEDS YOU: ${why}. Reply in the thread: unblock scope reply ${scope.slug} ${thread.id} "<text>"; fold into the doc: unblock explain doc ${scope.slug} --from <file.md>` : ''
+  const suffix = !task ? '' : isScope(scope)
+    ? ` NEEDS YOU: ${why}. Reply in the thread: unblock scope reply ${scope.slug} ${thread.id} "<text>"; edit the doc: unblock scope patch ${scope.slug} <section> --from <file.md>`
+    : ` NEEDS YOU: ${why}. Reply in the thread: unblock scope reply ${scope.slug} ${thread.id} "<text>"; fold into the doc: unblock explain doc ${scope.slug} --from <file.md>`
   let q = compact(question)
   let answer = compact(outcome.text)
-  const head = () => `[explainer ${scope.slug}] ${thread.id} on §${headingOf(scope, thread.anchor?.section ?? 'title')} "${quote}": Q: ${q} A: `
-  let room = 700 - head().length - suffix.length
+  const edited = outcome.edited ? ` (edited §${outcome.edited})` : ''
+  const head = () => `[${isScope(scope) ? 'scoping' : 'explainer'} ${scope.slug}]${isScope(scope) ? ' responder' : ''} ${thread.id} on §${headingOf(scope, thread.anchor?.section ?? 'title')} "${quote}": Q: ${q} A: `
+  let room = 700 - head().length - suffix.length - edited.length
   if (answer.length > Math.max(0, room)) answer = room > 1 ? `${answer.slice(0, room - 1)}…` : ''
-  room = 700 - head().length - suffix.length
+  room = 700 - head().length - suffix.length - edited.length
   if (room < 0) {
     q = q.slice(0, Math.max(0, q.length + room - 1))
     if (q) q += '…'
     answer = ''
   }
-  let line = `${head()}${answer}${suffix}`
+  let line = `${head()}${answer}${edited}${suffix}`
   if (line.length > 700) line = `${line.slice(0, 699)}…`
   return { line, task }
 }
@@ -101,8 +145,11 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     pump()
   }
 
-  function argv(sources) {
-    const args = ['-p', '--restricted', '--model', process.env.UNBLOCK_ANSWERER_MODEL || 'claude-sonnet-5-5', '--effort', process.env.UNBLOCK_ANSWERER_EFFORT || 'medium',
+  function argv(sources, scope) {
+    // Scope comments are a conversation with Alex, so they stay on Opus (Alex took it on comment-latency T2, 2026-10-05).
+    const model = isScope(scope) ? process.env.UNBLOCK_SCOPE_ANSWERER_MODEL || 'claude-opus-5-5' : process.env.UNBLOCK_ANSWERER_MODEL || 'claude-sonnet-5-5'
+    const effort = isScope(scope) ? process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'medium' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
+    const args = ['-p', '--restricted', '--model', model, '--effort', effort,
       '--tools', 'Read,Grep,Glob,WebFetch', '--allowedTools', 'Read,Grep,Glob,WebFetch', '--permission-mode', 'dontAsk',
       '--strict-mcp-config', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
     for (const dir of sources.slice(1)) args.push('--add-dir', dir)
@@ -127,9 +174,31 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const bin = process.env.UNBLOCK_LANE_POST_BIN || join(homedir(), '.local', 'bin', 'lane-post')
     if (!process.env.UNBLOCK_LANE_POST_BIN && !existsSync(bin)) return Promise.resolve()
     return new Promise((resolve) => {
-      execFile(bin, ['post', '--to', pane, '--from', `explainer:${scope.slug}`, '--kind', task ? 'task' : 'info', '--topic', `explainer-${scope.slug}`, '--wake', 'auto', '--text', line], { timeout: 20000, encoding: 'utf8' }, (error, _stdout, stderr) => {
+      const scoped = isScope(scope)
+      // A scope responder's answer is a digest for the lane; only a hand-off wakes it.
+      execFile(bin, ['post', '--to', pane, '--from', `${scoped ? 'scope' : 'explainer'}:${scope.slug}`, '--kind', task ? 'task' : 'info', '--topic', `${scoped ? 'scope' : 'explainer'}-${scope.slug}`, '--wake', scoped && !task ? 'never' : 'auto', '--text', line], { timeout: 20000, encoding: 'utf8' }, (error, _stdout, stderr) => {
         if (error) log(`unblock: lane-post slug=${scope.slug} pane=${pane} exit=${typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error'} stderr=${String(stderr ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)} text=${line.slice(0, 80)}`)
         resolve()
+      })
+    })
+  }
+
+  // The section edit goes through the same CLI and lint a lane uses, so a responder can't publish what a lane couldn't.
+  function applyEdit(slug, outcome) {
+    const { edit, ...rest } = outcome
+    if (!/^## .*\{#([A-Za-z0-9_-]+)\}\s*$/m.test(edit.markdown.split('\n')[0])) return Promise.resolve({ ...rest, text: `${rest.text}\n\n(Couldn't edit the section: no heading line.)`, needs_owner: true, why: rest.why || 'section edit failed' })
+    const dir = mkdtempSync(join(tmpdir(), 'unblock-edit-'))
+    const file = join(dir, 'section.md')
+    writeFileSync(file, `${edit.markdown}\n`)
+    const cli = process.env.UNBLOCK_CLI_BIN || join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'unblock.js')
+    return new Promise((resolve) => {
+      const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' }
+      execFile(process.execPath, [cli, 'scope', 'patch', slug, edit.id, '--from', file], { timeout: 30000, encoding: 'utf8', env }, (error, _stdout, stderr) => {
+        rmSync(dir, { recursive: true, force: true })
+        if (!error) return resolve({ ...rest, text: `${rest.text}\n\nEdited §${edit.id} to match.`, edited: edit.id })
+        const why = String(stderr || error.message).replace(/\s+/g, ' ').trim().slice(0, 160)
+        log(`unblock: scope responder edit failed slug=${slug} section=${edit.id} ${why}`)
+        resolve({ ...rest, text: `${rest.text}\n\n(Couldn't edit §${edit.id}: ${why})`, needs_owner: true, why: rest.why || 'section edit failed' })
       })
     })
   }
@@ -139,10 +208,11 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const thread = scope?.threads?.find((item) => item.id === job.threadId)
     const sources = Array.isArray(scope?.sources) ? scope.sources.filter((dir) => typeof dir === 'string') : []
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
-    const item = (patch) => liveItems?.upsert(job.slug, { thread: job.threadId, to: job.messageAt, by: 'Explainer', ...patch })
+    const item = (patch) => liveItems?.upsert(job.slug, { thread: job.threadId, to: job.messageAt, by: isScope(scope) ? 'Responder' : 'Explainer', ...patch })
     const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
     const settle = async (outcome) => {
       if (stopped) return
+      if (outcome.edit) outcome = await applyEdit(job.slug, outcome)
       try {
         await patch(outcome)
         item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
@@ -192,7 +262,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       let child
       try {
         const cwd = sources[0] && existsSync(sources[0]) ? sources[0] : job.scopeDir
-        child = spawn(process.env.UNBLOCK_ANSWERER_BIN || join(homedir(), '.local', 'bin', 'claude-lb-launch'), argv(sources), {
+        child = spawn(process.env.UNBLOCK_ANSWERER_BIN || join(homedir(), '.local', 'bin', 'claude-lb-launch'), argv(sources, scope), {
           cwd,
           env: childEnv(job),
           detached: true,
@@ -249,7 +319,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
         while ((nl = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, nl)); buf = buf.slice(nl + 1) }
       })
       child.stdin?.on('error', () => {})
-      child.stdin?.write(promptFor(scope, thread))
+      child.stdin?.write(promptFor(scope, thread, job.scopeDir))
       child.stdin?.end()
       const onDone = () => {
         exited = true

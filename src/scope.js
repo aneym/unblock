@@ -243,11 +243,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             else { mark('retrying'); retry = true }
           }
         }
+        // An answered scope tells its lane about closes and parks without waking it: nothing there needs the lane.
+        const quiet = answererOn(scope) && comments.every((note) => ['take', 'park', 'delete'].includes(note.event))
         if (comments.length) await send('own', pane, line, (status, extra) => {
           // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
           const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
           emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
-        })
+        }, quiet ? { kind: 'info', wake: 'never' } : {})
         for (const note of laneNotes) {
           let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
           if (line.length > 700) line = `${cutUnits(line, 699)}…`
@@ -1134,7 +1136,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           result = { kept_open: true }
         } else {
           thread.status = 'resolved'
-          thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: null, revision: null, ...client, ...pictures }
+          // On an answered scope the doc already states the recommendation, so taking it needs no lane edit.
+          const autoConfirm = how === 'take' && answererOn(scope)
+          thread.resolution = { decision, alex_words: words, by: 'alex', how, at, confirmed_at: autoConfirm ? at : null, revision: autoConfirm ? scope.revision : null, ...client, ...pictures }
           noteData = { event: how, text: decision, words: body.alex_words == null ? null : words }
         }
       } else if (thread.status === 'open') {
