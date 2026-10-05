@@ -9,6 +9,7 @@ import { ALLOW } from '../hooks/bypass-allow.js'
 const state = mkdtempSync(join(tmpdir(), 'unblock-autoallow-'))
 const env = { ...process.env, UNBLOCK_STATE_DIR: state, UNBLOCK_CONFIG_DIR: join(state, 'config') }
 delete env.HERDR_PANE_ID
+const UNBLOCK = '/Volumes/StudioExt/repos/personal/unblock'
 const EXPECTED = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
 
 // The real hook boundary: stdin JSON in, exactly the decision JSON (or nothing) out.
@@ -26,6 +27,7 @@ test('bypass allows variable-target deletes and subagent commands', () => {
   assert.equal(allowed('D=$(mktemp -d); touch $D/a; rm -rf "$D"/*'), true)
   assert.equal(allowed('S=$(mktemp -d); rm -f $S/{w18,c36,t2}-seat.*'), true)
   assert.equal(allowed('rm -rf "${T:?}"'), true)
+  assert.equal(allowed('rm -rf "$X" ${W}/tmp', { cwd: UNBLOCK }), true)
   assert.equal(allowed('cd x && node -e "1"', { agent_id: 'sub-1' }), true)
   assert.equal(allowed('rm -rf /Volumes/StudioExt/repos/agent-rails-wt/foo'), true)
 })
@@ -44,6 +46,14 @@ test('roots, main checkouts and Claude settings still ask, however written', () 
     assert.equal(allowed(c), false, c)
   }
   assert.equal(allowed('cp a .claude/hooks/x.js', { cwd: '/Users/aneyman' }), false)
+})
+
+test('dot segments, nested checkouts and paths relative to cwd are resolved before the check', () => {
+  for (const c of ['rm -rf /Users/./aneyman', 'echo x > .claude/./settings.json', `rm -rf ${UNBLOCK}`, `rm -rf ${UNBLOCK}/.git`,
+    'echo x >> hooks/bypass-allow.js']) {
+    assert.equal(allowed(c, { cwd: UNBLOCK }), false, c)
+  }
+  for (const c of ['rm -rf ..', 'rm -rf ../../unblock']) assert.equal(allowed(c, { cwd: `${UNBLOCK}/web` }), false, c)
 })
 
 test('other modes and tools are unchanged', () => {
