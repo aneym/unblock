@@ -58,6 +58,11 @@ let selectionRange: Range | null = null, selectionScrolling = false
 let embedSelectionRect: { top: number; bottom: number; right: number } | null = null
 type Sending = { clientId: string; id?: string; anchor?: Anchor; text: string; at: number; route: string; body: Record<string, unknown>; failed?: { status: number; error: string } }
 const sending = new Map<string, Sending>()
+// Admin keeps a refused write's words; Not sent cards come back after a reload until Alex retries or dismisses them.
+type Refused = { client_id: string; status: number; error: string; at: string; path?: string; body?: Record<string, unknown> }
+const doneKey = `scope:refusedDone:${slug}`
+const refusedDone = new Set<string>((() => { try { return JSON.parse(storage.get(doneKey) || '[]') } catch { return [] } })())
+function markRefusedDone(clientId: string) { refusedDone.add(clientId); storage.set(doneKey, JSON.stringify([...refusedDone].slice(-100))) }
 const pending = new Set<string>()
 function disablePending() { document.querySelectorAll<HTMLTextAreaElement>('textarea[data-draft]').forEach(box => { if (uploading.get(box.dataset.draft!)) { const button = box.closest('.reply')?.querySelector<HTMLButtonElement>('.btn.primary'); if (button) button.disabled = true; box.closest('.reply')?.querySelectorAll<HTMLButtonElement>('[data-action="take"],[data-action="no"],[data-action="else"]').forEach(button => button.disabled = true) } }); document.querySelectorAll<HTMLElement>('.card').forEach(card => { const key = card.classList.contains('composer') ? card.querySelector<HTMLElement>('[data-draft]')?.dataset.draft : card.dataset.t || card.dataset.client; if (key && (pending.has(key) || sending.has(key))) card.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(button => button.disabled = pending.has(key) || !sending.get(key)?.failed) }) }
 const modes = new Map<string, 'no' | 'else' | 'reply'>(), menus = new Set<string>()
@@ -972,10 +977,10 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
     const client = target.closest<HTMLElement>('[data-client]')?.dataset.client, entry = [...sending].find(([, item]) => item.clientId === client)
     if (!entry) return
     const [sendKey, item] = entry
-    if (name === 'dismiss-send') { sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null; renderCards(); return }
+    if (name === 'dismiss-send') { sending.delete(sendKey); markRefusedDone(item.clientId); if (postedClient === item.clientId) postedClient = null; renderCards(); return }
     if (pending.has(sendKey)) return
     pending.add(sendKey); target.closest('.not-sent')?.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = true)
-    try { await write(item.route, item.body, item.id); if (sending.get(sendKey) === item) sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null }
+    try { await write(item.route, item.body, item.id); markRefusedDone(item.clientId); if (sending.get(sendKey) === item) sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null }
     catch (error) { item.failed = { status: 0, error: error instanceof Error ? error.message : 'Could not send' } }
     finally { pending.delete(sendKey); renderCards() }
     return
@@ -1354,7 +1359,7 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: { client_id: string; status: number; error: string; at: string }[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes, failed: payload.failed }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: Refused[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes, failed: payload.failed }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
@@ -1363,6 +1368,12 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; es
   const resolvedWrite = (item: Sending) => { const t = scope!.threads.find(t => t.id === item.id), r = t?.resolution; return !item.failed && !payload.failed?.some(f => f.client_id === item.clientId) && item.route === `/${item.id}/resolve` && t?.status === 'resolved' && r?.by === 'alex' && !(r as any).client_id && r.decision === item.body.decision && r.how === (item.body.how || 'resolve') && Date.parse(r.at) >= item.at }
   for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId) || item.id && !scope.threads.some(t => t.id === item.id)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
   for (const item of sending.values()) { const failure = payload.failed?.find(f => f.client_id === item.clientId); if (failure) item.failed = { status: failure.status, error: failure.error } }
+  for (const f of payload.failed || []) {
+    const route = /^threads((?:\/T[1-9][0-9]*\/[a-z]+)?)$/.exec(f.path || '')?.[1], id = route ? route.split('/')[1] : undefined
+    if (route === undefined || !f.body || refusedDone.has(f.client_id) || settled.has(f.client_id) || sending.has(id || f.client_id) || [...sending.values()].some(item => item.clientId === f.client_id) || id && !scope.threads.some(t => t.id === id)) continue
+    const { client_id: _, ...body } = f.body
+    sending.set(id || f.client_id, { route, body, clientId: f.client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.parse(f.at) || Date.now(), failed: { status: f.status, error: f.error } })
+  }
   for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
 let lastOk = 0, stale = false
 function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }
