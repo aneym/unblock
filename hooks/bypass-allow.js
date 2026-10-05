@@ -295,6 +295,28 @@ function bindings(segs) {
   return found
 }
 
+// Words a command deletes or writes: delete operands, redirect targets, tee files, the
+// destination of cp/mv/install/ln (last operand or -t dir) and sed -i files.
+function writes(segs) {
+  const found = deletes(segs).flatMap((d) => d.operands)
+  for (const seg of segs) {
+    found.push(...seg.filter((w) => w.redirect))
+    const words = seg.filter((w) => !w.redirect)
+    let k = 0
+    while (k < words.length && (/^[A-Za-z_]\w*=/.test(words[k].raw) || PREFIXES.has(strip(words[k].raw)))) k++
+    const verb = strip(words[k]?.raw ?? '').split('/').at(-1)
+    const rest = words.slice(k + 1)
+    const operands = rest.filter((w) => !w.raw.startsWith('-'))
+    if (verb === 'tee') found.push(...operands)
+    else if (verb === 'sed' && rest.some((w) => /^-[^-]*i|^--in-place/.test(w.raw))) found.push(...operands)
+    else if (['cp', 'mv', 'install', 'ln'].includes(verb)) {
+      const t = rest.findIndex((w) => w.raw === '-t' || w.raw.startsWith('--target-directory'))
+      found.push(t >= 0 ? rest[t].raw.includes('=') ? rest[t] : rest[t + 1] ?? { raw: '' } : operands.at(-1) ?? { raw: '' })
+    }
+  }
+  return found
+}
+
 /** True when this PermissionRequest should be answered "allow" without a human. */
 export function bypassAllows(input) {
   if (input?.permission_mode !== 'bypassPermissions' || input?.tool_name !== 'Bash') return false
@@ -312,10 +334,12 @@ export function bypassAllows(input) {
     const m = w.raw.match(/^"?\$\{?([A-Za-z_]\w*)\}?"?\/(.*)$/s)
     if (!m || !mktemp(m[1]) || m[2].includes('..')) return false
   }
-  // A variable bound to something we can't read asks when glued to other text in a word.
+  // A variable bound to something we can't read asks when glued to other text in a word
+  // that deletes or writes; reads like `ls $R/x` stay allowed.
+  const touched = writes(segs)
   for (const [name, list] of bound) {
     if (!list.some((b) => b.kind === 'other')) continue
-    if (words.some((w) => { const hits = w.raw.match(ref(name)); return hits && w.raw.replace(/"/g, '') !== hits[0] })) return false
+    if (touched.some((w) => { const hits = w.raw.match(ref(name)); return hits && w.raw.replace(/"/g, '') !== hits[0] })) return false
   }
   // Run every check on the line as written and on each substitution of its literal bindings.
   let variants = [command]

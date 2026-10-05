@@ -87,10 +87,12 @@ test('bindings set earlier in the line are substituted, and brace expansions ask
     assert.equal(allowed(c), false, c)
   }
   for (const c of ['C=.clau; echo x > ${C}de/settings.json', 'H=hoo; printf x | tee ${H}ks/bypass-allow.js',
-    'H=$(echo hoo); printf x | tee ${H}ks/bypass-allow.js']) {
+    'H=$(echo hoo); printf x | tee ${H}ks/bypass-allow.js', 'H=$(echo hoo); echo x > ${H}ks/x.js',
+    'H=$(echo hoo); cp a ${H}ks/x.js', 'H=$(echo hoo); sed -i s/a/b/ ${H}ks/x.js']) {
     assert.equal(allowed(c, { cwd: UNBLOCK }), false, c)
   }
-  for (const c of ['N=build; rm -rf "$N"', "echo '{a,b}' \"{a,b}\"", 'for f in a b; do echo $f; done', 'echo {} {x}']) {
+  for (const c of ['N=build; rm -rf "$N"', "echo '{a,b}' \"{a,b}\"", 'for f in a b; do echo $f; done', 'echo {} {x}',
+    'R=$(git rev-parse --show-toplevel); ls $R/x', 'R=$(git rev-parse --show-toplevel); cat $R/README.md']) {
     assert.equal(allowed(c), true, c)
   }
 })
