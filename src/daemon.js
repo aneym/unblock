@@ -1383,6 +1383,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   async function close() {
     if (isClosed) return
     isClosed = true
+    // Drop our record while we still hold the port, so it can only be ours. Once the port frees, a CLI or MCP call
+    // can start a daemon that writes its own; launchd's supervised start evicts by that pid, and without it
+    // crash-loops on EADDRINUSE behind a stale copy.
+    try {
+      if (JSON.parse(readFileSync(daemonFile, 'utf8'))?.pid === process.pid) rmSync(daemonFile)
+    } catch { /* gone, unreadable or not ours: shutdown goes on */ }
     clearInterval(keepalive)
     clearInterval(sweeper)
     livedocApprovals?.stop()
@@ -1396,11 +1402,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     await new Promise((resolve) => server.close(resolve))
     await Promise.all([...ticketTails.values()])
     store.close()
-    try {
-      rmSync(daemonFile)
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error
-    }
   }
 
   return { server, port: actualPort, close, sweep }
