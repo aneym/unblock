@@ -495,7 +495,7 @@ function explainerCardHtml(t: Thread) {
     if (message.from === 'alex') return `<div data-alex-at="${esc(message.at)}" class="msg follow${i === newestAt - 1 ? '' : ' only-on'}"><div class="q">${esc(message.text)}</div>${imageStrip(message.images)}</div>`
     return `<div class="msg only-on"><div class="from">Lane<span>${time(message.at)}</span></div><div>${esc(message.text)}</div>${imageStrip(message.images)}</div>`
   }).join('')
-  return `<div class="head"><span class="kind"><span class="who">You asked</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q" data-alex-at="${messages[0]?.from === 'alex' ? esc(messages[0].at) : ''}">${esc(messages[0]?.text)}</div>${imageStrip(messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}${thread}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : reply}`
+  return `<div class="head"><span class="kind"><span class="who">You asked</span></span><span class="when">${time(t.created_at)}</span>${moreButton}</div>${menu}<div class="q" data-alex-at="${messages[0]?.from === 'alex' ? esc(messages[0].at) : ''}">${esc(messages[0]?.text)}</div>${imageStrip(messages[0]?.images)}${state ? `<p class="card-state">${state}</p>` : ''}${thread}${sending.has(t.id) ? (sending.get(t.id)!.failed ? '' : sendingLine(sending.get(t.id)!)) : reply}`
 }
 function threadMenu(t: Thread) {
   if (!menus.has(t.id)) return ''
@@ -521,7 +521,7 @@ function baseCardHtml(t: Thread) {
   const isOpen = t.status === 'open', label = t.status === 'parked' ? 'Parked' : !isOpen ? 'Resolved' : t.kind === 'question' ? 'Lane asks' : 'You commented'
   if (t.status === 'resolved' && modes.get(t.id) !== 'reply') {
     const lastAlex = t.messages.reduce((index, m, i) => m.from === 'alex' ? i : index, -1), answer = t.messages.slice(Math.max(1, lastAlex + 1)).filter(m => m.from === 'agent').at(-1)
-    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span>${replyMarker(t) ? '<span class="new-reply" data-unread>New reply</span>' : ''}<span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) : ''}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+    return `<div class="head"><span class="kind"><span class="dot resolved"></span><span class="who">Resolved</span></span>${replyMarker(t) ? '<span class="new-reply" data-unread>New reply</span>' : ''}<span class="when">${time(t.created_at)}</span>${moreButton}</div>${threadMenu(t)}<div class="q" data-alex-at="${t.messages[0]?.from === 'alex' ? esc(t.messages[0].at) : ''}">${esc(t.messages[0]?.text)}</div>${imageStrip(t.messages[0]?.images)}${answer ? `<div class="msg"><div class="from">Lane<span>${time(answer.at)}</span></div><div>${esc(answer.text)}</div>${imageStrip(answer.images)}</div>` : ''}<div class="settled">${t.resolution?.how === 'approve' ? 'Approved with the scope:' : t.resolution?.by === 'agent' ? 'Lane resolved ·' : t.resolution?.how === 'take' ? 'You approved ·' : 'You resolved ·'} ${esc(t.resolution?.decision)}</div>${t.messages.slice(1).filter(message => message !== answer).map(message => imageStrip(message.images)).join('')}${imageStrip(t.resolution?.images)}${sending.has(t.id) ? (sending.get(t.id)!.failed ? '' : sendingLine(sending.get(t.id)!)) : ''}<button class="btn" data-action="reopen">Reopen</button>${copiedLinks.has(t.id) ? '<p class="card-state">Link copied</p>' : ''}${errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
   }
   const mode = !sending.has(t.id) && (modes.get(t.id) || (t.kind === 'comment' && !t.recommendation ? 'reply' : null))
   const compose = mode && !(t.recommendation && mode === 'else') && { no: ["What's wrong with it? (optional)", 'Send No'], else: ['Your answer', 'Send answer'], reply: [t.kind === 'question' ? 'Ask the lane something' : 'Reply', t.kind === 'question' ? 'Send' : 'Reply'] }[mode]
@@ -541,7 +541,7 @@ function baseCardHtml(t: Thread) {
   ${isOpen && t.kind === 'question' && t.options?.length ? `<details class="other-options only-on"><summary>Other options (${t.options.length - 1})</summary>${t.options.slice(1).map((option, i) => `<div class="other-option"><span>${esc(option)}</span><button class="btn small" data-action="option" data-option="${i + 1}">Pick this</button></div>`).join('')}</details>` : ''}
   ${isOpen && t.why ? `<details class="why only-on"><summary>Why</summary><p>${esc(t.why)}</p></details>` : ''}
   ${t.messages.length > 1 ? `<div class="msgs only-on">${t.messages.slice(1).map((m, i) => `<div${m.from === 'alex' ? ` data-alex-at="${esc(m.at)}"` : ''} class="msg"><div class="from">${m.from === 'alex' ? 'You' : 'Lane'}<span>${time(m.at)}</span></div><div>${m.kind === 'reject' ? 'No' + (m.text ? ': ' : '') : ''}${esc(m.text)}</div>${imageStrip(m.images)}</div>`).join('')}</div>` : ''}
-  ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? sendingLine(sending.get(t.id)!) + (sending.get(t.id)!.failed ? body : '') : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
+  ${!isOpen ? `<div class="settled">${t.status === 'parked' ? '<b>Parked.</b> Not answered; the lane leaves it for later.' : 'Resolved'}</div><button class="btn" data-action="reopen">Reopen</button>` : ''}${sending.has(t.id) ? (sending.get(t.id)!.failed ? '' : sendingLine(sending.get(t.id)!)) + (sending.get(t.id)!.failed ? body : '') : body}${!compose && errors.has(t.id) ? `<p class="error" role="alert">${esc(errors.get(t.id))}</p>` : ''}`
 }
 function cardHtml(t: Thread) {
   const card = document.createElement('div'); card.innerHTML = baseCardHtml(t)
@@ -705,10 +705,11 @@ function renderCards() {
   const detachedNodes: Node[] = gone.length ? [document.createTextNode('Detached · the text it was on changed'), ...gone.map(makeCard)] : []
   if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept) && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) detachedNodes.push(kept)
   replaceAround(detached, detachedNodes, kept)
-  for (const item of sending.values()) if (!item.id && item.anchor) {
+  for (const item of sending.values()) if ((!item.id && item.anchor) || item.failed) {
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
-    insertAtAnchor(node, item.anchor)
+    if (item.anchor) insertAtAnchor(node, item.anchor)
+    else cards.prepend(node)
   }
   if (composing) renderComposer()
   document.body.classList.toggle('show-resolved', !docFlags().resolve || showResolved)
@@ -980,7 +981,7 @@ async function action(name: string, target: HTMLElement, imageSnapshot?: string[
     if (name === 'dismiss-send') { sending.delete(sendKey); markRefusedDone(item.clientId); if (postedClient === item.clientId) postedClient = null; renderCards(); return }
     if (pending.has(sendKey)) return
     pending.add(sendKey); target.closest('.not-sent')?.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = true)
-    try { await write(item.route, item.body, item.id); markRefusedDone(item.clientId); if (sending.get(sendKey) === item) sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null }
+    try { await write(item.route, { ...item.body, retry_of: item.clientId }, item.id); markRefusedDone(item.clientId); if (sending.get(sendKey) === item) sending.delete(sendKey); if (postedClient === item.clientId) postedClient = null }
     catch (error) { item.failed = { status: 0, error: error instanceof Error ? error.message : 'Could not send' } }
     finally { pending.delete(sendKey); renderCards() }
     return
@@ -1366,13 +1367,13 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; es
   publishApproval()
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]).concat((payload.notes || []).map(note => note.client_id)))
   const resolvedWrite = (item: Sending) => { const t = scope!.threads.find(t => t.id === item.id), r = t?.resolution; return !item.failed && !payload.failed?.some(f => f.client_id === item.clientId) && item.route === `/${item.id}/resolve` && t?.status === 'resolved' && r?.by === 'alex' && !(r as any).client_id && r.decision === item.body.decision && r.how === (item.body.how || 'resolve') && Date.parse(r.at) >= item.at }
-  for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId) || item.id && !scope.threads.some(t => t.id === item.id)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
+  for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
   for (const item of sending.values()) { const failure = payload.failed?.find(f => f.client_id === item.clientId); if (failure) item.failed = { status: failure.status, error: failure.error } }
   for (const f of payload.failed || []) {
     const route = /^threads((?:\/T[1-9][0-9]*\/[a-z]+)?)$/.exec(f.path || '')?.[1], id = route ? route.split('/')[1] : undefined
-    if (route === undefined || !f.body || refusedDone.has(f.client_id) || settled.has(f.client_id) || sending.has(id || f.client_id) || [...sending.values()].some(item => item.clientId === f.client_id) || id && !scope.threads.some(t => t.id === id)) continue
+    if (route === undefined || !f.body || refusedDone.has(f.client_id) || settled.has(f.client_id) || [...sending.values()].some(item => item.clientId === f.client_id)) continue
     const { client_id: _, ...body } = f.body
-    sending.set(id || f.client_id, { route, body, clientId: f.client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.parse(f.at) || Date.now(), failed: { status: f.status, error: f.error } })
+    sending.set(f.client_id, { route, body, clientId: f.client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.parse(f.at) || Date.now(), failed: { status: f.status, error: f.error } })
   }
   for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
 let lastOk = 0, stale = false
