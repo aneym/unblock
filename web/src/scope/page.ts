@@ -669,7 +669,7 @@ function renderCards() {
   syncThreadClasses()
   const byId = new Map(scope?.threads.map(t => [t.id, t]))
   const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
-  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused || unread(t) || sending.has(t.id))
+  const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused || sending.has(t.id))
   const focusedNode = focusedCard()
   // While a new comment is being written the composer leads; a detached focused card goes to the Detached list as on main.
   const holds = (id: string) => !phone() && !composing && id === focused
