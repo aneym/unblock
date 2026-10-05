@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { entries, eligible, fileFirst, UNKNOWN_PURPOSE, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
+import { ALLOW, bypassAllows } from './bypass-allow.js'
 
 const timer = setTimeout(() => process.exit(0), 3800)
 try {
   const input = JSON.parse(readFileSync(0, 'utf8'))
-  if (eligible(input) && input.tool_name) {
+  if (bypassAllows(input)) {
+    process.stdout.write(ALLOW + '\n')
+    log(`bypass allow ${process.env.HERDR_PANE_ID || '-'} ${input.agent_id ? 'subagent ' : ''}${cut(redact(String(input.tool_input.command)), 80)}`)
+  } else if (eligible(input) && input.tool_name) {
     const source = await origin()
     const pane = source.pane_id
     const tool = input.tool_name || ''
