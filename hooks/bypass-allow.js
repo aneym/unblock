@@ -9,8 +9,8 @@ const ROOTS = new Set(['/', '~', '$HOME', '/Users', '/Users/aneyman', '/Volumes'
   '/Volumes/StudioExt', '/Volumes/StudioExt/repos', '/Users/aneyman/.agent-rails',
   '/Users/aneyman/.claude', '~/.agent-rails', '~/.claude', '$HOME/.agent-rails', '$HOME/.claude'])
 const CHECKOUT = /^\/Volumes\/StudioExt\/repos\/[^/]+$/
-const DELETE = /(?:^|[\s;&|()`'"$])(?:rm|rmdir|unlink|shred|trash)(?=$|[\s;&|()`'"])|-delete\b|\bgit\s+clean\b/
-const SELF = /(?:^|[\s'"=>(])(?:~|\$HOME|\/Users\/aneyman)?\/?\.claude\/(?:settings|hooks)|unblock\/hooks(?:\/|$|\s)/
+const DELETE = /(?:^|[\s\/;&|()`'"$])(?:rm|rmdir|unlink|shred|trash)(?=$|[\s;&|()`'"])|-delete\b|\bgit\s+clean\b/
+const SELF = /\.claude\/(?:settings|hooks)|unblock\/hooks(?:\/|$|\s)/
 
 // Strip quotes and escapes, turn ${HOME} into $HOME, collapse repeated slashes.
 const plain = (command) => String(command).replace(/\\[ntr]/g, ' ').replace(/\\(.)/g, '$1').replace(/['"]/g, '')
@@ -23,7 +23,9 @@ function protectedPath(word) {
 
 export function rmHitsRoot(command) {
   const text = plain(command)
-  if (!DELETE.test(text)) return false
+  // plain() reads \r in `\rm` as a carriage return, so also look for the verb with escapes just dropped.
+  const verbs = String(command).replace(/\\(.)/g, '$1').replace(/['"]/g, '')
+  if (!DELETE.test(text) && !DELETE.test(verbs)) return false
   return text.split(/[\s;&|()`<>=]+/).filter(Boolean).some(protectedPath)
 }
 

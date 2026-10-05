@@ -38,7 +38,9 @@ test('roots, main checkouts and Claude settings still ask, however written', () 
     'rm -rf /Volumes//StudioExt/repos/agent-rails', "printf '/Users\\n' | xargs rm -rf",
     'cd /Volumes/StudioExt/repos && rm -rf agent-rails', 'rm -rf ${HOME}',
     'echo x > ~/.claude/settings.json', 'echo x > ~/.claude/"settings.json"', 'cp a ~/.claude/"hooks"/x.js',
-    'cp a /Users/aneyman/.claude/hooks/x.js', 'rm -rf /Volumes/StudioExt/repos/personal/unblock/hooks']) {
+    'cp a /Users/aneyman/.claude/hooks/x.js', 'rm -rf /Volumes/StudioExt/repos/personal/unblock/hooks',
+    '/bin/rm -rf /Users', '/usr/bin/env rm -rf /Users', 'command rm -rf /Users', '\\rm -rf /Users',
+    'echo x > ./.claude/settings.json']) {
     assert.equal(allowed(c), false, c)
   }
   assert.equal(allowed('cp a .claude/hooks/x.js', { cwd: '/Users/aneyman' }), false)
