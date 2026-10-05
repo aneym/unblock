@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { promptPane } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
+import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './doc-kinds.js'
@@ -104,14 +105,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (next.ino === entry.meta.ino && next.mtime_ms === entry.meta.mtime_ms && next.size === entry.meta.size) return
         entry.meta = next
         const data = readScope(slug)
-        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug) })
+        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug), ...buildActuals(slug, data.scope) })
         if (store.pendingScopeNotes(slug).length || store.pendingScopeTargets(slug).length) schedule(slug)
       }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
       entry.timer.unref()
       listeners.set(slug, entry)
     }
     entry.clients.add(res)
-    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: scopeNotes(slug), items: liveItems.list(slug) })}\n\n`)
+    res.write(`event: state\ndata: ${JSON.stringify({ ...state, notes: scopeNotes(slug), items: liveItems.list(slug), ...buildActuals(slug, state.scope) })}\n\n`)
     req.on('close', () => {
       entry.clients.delete(res)
       if (!entry.clients.size) {
@@ -333,6 +334,23 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     return sendText(res, 200, html.includes('</head>') ? html.replace('</head>', `${boot}</head>`) : `${boot}${html}`, 'text/html; charset=utf-8')
   }
 
+  // Estimate and actual rows for a doc with a build fence, read-only from the scoping chronicle's ESTIMATES.jsonl.
+  function buildActuals(slug, scope) {
+    if (!scope?.doc?.sections?.some((section) => buildFences(section.body_md).length)) return {}
+    const file = process.env.UNBLOCK_ESTIMATES_FILE || join(root, 'factory-program', 'CONTEXT', 'ESTIMATES.jsonl')
+    const rows = []
+    try {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const row = JSON.parse(line)
+          if (row?.scope === slug && typeof row.piece === 'string') rows.push(Object.fromEntries(['piece', 'sub', 'p50_min', 'p90_min', 'actual_min', 'at'].filter((key) => row[key] !== undefined).map((key) => [key, row[key]])))
+        } catch { /* A torn line is skipped. */ }
+      }
+    } catch { /* No estimates file yet. */ }
+    return { estimates: rows }
+  }
+
   async function handle(req, res, url) {
     const parts = url.pathname.slice('/api/scope/'.length).split('/')
     const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/scope/')
@@ -404,7 +422,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       schedule(slug)
       return sendJson(res, 200, { note })
     }
-    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: scopeNotes(slug), items: liveItems.list(slug) })
+    if (req.method === 'GET' && parts.length === 1) return sendJson(res, 200, { ...state, app: appOf(state.scope), notes: scopeNotes(slug), items: liveItems.list(slug), ...buildActuals(slug, state.scope) })
     if (req.method === 'GET' && parts.length === 3 && action === 'published' && /^[1-9]\d*$/.test(threadId)) {
       try { return sendJson(res, 200, JSON.parse(readFileSync(join(root, slug, 'published', `v${threadId}.json`), 'utf8'))) }
       catch { return sendJson(res, 404, { error: 'not found' }) }
@@ -1002,6 +1020,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         return next
       }) : body.sections
       scope.doc = { sections, assets: docAssets(join(dir, 'assets'), sections) }
+      const buildError = buildDocError(sections)
+      if (buildError) bad(buildError)
       scope.revision++
       if (scope.state === 'published') scope.state = 'draft'
       result = { revision: scope.revision }
@@ -1347,7 +1367,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (notes.length) emitNotes(notes)
       for (const slug of slugs) {
         const data = readScope(slug)
-        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug) })
+        if (data) emit(slug, 'scope', { ...data, notes: scopeNotes(slug), ...buildActuals(slug, data.scope) })
       }
     } catch (error) {
       console.error(`unblock: bulletin read scan failed: ${error.message}`)

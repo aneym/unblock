@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import { parseMediaFence } from '../../../src/scope-media.js'
 import './tabs.ts'
+import { buildBlock } from './build.ts'
 import type { DocAsset } from '../../../src/scope-doc.js'
 
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
@@ -122,6 +123,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
         let phone = ''; if (/^```svg phone\s*$/.test(lines[i] || '')) phone = `<div class="fig-phone" data-cm-skip>${sanitizeSvg(fence().source)}</div>`
         out.push(`<figure class="fig"><div class="fig-wide" data-cm-skip>${sanitizeSvg(f.source)}</div>${phone}${caption()}</figure>`)
       } else if (f.lang === 'mermaid') out.push(`<figure class="fig mermaid"><div data-mermaid="${esc(f.source)}" data-cm-skip><pre>${esc(f.source)}</pre></div>${caption()}</figure>`)
+      else if (f.lang === 'build') out.push(buildBlock(f.source))
       else if (f.lang === 'tabs') {
         // Flat demo entries avoid nesting triple-backtick fences in this line-based parser.
         const entries = f.source.split(/^\s*---\s*$/m).filter(entry => entry.trim()).map(entry => parseMediaFence(entry, assets, assetBase))
