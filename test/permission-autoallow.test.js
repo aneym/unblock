@@ -80,6 +80,21 @@ test('anything the hook cannot resolve with certainty asks', () => {
   assert.equal(allowed('cd "$X" && echo x > settings.json'), false)
 })
 
+test('bindings set earlier in the line are substituted, and brace expansions ask', () => {
+  for (const c of ['X=/Us; rm -rf ${X}ers', 'printf x | tee ~/.clau{de,de}/settings.json', 'export X=/Us; rm -rf "$X"ers',
+    'for X in /tmp /Us; do rm -rf ${X}ers; done', 'echo {1..3}', 'echo "$(echo {a,b})"', 'S=$(mktemp -d); rm -f $S/{..,x}/y',
+    'P=$(pwd); rm -rf ${P}ers']) {
+    assert.equal(allowed(c), false, c)
+  }
+  for (const c of ['C=.clau; echo x > ${C}de/settings.json', 'H=hoo; printf x | tee ${H}ks/bypass-allow.js',
+    'H=$(echo hoo); printf x | tee ${H}ks/bypass-allow.js']) {
+    assert.equal(allowed(c, { cwd: UNBLOCK }), false, c)
+  }
+  for (const c of ['N=build; rm -rf "$N"', "echo '{a,b}' \"{a,b}\"", 'for f in a b; do echo $f; done', 'echo {} {x}']) {
+    assert.equal(allowed(c), true, c)
+  }
+})
+
 test('other modes and tools are unchanged', () => {
   assert.equal(allowed('ls', { permission_mode: 'default' }), false)
   assert.equal(allowed('ls', { permission_mode: 'acceptEdits' }), false)

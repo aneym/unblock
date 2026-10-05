@@ -239,13 +239,96 @@ function paths(command, cwd) {
   })
 }
 
+// True when the text holds an unquoted brace expansion ({a,b} or {1..3}), including inside
+// a $( ) that sits in double quotes. ${...} is parameter expansion and is skipped.
+function braceExpands(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '\\') { i++; continue }
+    if (c === "'") { const end = s.indexOf("'", i + 1); if (end < 0) return true; i = end; continue }
+    if (c === '"') {
+      const end = closing(s, i, '"')
+      if (end < 0) return true
+      const inner = s.slice(i + 1, end)
+      for (let j = inner.indexOf('$('); j >= 0; j = inner.indexOf('$(', j + 1)) {
+        const close = closing(inner, j + 1, ')')
+        if (close < 0 || braceExpands(inner.slice(j + 2, close))) return true
+      }
+      i = end; continue
+    }
+    if (c === '$' && s[i + 1] === '{') { const end = s.indexOf('}', i); if (end < 0) return true; i = end; continue }
+    if (c !== '{') continue
+    let depth = 0
+    for (let j = i; j < s.length && !/\s/.test(s[j]); j++) {
+      if (s[j] === '{') depth++
+      else if (s[j] === '}' && --depth === 0) { if (/,|\.\./.test(s.slice(i + 1, j))) return true; break }
+    }
+  }
+  return false
+}
+
+const MKTEMP = /^\$\(mktemp(?:\s+[\w./-]+)*\)$/
+const ref = (name) => new RegExp(`\\$(?:${name}(?!\\w)|\\{${name}(?::?\\?[^}]*)?\\})`, 'g')
+
+// Values bound in this line by NAME=v, export/local/readonly NAME=v and `for NAME in v...`,
+// each one literal text, a mktemp, or other (anything still holding $ or a backtick).
+function bindings(segs) {
+  const found = new Map()
+  const bind = (name, raw) => {
+    const kind = MKTEMP.test(raw.replace(/^"(.*)"$/, '$1')) ? 'mktemp' : /[$`]/.test(raw) ? 'other' : 'literal'
+    if (!found.has(name)) found.set(name, [])
+    found.get(name).push({ kind, value: kind === 'literal' ? strip(raw) : raw })
+  }
+  for (const seg of segs) {
+    let k = 0
+    if (['export', 'local', 'readonly'].includes(seg[0]?.raw)) k = 1
+    for (; k < seg.length; k++) {
+      const m = seg[k].raw.match(/^([A-Za-z_]\w*)=(.*)$/s)
+      if (!m) break
+      bind(m[1], m[2])
+    }
+    const f = seg.findIndex((w) => w.raw === 'for')
+    if (f >= 0 && /^[A-Za-z_]\w*$/.test(seg[f + 1]?.raw ?? '') && seg[f + 2]?.raw === 'in') {
+      for (const w of seg.slice(f + 3)) bind(seg[f + 1].raw, w.raw)
+    }
+  }
+  return found
+}
+
 /** True when this PermissionRequest should be answered "allow" without a human. */
 export function bypassAllows(input) {
   if (input?.permission_mode !== 'bypassPermissions' || input?.tool_name !== 'Bash') return false
   const command = String(input?.tool_input?.command ?? '')
   if (!command.trim()) return false
   const cwd = isAbsolute(String(input?.cwd ?? '')) ? physical(String(input.cwd)) : null
+  const segs = parse(command)
+  if (!segs) return allows(command, cwd)
+  const bound = bindings(segs)
+  const words = segs.flat()
 
+  // A brace expansion asks, unless it hangs off a mktemp dir and never climbs out of it.
+  const mktemp = (name) => bound.get(name)?.every((b) => b.kind === 'mktemp')
+  for (const w of words.filter((x) => braceExpands(x.raw))) {
+    const m = w.raw.match(/^"?\$\{?([A-Za-z_]\w*)\}?"?\/(.*)$/s)
+    if (!m || !mktemp(m[1]) || m[2].includes('..')) return false
+  }
+  // A variable bound to something we can't read asks when glued to other text in a word.
+  for (const [name, list] of bound) {
+    if (!list.some((b) => b.kind === 'other')) continue
+    if (words.some((w) => { const hits = w.raw.match(ref(name)); return hits && w.raw.replace(/"/g, '') !== hits[0] })) return false
+  }
+  // Run every check on the line as written and on each substitution of its literal bindings.
+  let variants = [command]
+  for (const [name, list] of bound) {
+    const literals = list.filter((b) => b.kind === 'literal')
+    if (!literals.length || !ref(name).test(command)) continue
+    variants = variants.flatMap((v) => literals.map((b) => v.replace(ref(name), () => b.value)))
+    if (variants.length > 256) return false
+  }
+  return allows(command, cwd) && variants.every((v) => allows(v, cwd))
+}
+
+function allows(command, cwd) {
   // Self-protect: any mention of .claude with settings or hooks, and any escaped word near .claude.
   for (const text of [command, strip(command)].map((t) => t.toLowerCase())) {
     if (text.includes('.claude') && /settings|hooks/.test(text)) return false
