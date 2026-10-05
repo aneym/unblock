@@ -62,7 +62,7 @@ test('a v1 scope becomes a doc with anchored threads; ask, comment, take the rec
     assert.equal(posted.json.thread.id, 'T5')
     assert.equal(posted.json.thread.author, 'alex')
     await until(() => h.paneLines().includes('[scoping demo] Alex on §The plan "Voice comes last": Voice can wait for round two. (new T5) (reply: unblock scope reply demo <T#> "<one line>")'), 'comment in the pane')
-    assert.equal((await request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor: { section: 'nowhere', quote: 'x' }, text: 'x' } })).status, 400)
+    assert.equal((await request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor: { section: 'plan', quote: '' }, text: 'x' } })).status, 400)
 
     // 4. Alex takes the recommendation on T4 ("Take it"): resolved by him at once, and the lane is told to edit the doc.
     const took = await request('/api/scope/demo/threads/T4/resolve', { method: 'POST', headers: human, body: { decision: 'Phones first', alex_words: 'Take the recommendation', how: 'take' } })

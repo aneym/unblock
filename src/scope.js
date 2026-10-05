@@ -9,7 +9,7 @@ import { lintDoc, lintText } from './scope-lint.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './doc-kinds.js'
-import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, APPS, appOf, DOC_WHERES } from './scope-doc.js'
+import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 import { createLiveItems, MAX_TEXT } from './live-items.js'
 
@@ -1007,9 +1007,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       result = { revision: scope.revision }
     } else if (newThread) {
       if (human) {
+        // Alex's words are never refused for where they point: a lane can rewrite the text he selected while he types.
+        // His comment then lands detached, as a later doc write would leave it, and the lane still gets his quote.
         const anchor = normalizeAnchor(body.anchor)
-        const section = scope.doc.sections.find((s) => s.id === anchor?.section)
-        if (!section || !(anchor.embed ? hasEmbedFence(section, anchor.embed.src) : locateAnchor(sectionPlain(section), anchor))) bad('invalid anchor')
+        if (!anchor || !SECTION_ID.test(anchor.section)) bad('invalid anchor')
+        const section = scope.doc.sections.find((s) => s.id === anchor.section)
+        // A stored embed always names a demo fence in its section; with the fence gone the quote stays on the section.
+        if (anchor.embed && !(section && hasEmbedFence(section, anchor.embed.src))) delete anchor.embed
         if (body.recommendation !== undefined || body.why !== undefined) bad('invalid kind')
         thread = { id: nextThreadId(scope), anchor, author: 'alex', intent: text(body.text).includes('?') ? 'question' : 'change', kind: 'comment', status: 'open', messages: [{ from: 'alex', text: text(body.text), at, ...via, ...client, ...pictures }], created_at: at }
         if (body.options !== undefined) bad('options require an agent recommendation')

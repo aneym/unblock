@@ -25,9 +25,13 @@ test('embedded selections persist only under their containing demo fence', async
     const accepted = await create(anchor)
     assert.equal(accepted.status, 201)
     assert.deepEqual(accepted.json.thread.anchor.embed, embed)
-    for (const invalid of [{ ...anchor, section: 'title' }, { ...anchor, embed: { ...embed, src: 'https://example.com/not-a-fence.html' } }, { ...anchor, embed: { ...embed, quote: '' } }]) {
-      assert.equal((await create(invalid)).status, 400)
+    // A fence the section no longer holds (the lane republished while Alex typed) keeps his words on the section, without the embed.
+    for (const elsewhere of [{ ...anchor, section: 'title' }, { ...anchor, embed: { ...embed, src: 'https://example.com/not-a-fence.html' } }]) {
+      const landed = await create(elsewhere)
+      assert.equal(landed.status, 201)
+      assert.deepEqual(landed.json.thread.anchor, { section: elsewhere.section, quote: embed.quote, prefix: '', suffix: '' })
     }
+    assert.equal((await create({ ...anchor, embed: { ...embed, quote: '' } })).status, 400)
     const listed = await h.request('/api/scope/embed', { headers: human })
     assert.equal(listed.status, 200)
     assert.deepEqual(listed.json.scope.threads.find(t => t.id === accepted.json.thread.id).anchor.embed, embed)
