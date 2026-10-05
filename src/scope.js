@@ -540,7 +540,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const docWrite = sectionWrite || (req.method === 'PUT' && parts.length === 2 && action === 'doc')
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const batchThread = req.method === 'POST' && parts.length === 3 && action === 'threads' && threadId === 'batch'
-    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'delete'].includes(verb)
+    const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'unsay', 'delete'].includes(verb)
     if (!appWrite && !kpiWrite && !approvalWrite && !publishWrite && !destinationWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
@@ -563,6 +563,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const error = new Error('lanes edit threads through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
+    if (verb === 'unsay' && human) return sendJson(res, 403, { error: 'lanes remove their own replies through the CLI' })
     if (verb === 'react' && human) return sendJson(res, 403, { error: 'lanes react through the CLI' })
     if (['reopen', 'delete'].includes(verb)) {
       if (!human && verb === 'delete') return sendJson(res, 403, { error: 'only Alex deletes' })
@@ -580,7 +581,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (verb === 'react' && body.emoji !== '👀' && body.emoji !== null) return sendJson(res, 400, { error: 'invalid emoji' })
     if (approvalWrite && (Object.keys(body).some((key) => !['mode', 'comment', 'client_id', 'via'].includes(key))
       || !APPROVAL_MODES.includes(body.mode) || (body.comment !== undefined && typeof body.comment !== 'string'))) return sendJson(res, 400, { error: 'invalid approval' })
-    if (publishWrite && (Object.keys(body).some((key) => !['revision', 'where', 'target', 'client_id', 'via'].includes(key)) || !Number.isInteger(body.revision))) return sendJson(res, 400, { error: 'invalid publish' })
+    if (verb === 'unsay' && (Object.keys(body).some((key) => !['text'].includes(key)) || typeof body.text !== 'string' || !body.text.trim())) return sendJson(res, 400, { error: 'invalid unsay' })
+    if (publishWrite && (Object.keys(body).some((key) => !['revision', 'where', 'target', 'client_id', 'via', 'close_open'].includes(key)) || !Number.isInteger(body.revision) || (body.close_open !== undefined && typeof body.close_open !== 'boolean'))) return sendJson(res, 400, { error: 'invalid publish' })
     if (destinationWrite && (Object.keys(body).some((key) => !['where', 'target'].includes(key)) || body.where === undefined)) return sendJson(res, 400, { error: 'invalid destination' })
     if (shipWrite && (Object.keys(body).some((key) => !['pr', 'head', 'build', 'client_id'].includes(key))
       || !Number.isSafeInteger(body.pr) || body.pr <= 0 || !Number.isSafeInteger(body.build) || body.build <= 0
@@ -639,9 +641,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   }
 
   function publishScope(slug, scope, body, human) {
+    if (!human && kindSpec(scope).approve) bad('a scope is agreed with approve, not published; push the doc with `unblock scope doc`', 409)
     const duplicate = body.client_id && scope.versions?.find((stamp) => stamp.client_id === body.client_id)
     if (duplicate) return { version: duplicate.version, duplicate: true }
     if (body.revision !== scope.revision) bad(`scope is at revision ${scope.revision}, not ${body.revision}`, 409)
+    const open = (scope.threads ?? []).filter((thread) => thread.status === 'open').length
+    if (!human && open && body.close_open !== true) bad(`${open} open threads; pass --close-open to close them on publish`, 409)
     const where = body.where ?? scope.destination?.where ?? 'published'
     const target = body.target ?? scope.destination?.target
     if (!DOC_WHERES.includes(where)) bad('invalid where')
@@ -1071,6 +1076,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.rejected_at = at
         thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client, ...pictures })
         noteData = { event: 'reject', text: reason }
+      } else if (verb === 'unsay') {
+        const messages = thread.messages.filter((message, index) => index === 0 || message.from !== 'agent' || message.text !== body.text)
+        const removed = thread.messages.length - messages.length
+        if (!removed) bad('no matching agent reply', 404)
+        thread.messages = messages
+        result = { removed }
       } else if (verb === 'reopen') {
         if (!['resolved', 'parked'].includes(thread.status)) bad('only resolved or parked threads reopen')
         thread.status = 'open'; delete thread.resolution; delete thread.parked_at
@@ -1161,7 +1172,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
-    if (!human && verb !== 'react') {
+    if (!human && !['react', 'unsay'].includes(verb)) {
       const { keep = [] } = body
       const changed = docWrite ? body.sections.filter((section) => {
         const stored = storedSections.find((old) => old.id === section.id)

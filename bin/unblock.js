@@ -504,9 +504,10 @@ unblock scope reply <slug> T# --stream
 unblock scope react <slug> T# [--clear]
 unblock scope resolve <slug> T# [--decision "text"] [--quote "his exact words" | --revision N]
 unblock scope reopen <slug> T# [--reason "text"]
+unblock scope unsay <slug> T# --text "exact text"
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
 unblock scope unapprove <slug> --reason "<why>"
-unblock scope publish <slug> [--where published|sent|posted|submitted] [--target "text"]
+unblock scope publish <slug> [--where published|sent|posted|submitted] [--target "text"] [--close-open]
 unblock scope destination <slug> --where published|sent|posted|submitted [--target "text"]
 unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope kpi <slug> set --from <file.json>
@@ -662,6 +663,7 @@ async function scope(args, mode = 'scope') {
     for (let i = 0; i < words.length; i++) {
       const word = words[i]
       if (word === '--json') { json = true; continue }
+      if (word === '--close-open' && sub === 'publish') { opts[word] = true; continue }
       if (word !== '--where' && word !== '--target') fail(usage)
       const value = words[++i]
       if (value === undefined) fail(usage)
@@ -675,13 +677,13 @@ async function scope(args, mode = 'scope') {
       return output(data, `destination ${data.destination.where}${data.destination.target ? ` ${data.destination.target}` : ''}`)
     }
     const { scope: current } = await request(base)
-    const data = await request(`${base}/publish`, { revision: current.revision, client_id: randomUUID(), ...(where !== undefined ? { where } : {}), ...(target !== undefined ? { target } : {}) })
+    const data = await request(`${base}/publish`, { revision: current.revision, client_id: randomUUID(), ...(opts['--close-open'] ? { close_open: true } : {}), ...(where !== undefined ? { where } : {}), ...(target !== undefined ? { target } : {}) })
     return output(data, `published v${data.version}`)
   }
-  if (['ask', 'reply', 'resolve', 'reopen', 'edit'].includes(sub)) {
+  if (['ask', 'reply', 'resolve', 'reopen', 'unsay', 'edit'].includes(sub)) {
     if (words.at(-1) === '--json') { json = true; words.pop() }
     const opts = {}
-    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision', '--quote', '--revision'] : sub === 'reopen' ? ['--reason'] : ['--rec', '--why', '--option']
+    const allowed = sub === 'ask' ? ['--section', '--quote', '--rec', '--why', '--option'] : sub === 'edit' ? ['--section', '--quote', '--option', '--text'] : sub === 'resolve' ? ['--decision', '--quote', '--revision'] : sub === 'reopen' ? ['--reason'] : sub === 'unsay' ? ['--text'] : ['--rec', '--why', '--option']
     for (let i = 0; i < words.length; i++) {
       if (words[i] !== '--keep') continue
       if (words[i + 1] === undefined) fail('--keep needs a value')
@@ -730,6 +732,11 @@ async function scope(args, mode = 'scope') {
       if (!threadId || words.length || (opts['--revision'] !== undefined && (!/^-?\d+$/.test(opts['--revision']) || !Number.isSafeInteger(Number(opts['--revision']))))) fail(usage)
       const data = await request(`${base}/threads/${threadId}/resolve`, { ...keep, ...(opts['--decision'] !== undefined ? { decision: opts['--decision'] } : {}), ...(opts['--quote'] !== undefined ? { quote: opts['--quote'] } : {}), ...(opts['--revision'] !== undefined ? { revision: Number(opts['--revision']) } : {}) })
       return output(data, `resolved ${data.thread.id}`)
+    }
+    if (sub === 'unsay') {
+      if (!threadId || words.length || opts['--text'] === undefined || opts['--keep'] !== undefined) fail(usage)
+      const data = await request(`${base}/threads/${threadId}/unsay`, { text: opts['--text'] })
+      return output(data, `removed ${data.removed} replies from ${data.thread.id}`)
     }
     if (sub === 'reopen') {
       if (!threadId || words.length) fail(usage)
