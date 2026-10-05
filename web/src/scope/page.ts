@@ -708,8 +708,7 @@ function renderCards() {
   for (const item of sending.values()) if ((!item.id && item.anchor) || item.failed) {
     if (item.id && scope?.threads.some(t => t.id === item.id)) {
       const threadCard = [...document.querySelectorAll<HTMLElement>('.card[data-t]')].find(card => card.dataset.t === item.id)
-      if (threadCard) threadCard.insertAdjacentHTML('beforeend', sendingLine(item))
-      continue
+      if (threadCard) { threadCard.insertAdjacentHTML('beforeend', sendingLine(item)); continue }
     }
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
