@@ -185,9 +185,14 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
   }
 
   // The section edit goes through the same CLI and lint a lane uses, so a responder can't publish what a lane couldn't.
-  function applyEdit(slug, outcome) {
+  function applyEdit(slug, scope, outcome) {
     const { edit, ...rest } = outcome
-    if (!/^## .*\{#([A-Za-z0-9_-]+)\}\s*$/m.test(edit.markdown.split('\n')[0])) return Promise.resolve({ ...rest, text: `${rest.text}\n\n(Couldn't edit the section: no heading line.)`, needs_owner: true, why: rest.why || 'section edit failed' })
+    // The model often drops the heading or its {#id}; the section keeps its own heading and id either way.
+    const lines = edit.markdown.split('\n')
+    const heading = headingOf(scope, edit.id)
+    if (!lines[0].startsWith('## ')) lines.unshift(`## ${heading} {#${edit.id}}`, '')
+    else if (!/\{#[A-Za-z0-9_-]+\}\s*$/.test(lines[0])) lines[0] = `${lines[0].trimEnd()} {#${edit.id}}`
+    edit.markdown = lines.join('\n')
     const dir = mkdtempSync(join(tmpdir(), 'unblock-edit-'))
     const file = join(dir, 'section.md')
     writeFileSync(file, `${edit.markdown}\n`)
@@ -214,7 +219,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
     const settle = async (outcome) => {
       if (stopped) return
-      if (outcome.edit) outcome = await applyEdit(job.slug, outcome)
+      if (outcome.edit) outcome = await applyEdit(job.slug, scope, outcome)
       try {
         await patch(outcome)
         item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
