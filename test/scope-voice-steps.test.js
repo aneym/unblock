@@ -36,7 +36,7 @@ test('parked questions explain why they cannot take an answer or park again', as
   assert.deepEqual(await session.handle('park'), { ok: false, speech: 'No open question here.' })
 })
 
-test('stepping from a resolved or parked thread follows its doc position', async () => {
+test('stepping from a resolved or parked comment follows its doc position', async () => {
   for (const status of ['resolved', 'parked']) {
     const scope = scopeWith([makeThread('T1', 'First choice', status), makeThread('T2', 'Second choice', 'open')])
     const session = createScopeVoiceSession({

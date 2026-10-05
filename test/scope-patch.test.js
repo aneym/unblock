@@ -2,7 +2,7 @@
 // Lanes edit one section right after answering a note (PROTOCOL "Live doc, live comments"), so the page updates
 // section by section. `unblock scope patch <slug> <id> --from file.md` replaces one section through
 // PUT /api/scope/<slug>/sections/<id>, with the same checks as a doc write: assets, the unslop gate, change
-// stamps, thread re-anchoring and one live event. Two lanes patching different sections never lose each other's edit.
+// stamps, comment re-anchoring and one live event. Two lanes patching different sections never lose each other's edit.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -48,7 +48,7 @@ test('a lane patches one section; checks match a doc write; parallel patches bot
     for (const id of ['title', 'plan']) assert.deepEqual(after.doc.sections.find((s) => s.id === id), before.doc.sections.find((s) => s.id === id))
     await events.next('scope', (d) => d.scope?.revision === 2)
 
-    // 2. A heading can change too; a thread whose quote is gone is reported detached, as with a doc write.
+    // 2. A heading can change too; a comment whose quote is gone is reported detached, as with a doc write.
     const moved = await patch('plan', { heading: 'The plan, phones first', body_md: 'We ship the page first, for phones.' })
     assert.equal(moved.status, 200, moved.text)
     assert.deepEqual(moved.json.detached, ['T1'])

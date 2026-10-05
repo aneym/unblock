@@ -1,5 +1,5 @@
 /**
- * Scoping doc, contract v2: one document plus threads anchored to it
+ * Scoping doc, contract v2: one document plus comments anchored to it
  * (Google Docs model). Fixed interface, shared by the daemon (src/scope.js),
  * the CLI (bin/unblock.js), the voice rules (src/scope-voice.js) and the page
  * (web/src/scope/*). Pure ESM, no Node or DOM APIs.
@@ -164,14 +164,14 @@ export function appOf(scope: { app?: unknown; slug?: string }): NonNullable<Scop
  *   `#`/`##`/`###` headings or a paragraph that is only `**Heading**`; text before the first heading is
  *   section `plan` (heading 'The plan'). Ids: slugified heading, deduped with -2, -3.
  *   `unverified` (if present) becomes a last section 'unverified' ('Not verified yet').
- * - questions → question threads (id T<n> in order, legacy_id = Q id): anchored to the first section whose
+ * - questions → question comments (id T<n> in order, legacy_id = Q id): anchored to the first section whose
  *   plain text contains a word-bounded mention of the Q id or of the question's `section` field if any,
  *   else to the title (quote = title). Open (or missing) → status open; answered/decided → resolved with
  *   resolution {decision: answer text, alex_words: answer text, by: 'alex'}; dropped → resolved with
  *   {decision: 'Dropped' + (answer ? ': ' + answer : ''), alex_words: answer ?? null, by: 'alex'}.
  *   Migrated resolutions carry at = answered_at ?? updated_at, confirmed_at = at, revision = 1.
- * - decisions → resolved question threads anchored to the title (legacy_id = decision id).
- * - thread (v1 chat) → ONE comment thread on the title (legacy_id 'thread') holding every message in order,
+ * - decisions → resolved question comments anchored to the title (legacy_id = decision id).
+ * - thread (v1 chat) → ONE comment on the title (legacy_id 'thread') holding every message in order,
  *   status open when its last message is from alex, else resolved (by agent, decision 'Answered in thread').
  * - revision 1, version 2; slug/title/pane/updated_at carried over.
  */

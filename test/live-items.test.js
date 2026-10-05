@@ -2,9 +2,9 @@
 // Alex (2026-10-03): "would be cool if i could see your responses streaming in the comments and a thinking indicator
 // ... built on the same infra we'll use to model after the t3 code nice text streaming", and "it'd be good to know how
 // this comment is being handled, like if we're waiting for a workflow or teammate or researching".
-// Contract: each reply turn on a thread is one live item, upserted by id over the page's existing SSE channel
+// Contract: each reply turn on a comment is one live item, upserted by id over the page's existing SSE channel
 // (event "item") with a status that only moves forward: seen -> thinking -> streaming -> done | failed.
-//   item = { id: "<thread>@<to>", type: "reply", thread, to (the `at` of Alex's message it answers), by, status,
+//   item = { id: "<comment>@<to>", type: "reply", comment, to (the `at` of Alex's message it answers), by, status,
 //            doing: { text, link? } | null, text, seq (rises on every upsert), updated_at }
 // Explainer answerers drive it from Claude Code stream-json (tool calls become `doing`, text deltas stream in);
 // lanes drive it with `unblock scope typing <slug> T# --doing <text> [--link <url>]` and
@@ -124,7 +124,7 @@ test('an explainer answer streams as one live item: thinking with what it reads,
     assert.equal(items.at(-1).status, 'done')
     assert.equal(items.at(-1).text, FINAL)
     const answer = thread.messages.find((m) => m.from === 'agent')
-    assert.equal(answer.text, FINAL, 'the final reply lands in the thread')
+    assert.equal(answer.text, FINAL, 'the final reply lands in the comment')
     assert.ok(!answer.pending)
     const scopeFrames = live.events.filter((e) => e.event === 'scope' || e.event === 'state')
     for (const frame of scopeFrames) {
@@ -180,7 +180,7 @@ test('a lane shows what it is doing, streams its reply from stdin, and a finishe
     for (let i = 1; i < texts.length; i++) assert.ok(texts[i].startsWith(texts[i - 1]), 'each step extends the last')
     assert.equal(items.at(-1).text, FINAL)
     const thread = (await t.get()).scope.threads[0]
-    assert.equal(thread.messages.filter((m) => m.from === 'agent').at(-1)?.text, FINAL, 'the full reply lands in the thread')
+    assert.equal(thread.messages.filter((m) => m.from === 'agent').at(-1)?.text, FINAL, 'the full reply lands in the comment')
 
     const count = live.items('T1').length
     const late = await cli(['scope', 'typing', slug, 'T1', '--doing', 'too late'])

@@ -93,11 +93,11 @@ def scenario(phone, label):
         *hook_steps('detached_resolved'),
         # 1. Resolved off: nothing resolved shows, in the rail, the Detached group or inline.
         C(f'{label}: with Resolved off no resolved card shows (just resolved, old, detached)', X + " const shown = ['T1', 'T5', 'T6'].filter((t) => vis(card(t)) || vis(where(t))); return {ok: shown.length === 0, shown}"),
-        C(f'{label}: no Detached heading when every detached thread is resolved', X + " const d = document.querySelector('#detached'); return {ok: !d || !vis(d) || !/Detached/.test(d.textContent), text: d?.textContent}"),
+        C(f'{label}: no Detached heading when every detached comment is resolved', X + " const d = document.querySelector('#detached'); return {ok: !d || !vis(d) || !/Detached/.test(d.textContent), text: d?.textContent}"),
         C(f'{label}: resolved text is not highlighted inline', X + " return {ok: clear(mark('T1')) && clear(mark('T5')), t1: mark('T1') && getComputedStyle(mark('T1')).backgroundColor}"),
-        C(f'{label}: the open threads still show', X + " return {ok: vis(mark('T2')) && !clear(mark('T2')) && (%s || (vis(card('T2')) && vis(card('T4'))))}" % ('true' if phone else 'false')),
+        C(f'{label}: the open comments still show', X + " return {ok: vis(mark('T2')) && !clear(mark('T2')) && (%s || (vis(card('T2')) && vis(card('T4'))))}" % ('true' if phone else 'false')),
         *js("(() => { %s?.click(); return true })()" % mark('T1'), 600),
-        C(f'{label}: a resolved highlight does not open its thread while Resolved is off', X + " return {ok: !document.querySelector('.card.on[data-t=\"T1\"]') && !vis(document.querySelector('.sheet .card[data-t=\"T1\"]'))}"),
+        C(f'{label}: a resolved highlight does not open its comment while Resolved is off', X + " return {ok: !document.querySelector('.card.on[data-t=\"T1\"]') && !vis(document.querySelector('.sheet .card[data-t=\"T1\"]'))}"),
         {'shot': f'{label}-resolved-off'},
         *close,
         # 2. Resolved on: they show, each with Reopen.
@@ -107,7 +107,7 @@ def scenario(phone, label):
     if phone:
         steps += [
             *js("(() => { %s.click(); return true })()" % mark('T5'), 700),
-            C(f'{label}: the resolved thread opens with a Reopen button', X + " const c = document.querySelector('.sheet .card[data-t=\"T5\"]'), b = c?.querySelector('[data-action=\"reopen\"]'); return {ok: vis(c) && vis(b) && b.textContent.trim() === 'Reopen'}"),
+            C(f'{label}: the resolved comment opens with a Reopen button', X + " const c = document.querySelector('.sheet .card[data-t=\"T5\"]'), b = c?.querySelector('[data-action=\"reopen\"]'); return {ok: vis(c) && vis(b) && b.textContent.trim() === 'Reopen'}"),
             {'shot': f'{label}-reopen'},
             *js("(() => { document.querySelector('.sheet .card[data-t=\"T5\"] [data-action=\"reopen\"]').click(); return true })()", 1200),
             C(f'{label}: Reopen puts it back to open', X + " const c = document.querySelector('.sheet .card[data-t=\"T5\"]') || card('T5'); return {ok: !!c && !c.classList.contains('resolved') && !c.querySelector('[data-action=\"reopen\"]'), cls: c?.className}"),
@@ -126,7 +126,7 @@ def scenario(phone, label):
         ]
     steps += [
         *toggle,
-        C(f'{label}: the reopened thread stays with Resolved off; the others hide again', X + " return {ok: !clear(mark('T5')) && clear(mark('T1')) && (%s || (vis(card('T5')) && !vis(card('T1')) && !vis(card('T6')))), t5: mark('T5') && getComputedStyle(mark('T5')).backgroundColor}" % ('true' if phone else 'false')),
+        C(f'{label}: the reopened comment stays with Resolved off; the others hide again', X + " return {ok: !clear(mark('T5')) && clear(mark('T1')) && (%s || (vis(card('T5')) && !vis(card('T1')) && !vis(card('T6')))), t5: mark('T5') && getComputedStyle(mark('T5')).backgroundColor}" % ('true' if phone else 'false')),
     ]
     if phone:
         steps += [
@@ -136,7 +136,7 @@ def scenario(phone, label):
                 "try { m.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [new Touch({ identifier: 1, target: m, clientX: x, clientY: y })] })) } catch {} return true })()" % mark('T4'), 800),
             *js("(() => { const { m, x, y } = window.__lp; m.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y })); "
                 "try { m.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, changedTouches: [new Touch({ identifier: 1, target: m, clientX: x, clientY: y })] })) } catch {} return true })()", 700),
-            C(f'{label}: a long press opens the thread with its menu', X + " const c = document.querySelector('.sheet .card[data-t=\"T4\"]'); return {ok: vis(c) && vis(menu(c)) && JSON.stringify(items(c)) === JSON.stringify(['Reply', 'Resolve', 'Copy link', 'Jump to text', 'Delete']), items: items(c)}"),
+            C(f'{label}: a long press opens the comment with its menu', X + " const c = document.querySelector('.sheet .card[data-t=\"T4\"]'); return {ok: vis(c) && vis(menu(c)) && JSON.stringify(items(c)) === JSON.stringify(['Reply', 'Resolve', 'Copy link', 'Jump to text', 'Delete']), items: items(c)}"),
             {'shot': f'{label}-long-press'},
             *esc,
             C(f'{label}: Escape closes the menu', X + " return {ok: ![...document.querySelectorAll('.menu[role=menu]')].some(vis)}"),
@@ -151,7 +151,7 @@ def scenario(phone, label):
             *esc,
             C(f'{label}: Escape closes the menu', X + " return {ok: ![...document.querySelectorAll('.menu[role=menu]')].some(vis)}"),
             *ctx(mark('T4')),
-            C(f'{label}: right-click on a highlight opens that thread\'s menu', X + " const c = card('T4'); return {ok: window.__ctxPrevented === true && c.classList.contains('on') && vis(menu(c)), cls: c.className}"),
+            C(f'{label}: right-click on a highlight opens that comment\'s menu', X + " const c = card('T4'); return {ok: window.__ctxPrevented === true && c.classList.contains('on') && vis(menu(c)), cls: c.className}"),
             # Copy link.
             *js("(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t } } }); return true })()", 100),
             *pick(card('T4'), 'Copy link'),

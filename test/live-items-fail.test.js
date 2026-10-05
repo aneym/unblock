@@ -2,7 +2,7 @@
 // Follow-up to test/live-items.test.js (team-lead, 2026-10-03): "A streaming item must never stick. When the final
 // reply is refused (the 600-character cap or any other error), the item ends `failed` with a short reason. Suppress the
 // "NEEDS_OW" fragment. Add a total cap on streamed text."
-// Contract: a refused lane reply (any 4xx on POST threads/T#/reply from a lane) ends that turn's thinking or streaming
+// Contract: a refused lane reply (any 4xx on POST comments/T#/reply from a lane) ends that turn's thinking or streaming
 // item failed, error = the refusal message (at most 200 characters). A lane stream that goes quiet for
 // UNBLOCK_LIVE_STALE_MS (default 90 s) ends failed. A lane stream past 12000 characters is refused with 413 and the item
 // ends failed. An explainer's streamed text never shows any part of a NEEDS_OWNER line. A typing --link is trimmed

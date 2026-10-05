@@ -61,7 +61,7 @@ export function makeAnchor(section: AnchorSection, text: string, start: number, 
  */
 export function locateAnchor(text: string, anchor: Anchor): { start: number; end: number; exact: boolean } | null
 
-/** Round-2 labels: 'the plan', 'your ask', 'Q3', 'the decisions', 'the thread'; any other id → the id itself. v2 pane lines use `§<heading>` (headingOf) instead. */
+/** Round-2 labels: 'the plan', 'your ask', 'Q3', 'the decisions', 'the comment'; any other id → the id itself. v2 pane lines use `§<heading>` (headingOf) instead. */
 export function sectionLabel(section: AnchorSection): string
 
 /** The quote cut to `max` chars (default 80) at a word boundary with '…', double quotes turned into single. */

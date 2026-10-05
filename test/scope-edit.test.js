@@ -2,7 +2,7 @@
 // A lane rewrites its doc as the final design doc: each open question's
 // recommended answer is stated in the text, and the question moves to the
 // sentence that carries it (scope edit), with its options listed. Alex's
-// threads and history survive; edit never pings the pane; only agents edit.
+// comments and history survive; edit never pings the pane; only agents edit.
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
@@ -61,7 +61,7 @@ test('the lane rewrites the doc as final, moves each question to its sentence an
     const t2 = scope.threads.find((t) => t.id === 'T2')
     assert.equal(t2.anchor.quote, 'Voice comes last')
     assert.equal(t2.messages[0].text, 'Fine by me.')
-    const threads = await cli('scope', 'threads', 'demo', '--open')
+    const threads = await cli('scope', 'comments', 'demo', '--open')
     assert.match(threads.stdout, /T1 open question §The plan "We build for phones first": Which screen first\? \[rec: Phones first\] \[options: Phones first \| Desktop first \| Both at once\]/)
 
     assert.equal(paneLines(), before, 'edit never reaches the pane (the lane does its own housekeeping)')
@@ -74,7 +74,7 @@ test('the lane rewrites the doc as final, moves each question to its sentence an
     assert.equal(await bad({ section: 'plan', quote: 'not in the doc' }), 400)
     assert.equal((await request('/api/scope/demo/threads/T2/edit', { method: 'POST', headers: bearer, body: { options: ['x', 'y'] } })).status, 400, 'comments have no options')
 
-    // 5. Only agents edit: Alex's page cannot move or rewrite threads.
+    // 5. Only agents edit: Alex's page cannot move or rewrite comments.
     assert.equal((await request('/api/scope/demo/threads/T1/edit', { method: 'POST', headers: human, body: { section: 'plan', quote: 'Ship the page' } })).status, 403)
 
     // 6. A new option after a No replaces the options (or removes them when none are given).

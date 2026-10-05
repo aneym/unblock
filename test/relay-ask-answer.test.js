@@ -1,5 +1,5 @@
 // Owner: Opus (r32, pJ0 TO-pHY-11). Implementers make it pass and never edit it.
-// Alex (2026-09-30 09:03 ET via pJ0): unblock asks show in Rails Admin and he answers them there. Admin queues the
+// Alex (2026-09-30 09:03 ET via pJ0): unblock asks show in Development area and he answers them there. Admin queues the
 // answer; the Studio relay (X-Unblock-Relay, loopback only) posts it to POST /api/asks/<ticket>/answer. The relay
 // answers as Alex in Admin, like the page does, with three extra rules: it never carries a secret or paste value
 // (Admin never collects them), it answers only an open ask at the revision Admin showed, and it can't bounce.

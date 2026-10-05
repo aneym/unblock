@@ -41,7 +41,7 @@ function offline() {
 
 test('unblock scope with no args, --help, -h and help print usage without touching the daemon', async () => {
   const { env, temp } = offline()
-  for (const args of [['scope'], ['scope', '--help'], ['scope', '-h'], ['scope', 'help']]) {
+  for (const args of [['scope'], ['scope', '--help'], ['scope', '-h'], ['scope', 'help'], ['scope', 'comments', '--help']]) {
     const r = await run(args, env)
     assert.equal(r.status, 0, `${args.join(' ')}: ${r.stderr}`)
     assert.match(r.stdout, /unblock scope new <slug> --pane <pane>/, `${args.join(' ')} names scope new`)
@@ -51,6 +51,9 @@ test('unblock scope with no args, --help, -h and help print usage without touchi
     assert.ok(r.ms < 4000, `usage is instant, took ${r.ms}ms`)
   }
   assert.equal(existsSync(join(temp, 'state', 'daemon.json')), false, 'no daemon was started')
+  const oldCommand = await run(['scope', 'threads', '--help'], env)
+  assert.equal(oldCommand.status, 2, 'the old subcommand has no alias')
+  assert.doesNotMatch(oldCommand.stderr, /daemon|unknown option/i)
   const top = await run(['help'], env)
   assert.match(top.stdout, /unblock scope new <slug> --pane <pane>/)
   assert.match(top.stdout, /unblock scope ask <slug> --from <questions\.json>/)
@@ -58,25 +61,25 @@ test('unblock scope with no args, --help, -h and help print usage without touchi
 
 test('scope new writes a valid v2 scope.json, offline, and refuses to overwrite or take bad input', async () => {
   const { env, scopes } = offline()
-  const made = await run(['scope', 'new', 'tutor-desk', '--pane', 'w5H:pZZ', '--app', 'closer', '--title', 'Tutor desk'], env)
+  const made = await run(['scope', 'new', 'tutor-home', '--pane', 'w5H:pZZ', '--app', 'closer', '--title', 'Tutor home'], env)
   assert.equal(made.status, 0, made.stderr)
-  const file = join(scopes, 'tutor-desk', 'scope.json')
+  const file = join(scopes, 'tutor-home', 'scope.json')
   const scope = JSON.parse(readFileSync(file, 'utf8'))
   assert.deepEqual(validateScope(scope), [])
   assert.equal(scope.version, 2)
-  assert.equal(scope.slug, 'tutor-desk')
+  assert.equal(scope.slug, 'tutor-home')
   assert.equal(scope.pane, 'w5H:pZZ')
   assert.equal(scope.app, 'closer')
-  assert.equal(scope.title, 'Tutor desk')
+  assert.equal(scope.title, 'Tutor home')
   assert.equal(scope.revision, 1)
   assert.deepEqual(scope.threads, [])
   assert.equal(scope.doc.sections[0].id, 'title')
-  assert.equal(scope.doc.sections[0].heading, 'Tutor desk')
+  assert.equal(scope.doc.sections[0].heading, 'Tutor home')
   assert.ok(Number.isFinite(Date.parse(scope.updated_at)))
-  assert.match(made.stdout, /tutor-desk/)
+  assert.match(made.stdout, /tutor-home/)
 
   const before = readFileSync(file, 'utf8')
-  const again = await run(['scope', 'new', 'tutor-desk', '--pane', 'w5H:pZ1'], env)
+  const again = await run(['scope', 'new', 'tutor-home', '--pane', 'w5H:pZ1'], env)
   assert.notEqual(again.status, 0, 'an existing scope is never overwritten')
   assert.match(again.stderr, /exists/i)
   assert.equal(readFileSync(file, 'utf8'), before)

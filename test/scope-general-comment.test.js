@@ -2,7 +2,7 @@
 // Alex, 2026-09-29 (Closer page, T13): "need an easy way in scoping docs to just leave a general comment not a
 // highlighted comment only." The page posts a general comment on the title section with the doc title as its quote
 // and anchor.general true. The daemon keeps the flag (title only), sends the lane "Alex (general): ...", never lists
-// the thread as detached when the lane renames the title, and orders it first among open threads.
+// the comment as detached when the lane renames the title, and orders it first among open comments.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { anchorInSection, orderThreads } from '../src/scope-doc.js'
@@ -43,7 +43,7 @@ test('a general comment keeps its flag, reads "(general)" to the lane, survives 
     const plain = await post({ section: 'plan', quote: 'Then the voice', prefix: '', suffix: '', general: true }, 'Voice can wait.')
     assert.equal(plain.status, 201, plain.text)
     assert.equal(plain.json.thread.anchor.general, undefined)
-    assert.equal(orderThreads(await get())[0].id, 'T3', 'a general comment sorts first among open threads')
+    assert.equal(orderThreads(await get())[0].id, 'T3', 'a general comment sorts first among open comments')
 
     // 3. The lane renames the title: the highlight on the old title detaches, the general comment does not.
     const renamed = (await get()).doc.sections.map((s) => s.id === 'title' ? { ...s, heading: 'Phone scope' } : s)

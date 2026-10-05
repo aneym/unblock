@@ -3,9 +3,9 @@
 // give it the tools to mark the actual scoping docs as such as well please. see it through please."
 // A PM relays an approval Alex gave in chat: `unblock scope approve <slug> --by alex --quote "<his words>" [--at <iso>]`
 // (and the MCP tool unblock_scope_approve). It writes the same scope.approval every reader already counts as approved,
-// with via 'pm-relay', his words verbatim and the time he said them in ET. Open threads stay open; the approval records
+// with via 'pm-relay', his words verbatim and the time he said them in ET. Open comments stay open; the approval records
 // how many. --quote is required: the PM never paraphrases him. `unblock scope unapprove <slug> --reason` takes it back.
-// The page's banner says who approved, when, his words, that the PM relayed it, and how many threads were still open.
+// The page's banner says who approved, when, his words, that the PM relayed it, and how many comments were still open.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -62,7 +62,7 @@ function cliFor(h) {
   })
 }
 
-test('a PM relays Alex\'s approval with his words: approved for every reader, threads stay open, tab leaves SCOPING', async () => {
+test('a PM relays Alex\'s approval with his words: approved for every reader, comments stay open, tab leaves SCOPING', async () => {
   const h = await startScopeHarness(scopeWith('demo'))
   const s = stubs()
   const cli = cliFor(h)
@@ -98,7 +98,7 @@ test('a PM relays Alex\'s approval with his words: approved for every reader, th
     assert.equal(a.revision, 4)
     assert.equal(a.open, 2, 'approved with 2 open')
     assert.match(a.who, /pm-relay/)
-    assert.deepEqual(scope.threads.map((t) => t.status), ['open', 'open'], 'open threads stay open')
+    assert.deepEqual(scope.threads.map((t) => t.status), ['open', 'open'], 'open comments stay open')
 
     // 4. Files every other reader uses: APPROVAL.md and the INDEX log.
     const approvalMd = readFileSync(join(dir, 'APPROVAL.md'), 'utf8')
@@ -174,7 +174,7 @@ test('MCP tools: unblock_scope_approve and unblock_scope_unapprove, quote and re
   } finally { delete process.env.UNBLOCK_AUTH; await h.close() }
 })
 
-test('the page banner says who, when, his words, relayed by the PM, and how many threads were open', async () => {
+test('the page banner says who, when, his words, relayed by the PM, and how many comments were open', async () => {
   const { approvalBannerHtml } = await import('../web/src/scope/approval-banner.js')
   const relayed = approvalBannerHtml({ mode: 'approve', by: 'alex', who: 'pm-relay:w5H:pT1', at: '2026-10-01T17:15:00.000Z', at_et: 'Oct 1, 1:15 PM ET',
     revision: 4, comment: QUOTE, quote: QUOTE, via: 'pm-relay', open: 2 })

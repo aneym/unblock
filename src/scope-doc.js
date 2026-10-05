@@ -238,23 +238,23 @@ export function validateScope(scope) {
     const filled = Array.isArray(scope.kpis) && scope.kpis.every((kpi) => object(kpi) && kpi.window_days !== undefined)
     check(!normalized.error && filled, 'invalid kpis')
   }
-  check(Array.isArray(scope.threads), 'invalid threads')
+  check(Array.isArray(scope.threads), 'invalid comments')
   const validImages = images => images === undefined || (Array.isArray(images) && images.length >= 1 && images.length <= 6 && images.every(image => object(image) && typeof image.id === 'string' && /^[0-9a-f]{16}\.(png|jpg|webp|gif)$/.test(image.id) && Number.isFinite(image.width) && image.width > 0 && Number.isFinite(image.height) && image.height > 0))
   const ids = new Set()
   for (const thread of Array.isArray(scope.threads) ? scope.threads : []) {
-    if (!object(thread)) { problems.push('invalid thread'); continue }
-    check(typeof thread.id === 'string' && THREAD_ID.test(thread.id) && !ids.has(thread.id), 'invalid or duplicate thread id')
+    if (!object(thread)) { problems.push('invalid comment'); continue }
+    check(typeof thread.id === 'string' && THREAD_ID.test(thread.id) && !ids.has(thread.id), 'invalid or duplicate comment id')
     ids.add(thread.id)
-    check(typeof thread.anchor?.section === 'string' && SECTION_ID.test(thread.anchor.section) && !!normalizeAnchor(thread.anchor), 'invalid thread anchor')
-    check(['question', 'comment'].includes(thread.kind), 'invalid thread kind')
-    check(['open', 'resolved', 'parked'].includes(thread.status), 'invalid thread status')
-    check(['alex', 'agent'].includes(thread.author), 'invalid thread author')
+    check(typeof thread.anchor?.section === 'string' && SECTION_ID.test(thread.anchor.section) && !!normalizeAnchor(thread.anchor), 'invalid comment anchor')
+    check(['question', 'comment'].includes(thread.kind), 'invalid comment kind')
+    check(['open', 'resolved', 'parked'].includes(thread.status), 'invalid comment status')
+    check(['alex', 'agent'].includes(thread.author), 'invalid comment author')
     if (thread.reaction !== undefined) check(object(thread.reaction) && thread.reaction.emoji === '👀' && thread.reaction.by === 'agent' && typeof thread.reaction.at === 'string', 'invalid reaction')
-    if (thread.options !== undefined) check(thread.kind === 'question' && Array.isArray(thread.options) && thread.options.length >= 2 && thread.options.length <= 5 && thread.options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200) && typeof thread.recommendation === 'string' && thread.options[0] === thread.recommendation, 'invalid thread options')
-    check(Array.isArray(thread.messages) && thread.messages.length > 0, 'invalid thread messages')
+    if (thread.options !== undefined) check(thread.kind === 'question' && Array.isArray(thread.options) && thread.options.length >= 2 && thread.options.length <= 5 && thread.options.every((option) => typeof option === 'string' && option.length >= 1 && option.length <= 200) && typeof thread.recommendation === 'string' && thread.options[0] === thread.recommendation, 'invalid comment options')
+    check(Array.isArray(thread.messages) && thread.messages.length > 0, 'invalid comment messages')
     check(thread.parked_client_id === undefined || (typeof thread.parked_client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.parked_client_id)), 'invalid parked_client_id')
     for (const key of ['rejected_at', 'parked_at']) check(thread[key] == null || typeof thread[key] === 'string', `invalid ${key}`)
-    for (const message of Array.isArray(thread.messages) ? thread.messages : []) check(object(message) && ['alex', 'agent'].includes(message.from) && typeof message.text === 'string' && (!!message.text.trim() || message.kind === 'reject' || message.images?.length > 0) && validImages(message.images) && typeof message.at === 'string' && (message.via === undefined || ['voice', 'admin'].includes(message.via)) && (message.client_id === undefined || (typeof message.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(message.client_id))) && (message.kind === undefined || ['reject', 'option'].includes(message.kind)) && (message.recommendation === undefined || typeof message.recommendation === 'string'), 'invalid thread message')
+    for (const message of Array.isArray(thread.messages) ? thread.messages : []) check(object(message) && ['alex', 'agent'].includes(message.from) && typeof message.text === 'string' && (!!message.text.trim() || message.kind === 'reject' || message.images?.length > 0) && validImages(message.images) && typeof message.at === 'string' && (message.via === undefined || ['voice', 'admin'].includes(message.via)) && (message.client_id === undefined || (typeof message.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(message.client_id))) && (message.kind === undefined || ['reject', 'option'].includes(message.kind)) && (message.recommendation === undefined || typeof message.recommendation === 'string'), 'invalid comment message')
     if (thread.resolution !== undefined) check(object(thread.resolution) && validImages(thread.resolution.images) && (thread.resolution.client_id === undefined || (typeof thread.resolution.client_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(thread.resolution.client_id))) && typeof thread.resolution.decision === 'string' && ['alex', 'agent'].includes(thread.resolution.by) && (thread.resolution.alex_words === null || typeof thread.resolution.alex_words === 'string') && (thread.resolution.how === undefined || ['take', 'own', 'resolve', 'approve'].includes(thread.resolution.how)) && typeof thread.resolution.at === 'string' && (thread.resolution.confirmed_at === null || typeof thread.resolution.confirmed_at === 'string') && (thread.resolution.revision === null || (Number.isInteger(thread.resolution.revision) && thread.resolution.revision >= 1)), 'invalid resolution')
   }
   return problems

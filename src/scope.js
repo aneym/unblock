@@ -265,7 +265,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           const atEt = approval.mode === note.event && approval.comment === note.text ? approval.at_et : eastern(note.at)
           const revision = approval.revision
           const count = scope.threads.filter((thread) => thread.resolution?.how === 'approve' && thread.resolution.at === approval.at).length
-          const closedLine = count ? ` ${count} open thread${count === 1 ? '' : 's'} closed with your recommendation${count === 1 ? '' : 's'}.` : ''
+          const closedLine = count ? ` ${count} open comment${count === 1 ? '' : 's'} closed with your recommendation${count === 1 ? '' : 's'}.` : ''
           const noteLine = !text ? '' : text.length > 600
             ? ` Alex's note (long, in full at ${join(root, slug, 'APPROVAL.md')}): "${cutUnits(text, 300)}…"`
             : ` Alex's note: "${text}"`
@@ -299,7 +299,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
             try {
               const alex = target.via === 'voice' ? 'Alex (by voice)' : target.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
               const heading = headingFor(target.anchor.section)
-              lines.push(`[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope threads ${slug}`)
+              lines.push(`[scoping ${slug}] ${alex} tagged you on ${target.thread} (§${heading} "${quoteSnippet(target.anchor.quote)}"): ${compact(target.words ?? target.text)}${/[.!?]$/.test(compact(target.words ?? target.text)) ? '' : '.'} Read it: unblock scope comments ${slug}`)
               valid.push(target)
             } catch { store.markScopeTarget(target.id, target.pane, 'failed') }
           }
@@ -363,7 +363,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const item = liveItems.list(parts[0]).find(i => i.id === `${parts[2]}@${to}`)
         if (item && ['thinking', 'streaming'].includes(item.status)) liveItems.upsert(parts[0], { id: item.id, status: 'failed', error: String(message).slice(0, 200), doing: null })
       }
-      if (write && status >= 400 && status < 500) console.error(`unblock: scope write refused slug=${parts[0]} thread=${parts[1] === 'threads' && THREAD_ID.test(parts[2]) ? parts[2] : '-'} verb=${parts[3] || parts[1] || '-'} status=${status} error=${String(message).replace(/[\r\n]/g, ' ')}`)
+      if (write && status >= 400 && status < 500) console.error(`unblock: scope write refused slug=${parts[0]} comment=${parts[1] === 'threads' && THREAD_ID.test(parts[2]) ? parts[2] : '-'} verb=${parts[3] || parts[1] || '-'} status=${status} error=${String(message).replace(/[\r\n]/g, ' ')}`)
     }
     try {
       return await handleRoute(req, res, url, (res, status, body) => { refused(status, body?.error); return sendJson(res, status, body) })
@@ -461,8 +461,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (relayIdentity(req) || !proxyIdentity(req)) return sendJson(res, 403, { error: 'only Alex picks' })
       requireHumanPath(req)
       const thread = state.scope?.threads.find(t => t.id === threadId)
-      if (!thread) bad('no such thread', 404)
-      if (thread.status !== 'open' || !thread.recommendation) bad('only open threads with recommendations')
+      if (!thread) bad('no such comment', 404)
+      if (thread.status !== 'open' || !thread.recommendation) bad('only open comments with recommendations')
       const body = await readJson(req)
       const text = typeof body?.text === 'string' ? body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim() : ''
       if (text.length > 4000) bad(`your answer is too long (${text.length} of 4000 characters)`)
@@ -531,7 +531,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const previous = writes.get(slug) ?? Promise.resolve()
       const pending = previous.catch(() => {}).then(() => {
         const thread = readDisk(slug).scope.threads.find(t => t.id === threadId)
-        if (!thread) bad('no such thread', 404)
+        if (!thread) bad('no such comment', 404)
         const to = [...thread.messages].reverse().find(m => m.from === 'alex')?.at
         if (!to) bad('no Alex message')
         const current = liveItems.list(slug).find(item => item.id === `${threadId}@${to}`)
@@ -580,7 +580,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
     if (verb === 'edit' && human) {
-      const error = new Error('lanes edit threads through the CLI')
+      const error = new Error('lanes edit comments through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
     if (verb === 'unsay' && human) return sendJson(res, 403, { error: 'lanes remove their own replies through the CLI' })
@@ -666,7 +666,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (duplicate) return { version: duplicate.version, duplicate: true }
     if (body.revision !== scope.revision) bad(`scope is at revision ${scope.revision}, not ${body.revision}`, 409)
     const open = (scope.threads ?? []).filter((thread) => thread.status === 'open').length
-    if (!human && open && body.close_open !== true) bad(`${open} open threads; pass --close-open to close them on publish`, 409)
+    if (!human && open && body.close_open !== true) bad(`${open} open comments; pass --close-open to close them on publish`, 409)
     const where = body.where ?? scope.destination?.where ?? 'published'
     const target = body.target ?? scope.destination?.target
     if (!DOC_WHERES.includes(where)) bad('invalid where')
@@ -749,7 +749,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (problems.length) bad(problems[0])
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
-    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nMode: approve\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${who}\nVia: pm-relay\nOpen threads: ${open} open\n\n${quote}\n`)
+    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval\n\nMode: approve\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${who}\nVia: pm-relay\nOpen comments: ${open} open\n\n${quote}\n`)
     appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'approve', comment: quote, at_et })
     try {
       const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'approve', text: quote, who, via: 'pm-relay' })
@@ -884,7 +884,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const last = thread.messages?.at(-1)
         for (const message of thread.messages ?? []) {
           if (message?.answerer !== true || (!message.pending && message.text !== 'Interrupted: ask again')) continue
-          // Only the thread's last message is re-asked: anything after it means Alex already moved on.
+          // Only the comment's last message is re-asked: anything after it means Alex already moved on.
           const retry = answererOn(scope) && !message.restart_retried && message === last
           if (!retry && !message.pending) continue
           delete message.handoff
@@ -1059,7 +1059,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       result = { threads }
     } else {
       thread = scope.threads.find((t) => t.id === threadId)
-      if (!thread) bad('no such thread', 404)
+      if (!thread) bad('no such comment', 404)
       if (verb !== 'react') delete thread.reaction
       if (verb === 'react') {
         if (body.emoji === null) delete thread.reaction
@@ -1097,7 +1097,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           thread.status = 'open'; delete thread.resolution; delete thread.parked_at
         }
       } else if (verb === 'reject') {
-        if (thread.status !== 'open' || !thread.recommendation) bad('only open threads with recommendations can be rejected')
+        if (thread.status !== 'open' || !thread.recommendation) bad('only open comments with recommendations can be rejected')
         const reason = body.text == null || (typeof body.text === 'string' && !body.text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()) ? '' : text(body.text)
         thread.rejected_at = at
         thread.messages.push({ from: 'alex', kind: 'reject', text: reason, at, ...via, ...client, ...pictures })
@@ -1109,9 +1109,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         thread.messages = messages
         result = { removed }
       } else if (verb === 'reopen') {
-        if (!['resolved', 'parked'].includes(thread.status)) bad('only resolved or parked threads reopen')
+        if (!['resolved', 'parked'].includes(thread.status)) bad('only resolved or parked comments reopen')
         thread.status = 'open'; delete thread.resolution; delete thread.parked_at
-        // Alex, 2026-10-02: lanes resolve and reopen threads themselves; his reopen is still a note to the lane.
+        // Alex, 2026-10-02: lanes resolve and reopen comments themselves; his reopen is still a note to the lane.
         if (human) noteData = { event: 'reopen', text: '' }
         else if (typeof body.text === 'string' && body.text.trim()) thread.messages.push({ from: 'agent', text: text(body.text, 600), at, ...client })
       } else if (verb === 'delete') {
@@ -1119,7 +1119,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         scope.threads = scope.threads.filter(t => t.id !== thread.id)
         noteData = { event: 'delete', text: '' }
       } else if (verb === 'park') {
-        if (thread.status !== 'open') bad('only open threads can be parked')
+        if (thread.status !== 'open') bad('only open comments can be parked')
         thread.status = 'parked'; thread.parked_at = at
         if (body.client_id !== undefined) thread.parked_client_id = body.client_id
         noteData = { event: 'park', text: '' }

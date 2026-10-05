@@ -1,6 +1,6 @@
 // Scenario (owner: Opus; implementers make it pass, never edit it):
 // Voice on a scoping doc is a quiet router. It opens with "Ready." and no
-// overview. "Next question" focuses the next open thread; his answer comes
+// overview. "Next question" focuses the next open comment; his answer comes
 // back as a one-line confirm; his yes resolves it through the daemon and the
 // lane's pane hears it as his own answer. "No" rejects a recommendation without
 // resolving it; "not now" parks one. Section navigation, a comment on the
@@ -111,7 +111,7 @@ test('the scoping voice waits, steps to the next question, confirms his answer, 
     const t1 = await thread('T1')
     assert.deepEqual([t1.status, t1.resolution.decision, t1.resolution.alex_words, t1.resolution.how], ['resolved', 'Page first', 'Take the recommendation', 'take'])
 
-    // 6b. "No, I hate it" on T5: sent at once, the thread stays open and rejected; the pane hears a rejection.
+    // 6b. "No, I hate it" on T5: sent at once, the comment stays open and rejected; the pane hears a rejection.
     context.thread = 'T5'
     assert.equal((await say('reject', { reason: 'too late' })).speech, 'Sent. Waiting for a new option.')
     const t5 = await thread('T5')
@@ -123,7 +123,7 @@ test('the scoping voice waits, steps to the next question, confirms his answer, 
     assert.equal((await thread('T5')).status, 'parked')
     assert.equal((await say('reject')).ok, false)
 
-    // 7. A comment thread takes a spoken reply as a reply, read back and sent on his yes (r18).
+    // 7. A comment comment takes a spoken reply as a reply, read back and sent on his yes (r18).
     context.thread = 'T4'
     assert.equal((await say('answer', { text: 'Ship it this week.' })).speech, 'Reply: "Ship it this week." Send it?')
     assert.equal((await say('confirm')).speech, 'Sent.')

@@ -112,7 +112,7 @@ test('the same point within 10 s is not filed again, even reworded; after 10 s i
 test('replies are read back too; lane notes stay quiet but never repeat within 10 s', async () => {
   const { say, posts } = setup('T1')
   assert.equal((await say('reply', { text: 'uh both phones' })).speech, 'Reply: "Both phones." Send it?')
-  assert.equal((await say('answer', { text: 'Both phones and tablets' })).speech, 'Reply: "Both phones and tablets." Send it?', 'an answer on a comment thread is a reply')
+  assert.equal((await say('answer', { text: 'Both phones and tablets' })).speech, 'Reply: "Both phones and tablets." Send it?', 'an answer on a comment comment is a reply')
   assert.equal(posts.length, 0)
   assert.equal((await say('confirm')).speech, 'Sent.')
   assert.deepEqual(posts.map((p) => [p.kind, p.id, p.text]), [['reply', 'T1', 'Both phones and tablets.']])

@@ -104,7 +104,7 @@ test('three questions at once get three answers in parallel, each started at onc
     ])
     for (const r of replies) assert.ok([200, 201].includes(r.status), r.text)
 
-    // "Answering…" shows at once on every thread, before any answer exists.
+    // "Answering…" shows at once on every comment, before any answer exists.
     const early = await t.get()
     assert.equal(early.threads.length, 3)
     for (const thread of early.threads) {
@@ -116,7 +116,7 @@ test('three questions at once get three answers in parallel, each started at onc
 
     await t.until(async () => (await t.get()).threads.every((th) => agentMessages(th).some((m) => !m.pending && /^Answer for Q-\d/.test(m.text))), 'all three answers posted')
     const runs = t.answerer.list()
-    assert.equal(runs.length, 3, 'one answerer process per thread')
+    assert.equal(runs.length, 3, 'one answerer process per comment')
     for (const run of runs) assert.ok(run.started - posted < 2000, `answerer for ${run.prompt.match(/Q-\d+/g).at(-1)} started within 2 s`)
     assert.ok(Math.max(...runs.map((r) => r.started)) < Math.min(...runs.map((r) => r.ended)), 'the three answerers overlapped (parallel, not queued)')
 
@@ -125,7 +125,7 @@ test('three questions at once get three answers in parallel, each started at onc
       const tag = thread.messages[0].text.match(/Q-\d+/)[0]
       const answers = agentMessages(thread)
       assert.equal(answers.length, 1, 'the pending message becomes the answer; no second agent message')
-      assert.equal(answers[0].text, `Answer for ${tag}: the reducer folds deltas (reducer.ts:1).`, 'the answer for this thread, not another')
+      assert.equal(answers[0].text, `Answer for ${tag}: the reducer folds deltas (reducer.ts:1).`, 'the answer for this comment, not another')
       assert.ok(!answers[0].needs_owner)
     }
 
@@ -159,7 +159,7 @@ test('three questions at once get three answers in parallel, each started at onc
   } finally { await t.h.close() }
 })
 
-test('a follow-up in the same thread gets its own answer, with the earlier exchange in the prompt', async () => {
+test('a follow-up in the same comment gets its own answer, with the earlier exchange in the prompt', async () => {
   const t = await boot(explainer('t3-follow'), { STUB_ANSWER_MS: '200' })
   try {
     const first = await t.ask('stream', 'websocket', 'Q-1 which websocket?', 'f-1')
@@ -174,11 +174,11 @@ test('a follow-up in the same thread gets its own answer, with the earlier excha
     assert.deepEqual(thread.messages.map((m) => m.from), ['alex', 'agent', 'alex', 'agent'])
     assert.match(thread.messages[3].text, /^Answer for Q-2/)
     const second = t.answerer.list().find((r) => r.prompt.match(/Q-\d+/g).at(-1) === 'Q-2')
-    assert.match(second.prompt, /Answer for Q-1/, 'the thread so far, including the first answer, is in the prompt')
+    assert.match(second.prompt, /Answer for Q-1/, 'the comment so far, including the first answer, is in the prompt')
   } finally { await t.h.close() }
 })
 
-test('an answer that needs the owner says so in the thread and goes to the owner as a task', async () => {
+test('an answer that needs the owner says so in the comment and goes to the owner as a task', async () => {
   const t = await boot(explainer('t3-owner'), { STUB_ANSWER_MS: '100' })
   try {
     await t.ask('tools', 'collapsible row', 'Q-1 should we keep rows forever? DECIDE', 'o-1')
@@ -193,7 +193,7 @@ test('an answer that needs the owner says so in the thread and goes to the owner
   } finally { await t.h.close() }
 })
 
-test('a slow answer times out: the thread says it went to the owner, the owner gets a task, and the process is killed', async () => {
+test('a slow answer times out: the comment says it went to the owner, the owner gets a task, and the process is killed', async () => {
   const t = await boot(explainer('t3-slow'), { UNBLOCK_EXPLAINER_TIMEOUT_MS: '700' })
   try {
     await t.ask('stream', 'websocket', 'Q-1 explain everything SLOW', 's-1')
@@ -286,7 +286,7 @@ test('a second daemon start that loses the port leaves an in-flight answer alone
     assert.match(said, /lost/, 'the second daemon did not get the port')
     assert.equal(agentMessages((await t.get()).threads[0])[0].pending, true, 'still Answering… after the losing start')
     await t.until(async () => agentMessages((await t.get()).threads[0]).some((m) => !m.pending), 'answer', 15000)
-    assert.match(agentMessages((await t.get()).threads[0])[0].text, /^Answer for Q-1/, 'the real answer landed in the thread')
+    assert.match(agentMessages((await t.get()).threads[0])[0].text, /^Answer for Q-1/, 'the real answer landed in the comment')
   } finally { await t.h.close() }
 })
 
@@ -320,7 +320,7 @@ test('a restart retries in-flight and legacy interrupted answers once, then leav
   } finally { await t.h.close() }
 })
 
-test('restart: an old interrupted answer in a thread Alex already got answered is not re-asked', async () => {
+test('restart: an old interrupted answer in a comment Alex already got answered is not re-asked', async () => {
   const t = await boot(explainer('t3-probe'))
   try {
     const scope = await t.get()
@@ -335,7 +335,7 @@ test('restart: an old interrupted answer in a thread Alex already got answered i
     await t.h.restart()
     await new Promise((r) => setTimeout(r, 2500))
     const after = (await t.get()).threads.find((th) => th.id === 'T9')
-    assert.equal(t.answerer.list().length, 0, 'no answerer re-run for an already answered thread')
+    assert.equal(t.answerer.list().length, 0, 'no answerer re-run for an already answered comment')
     assert.equal(after.messages[1].text, 'Interrupted: ask again')
     assert.equal(after.messages.length, 4)
   } finally { await t.h.close() }

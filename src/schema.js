@@ -484,7 +484,7 @@ export function validateAsk(raw) {
   const closes_on = raw.closes_on
   if (closes_on !== undefined && (!Array.isArray(closes_on) || closes_on.length > 5 || closes_on.some((ref) =>
     typeof ref !== 'string' || !(/^(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(pull|issues)\/\d+|scope:[a-z0-9][a-z0-9-]{0,63}#T\d{1,4})$/.test(ref))))) {
-    throw new ValidationError('must contain at most 5 PR, issue or scope thread references', 'closes_on')
+    throw new ValidationError('must contain at most 5 PR, issue or scope comment references', 'closes_on')
   }
   return {
     closes_on: closes_on?.length ? closes_on : undefined,

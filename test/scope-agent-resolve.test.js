@@ -1,4 +1,4 @@
-// Owner: Opus (r37, rewritten 2026-10-02 for "lanes close threads when we agree"). Implementers make it pass; they never edit it.
+// Owner: Opus (r37, rewritten 2026-10-02 for "lanes close comments when we agree"). Implementers make it pass; they never edit it.
 // Alex (2026-10-02 19:45 ET, on Lane asks cards): "maybe these work more as comments in general, with just an approve
 // button ... and agents can close cards by themselves if we agree?" This supersedes r37's "a lane never closes Alex's
 // comment" (2026-09-30): the card now shows who resolved it and why, and he can reopen it. Two guards stay:
@@ -27,7 +27,7 @@ const scope = {
   ],
 }
 
-test('a lane closes a thread once settled, says why, and can reopen it; his question is never a decision', async () => {
+test('a lane closes a comment once settled, says why, and can reopen it; his question is never a decision', async () => {
   const h = await startScopeHarness(scope)
   const { request, bearer } = h
   const thread = async (id) => (await request('/api/scope/demo', { headers: human })).json.scope.threads.find((t) => t.id === id)
@@ -54,7 +54,7 @@ test('a lane closes a thread once settled, says why, and can reopen it; his ques
     let t = await thread(t3)
     assert.equal(t.status, 'resolved')
     assert.deepEqual([t.resolution.by, t.resolution.decision], ['agent', 'Alex agreed: Sol is GPT-6.1 Sol.'])
-    assert.equal(t.messages.at(-1).from, 'agent', 'the reason is also the lane\'s last word on the thread')
+    assert.equal(t.messages.at(-1).from, 'agent', 'the reason is also the lane\'s last word on the comment')
 
     // 2. No reason, no close: his comment stays open and the lane is told what to pass.
     const t4 = await comment('Then the review', 'who reviews the reviewer?', 'c-3')
@@ -82,7 +82,7 @@ test('a lane closes a thread once settled, says why, and can reopen it; his ques
     const confirm = await post('T2', 'resolve', {})
     assert.equal(confirm.status, 400)
     assert.match(confirm.json.error, /scope reopen demo T2/)
-    const listed = await cli('scope', 'threads', 'demo')
+    const listed = await cli('scope', 'comments', 'demo')
     assert.match(listed.stdout, /T2 resolved .*his answer is a question: unblock scope reopen demo T2/)
     assert.equal((await cli('scope', 'reopen', 'demo', 'T2')).status, 0)
     assert.equal((await thread('T2')).status, 'open')

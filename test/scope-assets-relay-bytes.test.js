@@ -1,6 +1,6 @@
 // The Rails relay copies scope assets and Rails refuses any whose bytes do not hash to the asset id.
 // 2026-10-05: the embed bridge appended to every served HTML asset made each HTML copy fail, so no scope
-// with an HTML embed reached Rails Admin (the page showed blank). The relay must get the stored bytes.
+// with an HTML embed reached Development area (the page showed blank). The relay must get the stored bytes.
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import test from 'node:test'

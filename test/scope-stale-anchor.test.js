@@ -1,9 +1,9 @@
 // Scenario (owner: Opus; implementers make it pass, never edit it):
-// Alex selects a line in Rails Admin and types a comment. While he types, the lane
+// Alex selects a line in Development area and types a comment. While he types, the lane
 // rewrites that section, so the line he selected is gone when the relay posts his
 // comment (factory-lookback, 5 Oct: two comments refused as "invalid anchor" and
 // shown "Not sent", and Try again resent the same quote). His words land anyway, on
-// the quote he chose, detached like any thread a doc write leaves behind, and the
+// the quote he chose, detached like any comment a doc write leaves behind, and the
 // lane hears them with that quote.
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -59,7 +59,7 @@ test('a comment on text the lane rewrote while Alex typed lands detached with hi
     assert.deepEqual(listed.threads.map((t) => [t.id, t.status, t.anchor.section, t.anchor.quote]), [
       ['T1', 'open', 'build', 'Studio (rules live there)'], ['T2', 'open', 'old', 'Four waves'],
     ])
-    // The next doc write names both as detached, as it names any thread whose text moved.
+    // The next doc write names both as detached, as it names any comment whose text moved.
     const next = await request('/api/scope/lookback/doc', { method: 'PUT', headers: bearer, body: { sections: after } })
     assert.deepEqual(next.json.detached, ['T1', 'T2'])
 

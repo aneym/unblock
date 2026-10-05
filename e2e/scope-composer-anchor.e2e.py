@@ -205,7 +205,7 @@ def run():
             label = f'1280-{theme}'
             page_shot('/scope/demo', scenario(label), 1280, theme, label)
             posts = [e for e in (json.loads(l) for l in open(log) if l.strip()) if e['method'] == 'POST' and e['path'] == '/w/api/live-scopes/demo/threads']
-            check(f'{label}: one new thread posted, on the selected text', len(posts) == 1 and posts[0]['body']['anchor']['quote'] == 'wait for pass 13', [p['body'].get('anchor') for p in posts])
+            check(f'{label}: one new comment posted, on the selected text', len(posts) == 1 and posts[0]['body']['anchor']['quote'] == 'wait for pass 13', [p['body'].get('anchor') for p in posts])
     finally:
         stub.terminate()
 

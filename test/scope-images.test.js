@@ -159,7 +159,7 @@ test('images in comments: Alex pastes a picture, location is stripped, the lane 
     assert.equal((await post('threads/T2/reply', { text: 'x', images: ['../scope.json'] })).status, 400)
     assert.equal((await post('threads/T2/reply', { text: 'x', images: 'nope' })).status, 400)
     assert.equal((await post('threads/T2/reply', { text: 'x', images: Array(7).fill(shot.json.id) })).status, 400)
-    // Lanes answer in words; pictures in threads are Alex's.
+    // Lanes answer in words; pictures in comments are Alex's.
     assert.equal((await post('threads/T2/reply', { text: 'See this', images: [shot.json.id] }, bearer)).status, 400)
 
     // 3. The lane can read every picture: each note has local paths, and the lane-post line names them.

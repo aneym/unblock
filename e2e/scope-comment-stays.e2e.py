@@ -3,7 +3,7 @@
 (owner: Opus, 2026-10-03 comment-flicker; implementers make it pass, never edit it).
 
 Alex (2026-10-03 ~23:10 ET, Rails Admin, scoping/foundry-bench): "when i leave commment, it flashes away, then comes back a
-couple secods later instead of just staying there." Rails Admin queues the write (202) and the Studio relay lands it about
+couple secods later instead of just staying there." Development area queues the write (202) and the Studio relay lands it about
 3-5 s later, so the page shows its own "Sending" card meanwhile. That card was appended after every other card in the rail,
 so with cards anchored lower in the doc it sat below all of them, off screen, until the real thread arrived at its text.
 
@@ -84,7 +84,7 @@ def scenario(label):
         C(f'{label}: the note never leaves the screen for 5.5 s', tl + " const gone = shown.filter((s) => s.n === 0 || !s.inView); return {ok: shown.length > 0 && tl.at(-1).t >= 5000 && gone.length === 0, gone: gone.slice(0, 5), last: tl.at(-1)}"),
         C(f'{label}: the note stays where the composer was', tl + " const off = shown.filter((s) => s.top !== null && Math.abs(s.top - window.__composerTop) > 30); return {ok: off.length === 0, composer: Math.round(window.__composerTop), off: off.slice(0, 5)}"),
         C(f'{label}: the page read the scope before and after the write landed', tl + " return {ok: window.__reads >= 2 && shown.some((s) => s.id === 'sending') && tl.at(-1).id?.startsWith('T'), reads: window.__reads, ids: [...new Set(shown.map((s) => s.id))]}"),
-        C(f'{label}: one card carries the note at the end, the real thread', "const c = [...document.querySelectorAll('#cards .card:not(.composer)')].filter((n) => n.textContent.includes(%s)); return {ok: c.length === 1 && !!c[0].dataset.t && !c[0].dataset.sending, n: c.length, t: c[0]?.dataset.t}" % json.dumps(text)),
+        C(f'{label}: one card carries the note at the end, the real comment', "const c = [...document.querySelectorAll('#cards .card:not(.composer)')].filter((n) => n.textContent.includes(%s)); return {ok: c.length === 1 && !!c[0].dataset.t && !c[0].dataset.sending, n: c.length, t: c[0]?.dataset.t}" % json.dumps(text)),
         # A post Admin refuses keeps his words in the composer with the error beside them.
         *js("fetch('/__fail_next').then(() => true)", 300),
         *open_composer(9),

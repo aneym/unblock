@@ -2,7 +2,7 @@
 // Alex hit POST /api/scope/daily-workflow/threads/T5/resolve -> 400 (2026-09-30 ~09:30 ET). The page's "Something else"
 // answer sends {decision, alex_words, how:'own'} with his words in both; the server capped decision at 600 chars, so any
 // longer answer failed. His words are never refused under 4000 chars. Over 4000 the error says how long it may be.
-// A refused scope write is logged (slug, thread, verb, error) so the next one is found without a repro.
+// A refused scope write is logged (slug, comment, verb, error) so the next one is found without a repro.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { anchorInSection } from '../src/scope-doc.js'
@@ -42,7 +42,7 @@ test('a long "Something else" answer resolves; only past 4000 chars is it refuse
     assert.match(tooLong.json.error, /4000/, 'the error says how long an answer may be')
     assert.equal((await get()).threads.find((t) => t.id === 'T3').status, 'open')
 
-    // 3. A refused write is logged with slug, thread, verb and the error.
+    // 3. A refused write is logged with slug, comment, verb and the error.
     assert.ok(errors.some((line) => line.includes('demo') && line.includes('T3') && line.includes('resolve') && line.includes('4000')), `no log line: ${JSON.stringify(errors)}`)
 
     // 4. A lane's own resolve still caps its decision at 600 (lanes write short decisions).

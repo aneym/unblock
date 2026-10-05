@@ -1,9 +1,9 @@
 // Owner: Opus (r41, Reopen and Delete). Implementers copy it to test/ and make it pass; they never edit it.
 // Alex (2026-09-30 14:55 ET): "need to be able to unresovle comments, and right click to see options btw."
 // The menu offers Reply, Resolve/Reopen, Copy link, Jump to text, and Delete on his own notes.
-// Server: POST threads/<T>/reopen (Alex, the Admin relay, or since 2026-10-02 a lane: scope-agent-resolve.test.js) puts a resolved or parked thread back
-// to open and tells the lane like a new note. POST threads/<T>/delete removes a thread Alex started (403 on a lane's
-// thread or from a lane) and tells the lane. Neither needs text.
+// Server: POST comments/<T>/reopen (Alex, the Admin relay, or since 2026-10-02 a lane: scope-agent-resolve.test.js) puts a resolved or parked comment back
+// to open and tells the lane like a new note. POST comments/<T>/delete removes a comment Alex started (403 on a lane's
+// comment or from a lane) and tells the lane. Neither needs text.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { anchorInSection } from '../src/scope-doc.js'
@@ -23,7 +23,7 @@ const scope = {
   ],
 }
 
-test('Alex reopens a resolved or parked thread and deletes his own note; the lane hears about both', async () => {
+test('Alex reopens a resolved or parked comment and deletes his own note; the lane hears about both', async () => {
   const h = await startScopeHarness(scope)
   const { request, bearer } = h
   const get = async () => (await request('/api/scope/demo', { headers: human })).json
@@ -43,7 +43,7 @@ test('Alex reopens a resolved or parked thread and deletes his own note; the lan
     const note = notes.find((n) => n.thread === 'T2' && n.event === 'reopen')
     assert.ok(note, `a reopen note for the lane: ${JSON.stringify(notes.map((n) => [n.thread, n.event]))}`)
     assert.equal(note.author, 'alex')
-    // Reopening an open thread is refused and changes nothing.
+    // Reopening an open comment is refused and changes nothing.
     const again = await post('T2', 'reopen')
     assert.equal(again.status, 400)
     assert.match(again.json.error, /only resolved or parked/i)
@@ -58,12 +58,12 @@ test('Alex reopens a resolved or parked thread and deletes his own note; the lan
     assert.equal(t.recommendation, 'Sonnet', 'the question keeps its recommendation')
     assert.equal((await post('T9', 'reopen')).status, 404)
 
-    // 3. Delete: only a thread Alex started, only by Alex (or the relay).
+    // 3. Delete: only a comment Alex started, only by Alex (or the relay).
     assert.equal((await post('T1', 'delete')).status, 403, 'a lane question is not his to delete')
     assert.equal((await post('T2', 'delete', {}, bearer)).status, 403, 'a lane cannot delete')
     const gone = await post('T2', 'delete', { client_id: 'c-4' })
     assert.equal(gone.status, 200, gone.text)
-    assert.equal(await thread('T2'), undefined, 'the thread is gone from the scope')
+    assert.equal(await thread('T2'), undefined, 'the comment is gone from the scope')
     assert.ok(((await get()).notes || []).some((n) => n.thread === 'T2' && n.event === 'delete'), 'the lane is told')
     assert.equal((await post('T2', 'delete')).status, 404)
     // Every write still leaves a valid scope.

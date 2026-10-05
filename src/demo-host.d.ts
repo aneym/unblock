@@ -96,8 +96,8 @@ export function readDemoMessage(data: unknown): DemoMessage | null
 export function demoNote(msg: DemoNoteMessage, captionAnchor: Pick<Anchor, 'section' | 'quote'> & Partial<Anchor>): { anchor: Anchor | null; text: string }
 
 /**
- * `rails-demo/notes` for one figure: threads whose anchor matches `captionAnchor`'s
- * section and quote and has a numeric `t`, earliest first. `region` is null when the thread has none.
- * `author` is 'Alex' when the thread author is 'alex', otherwise 'Agent'. `resolved` when the thread is not open.
+ * `rails-demo/notes` for one figure: comments whose anchor matches `captionAnchor`'s
+ * section and quote and has a numeric `t`, earliest first. `region` is null when the comment has none.
+ * `author` is 'Alex' when the comment author is 'alex', otherwise 'Agent'. `resolved` when the comment is not open.
  */
 export function demoPins(threads: readonly Thread[], captionAnchor: { section: string; quote: string }): { type: 'rails-demo/notes'; v: 1; notes: DemoPin[] }

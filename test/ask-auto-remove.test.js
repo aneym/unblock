@@ -246,7 +246,7 @@ test('a live origin stays; another process can claim an ask with keep', async ()
   }
 })
 
-test('dead references close the ask: a deleted permission path, a merged PR, a resolved scope thread', async () => {
+test('dead references close the ask: a deleted permission path, a merged PR, a resolved scope comment', async () => {
   const { daemon, base } = await daemonWith({})
   try {
     const worktree = mkdtempSync(join(stateDir, 'factory-why-p4-'))
@@ -259,7 +259,7 @@ test('dead references close the ask: a deleted permission path, a merged PR, a r
     const scopeFile = join(scopingDir, 'demo', 'scope.json')
     const scope = (status) => JSON.stringify({ version: 2, slug: 'demo', threads: [{ id: 'T1', status, kind: 'question', author: 'agent', messages: [] }] })
     writeFileSync(scopeFile, scope('open'))
-    const thread = await file(base, decision('Settle the thread question', { closes_on: ['scope:demo#T1'] }), { agent: 'claude', pane_id: 'w5H:pT4' })
+    const thread = await file(base, decision('Settle the comment question', { closes_on: ['scope:demo#T1'] }), { agent: 'claude', pane_id: 'w5H:pT4' })
     assert.deepEqual(thread.closes_on, ['scope:demo#T1'], 'closes_on is stored as filed')
 
     await daemon.sweep()

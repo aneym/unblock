@@ -3,7 +3,7 @@
 // deliver one batch when the lane's pane goes idle/done, with the page showing them as queued."
 // Alex (~17:55 ET): notes land at the pane's pause, so a short-turn lane gets them within seconds.
 // Also: each doc section says when it last changed, so the page can tell "in doc" from "with the lane";
-// and a lane can reword its own question (pHW: "scope edit can't reword a thread's question text").
+// and a lane can reword its own question (pHW: "scope edit can't reword a comment's question text").
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFile } from 'node:child_process'

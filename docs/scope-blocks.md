@@ -64,7 +64,7 @@ Two columns that stack on phones. Repeat `Before:`/`After:` pairs for more rows.
 
 ````
 ```steps
-Open the scope in Rails Admin.
+Open the scope in Development area.
 Read each term and its example.
 Press Approve scope.
 ```

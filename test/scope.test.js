@@ -18,7 +18,7 @@ test('exported markdown retains the lede, figures, tables and stable section ids
   assert.deepEqual(docFromMarkdown(docToMarkdown(doc)).sections, doc.sections)
 })
 
-test('scoping thread changes reach SSE, SQLite and the pane', async () => {
+test('scoping comment changes reach SSE, SQLite and the pane', async () => {
   const h = await startScopeHarness(initial)
   const { request, stream, until, bearer } = h
   try {

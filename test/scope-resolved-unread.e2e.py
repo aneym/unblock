@@ -28,13 +28,13 @@ steps = [
     {'wait_for': '#cards .card[data-t="T2"]'},
     {'eval': "localStorage.removeItem('scope:seen:demo:T2'); document.querySelector('#showResolved').checked && document.querySelector('#showResolved').click(); fetch('/__lane_answer?thread=T2').then(() => fetch('/__agent_resolve?thread=T2')).then(() => true)"},
     {'wait': 1000},
-    check('resolved unread hidden with Resolved unchecked; open thread remains', "!document.querySelector('#showResolved').checked && !vis(c('T2')) && vis(c('T4'))"),
+    check('resolved unread hidden with Resolved unchecked; open comment remains', "!document.querySelector('#showResolved').checked && !vis(c('T2')) && vis(c('T4'))"),
     {'eval': "document.querySelector('#showResolved').click()"},
     {'wait': 400},
-    check('Resolved checked shows the unread reply and the open thread', "document.querySelector('#showResolved').checked && vis(c('T2')) && c('T2').textContent.includes('New reply') && vis(c('T4'))"),
+    check('Resolved checked shows the unread reply and the open comment', "document.querySelector('#showResolved').checked && vis(c('T2')) && c('T2').textContent.includes('New reply') && vis(c('T4'))"),
     {'eval': "document.querySelector('#showResolved').click()"},
     {'wait': 400},
-    check('unchecking hides the unread thread again without hiding open threads', "!vis(c('T2')) && vis(c('T4'))"),
+    check('unchecking hides the unread comment again without hiding open comments', "!vis(c('T2')) && vis(c('T4'))"),
     {'shot': 'resolved-unread'},
 ]
 steps_file = OUT / 'steps.json'

@@ -34,7 +34,7 @@ function focusedCard() { return [...cards.querySelectorAll<HTMLElement>('.card[d
 let showResolved = storage.get('scope:showResolved') === 'true'
 const commentsBar = commentsHeader($('.side-head'), { open: 0, index: 0, total: 0, showResolved, onPrev: () => step(-1), onNext: () => step(1), onShowResolved: checked => { showResolved = checked; storage.set('scope:showResolved', String(checked)); if (!checked && scope?.threads.find(t => t.id === focused)?.status !== 'open') focused = null; renderCards() } })
 let chrome: ReturnType<typeof mountPage> | null = null, chromeSignature = ''
-const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Rails Admin' }
+const APP_NAME = { recruiter: 'Recruiter', closer: 'Closer', 'rails-admin': 'Development area' }
 function hostDrawsApprove() { try { return window.frameElement?.getAttribute('data-approve-host') === '1' } catch { return false } }
 const docFlags = () => kindSpec(scope)
 const navList = () => docFlags().resolve ? open() : ordered()
@@ -231,7 +231,7 @@ let approving = false
 const approveMode = () => $<HTMLInputElement>('input[name="approve-mode"]:checked', approveDialog).value
 function updateApproveDialog() {
   const mode = approveMode(), count = scope?.threads.filter(t => t.status === 'open').length || 0
-  $('.approve-count', approveDialog).textContent = mode === 'not_yet' ? 'Threads stay open.' : count === 0 ? 'No open threads.' : `${count} open thread${count === 1 ? ' closes' : 's close'} with the lane's recommendation.`
+  $('.approve-count', approveDialog).textContent = mode === 'not_yet' ? 'Comments stay open.' : count === 0 ? 'No open comments.' : `${count} open comment${count === 1 ? ' closes' : 's close'} with the lane's recommendation.`
   const button = $<HTMLButtonElement>('[data-action="approve-submit"]', approveDialog)
   button.textContent = mode === 'approve_to_try' ? 'Approve to try' : mode === 'approve' ? 'Approve and ship' : mode === 'approve_with_changes' ? 'Approve with changes' : 'Send, not yet'
   button.disabled = approving || !['approve', 'approve_to_try'].includes(mode) && !$<HTMLTextAreaElement>('textarea', approveDialog).value.trim()
@@ -482,7 +482,7 @@ function answerMessageHtml(message: AnswerMessage, latest: boolean) {
   return `<div${pending ? ' data-status="thinking" aria-live="polite"' : ''} class="msg answer${pending ? ' pending live' : ''}${latest ? ' latest' : ' only-on'}"><div class="from">Answer${pending ? '' : `<span>${time(message.at)}</span>`}</div>${body}${note}${imageStrip(message.images)}</div>`
 }
 // One exchange after another, in order. A card that is not focused shows the question, the follow-up that the newest
-// answer replies to (if any) and the start of that answer; focusing it shows the whole thread.
+// answer replies to (if any) and the start of that answer; focusing it shows the whole comment.
 function explainerCardHtml(t: Thread) {
   const messages = t.messages as AnswerMessage[]
   const newestAt = messages.reduce((found, message, i) => i > 0 && message.from === 'agent' && message.answerer ? i : found, -1)
@@ -789,7 +789,7 @@ function updateCount() {
   if (!flags.resolve) { const count = document.createElement('span'); count.className = 'q-count'; count.textContent = String(list.length); openLabel.replaceChildren('Questions', count) }
   else openLabel.textContent = `${list.length} open`
 }
-// Only a click on a thread seeks its recording; scroll-follow, posting and redraws leave it where it is.
+// Only a click on a comment seeks its recording; scroll-follow, posting and redraws leave it where it is.
 function seekMoment(id: string) {
   const anchor = scope?.threads.find(t => t.id === id)?.anchor as Anchor | undefined
   const figure = figureFor(marks(id)[0])

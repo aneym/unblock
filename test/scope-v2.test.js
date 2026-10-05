@@ -1,5 +1,5 @@
 // Scenario (owner: Opus; implementers make it pass, never edit it):
-// A v1 scope is read as a v2 doc with threads. The lane asks a question
+// A v1 scope is read as a v2 doc with comments. The lane asks a question
 // anchored to a quote (CLI), Alex comments on a selection (pane gets the
 // quote), takes the recommendation on the lane's question, the lane rewrites
 // the section as a new revision and confirms the resolve. scope.json is now v2,
@@ -26,13 +26,13 @@ const v1 = {
   thread: [{ from: 'alex', text: 'Keep it simple.', at: '2026-09-29T15:01:00Z' }, { from: 'agent', text: 'Will do.', at: '2026-09-29T15:02:00Z' }],
 }
 
-test('a v1 scope becomes a doc with anchored threads; ask, comment, take the recommendation, rewrite, resolve', async () => {
+test('a v1 scope becomes a doc with anchored comments; ask, comment, take the recommendation, rewrite, resolve', async () => {
   const h = await startScopeHarness(v1)
   const { request, until, bearer } = h
   const dir = join(process.env.UNBLOCK_SCOPING_DIR, 'demo')
   const get = async () => (await request('/api/scope/demo', { headers: human })).json.scope
   try {
-    // 1. Read as v2: title, ask, plan, done-means sections; Q1, D1 and the chat become threads.
+    // 1. Read as v2: title, ask, plan, done-means sections; Q1, D1 and the chat become comments.
     let scope = await get()
     assert.equal(scope.version, 2)
     assert.equal(scope.revision, 1)
@@ -54,7 +54,7 @@ test('a v1 scope becomes a doc with anchored threads; ask, comment, take the rec
     assert.equal(t4.kind, 'question')
     assert.equal((await request('/api/scope/demo/threads', { method: 'POST', headers: bearer, body: { section: 'plan', quote: 'not in the plan', text: 'x' } })).status, 400)
 
-    // 3. Alex selects "Voice comes last" and comments: a new comment thread, delivered with its quote.
+    // 3. Alex selects "Voice comes last" and comments: a new comment, delivered with its quote.
     scope = await get()
     const anchor = anchorInSection(scope.doc.sections.find((s) => s.id === 'plan'), 'Voice comes last')
     const posted = await request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor, text: 'Voice can wait for round two.' } })
@@ -108,8 +108,8 @@ test('a v1 scope becomes a doc with anchored threads; ask, comment, take the rec
 })
 
 // Scenario (owner: Opus): pushing back is a first-class answer. Alex says No to a
-// recommendation (the thread stays open and the lane hears it as a rejection),
-// the lane offers a new option on the same thread, Alex answers his own way on
+// recommendation (the comment stays open and the lane hears it as a rejection),
+// the lane offers a new option on the same comment, Alex answers his own way on
 // another question, parks a third, and tags another lane in a comment.
 test('No keeps a question open until the lane offers a new option; his own answer, Not now, and @lane tags', async () => {
   const h = await startScopeHarness({ ...v1, questions: [
@@ -134,7 +134,7 @@ test('No keeps a question open until the lane offers a new option; his own answe
     assert.deepEqual(t1.messages.slice(1).map((m) => [m.from, m.kind, m.text]), [['alex', 'reject', 'Desktop is where I read these.']])
     await until(() => h.paneLines().includes('[scoping demo] Alex rejected the recommendation on T1 (§Demo scope "Demo scope"): Desktop is where I read these. Offer a new option: unblock scope reply demo T1 --rec "<new recommendation>" "<one line>"' + tail), 'rejection in the pane')
 
-    // 2. The lane offers a new option on the same thread: the recommendation changes and the rejection clears.
+    // 2. The lane offers a new option on the same comment: the recommendation changes and the rejection clears.
     const option = JSON.parse((await cli('scope', 'reply', 'demo', 'T1', '--rec', 'Desktop first', '--why', 'He reads scopes at his desk.', 'Then desktop first, phone right after.', '--json')).stdout).thread
     assert.equal(option.recommendation, 'Desktop first')
     assert.equal(option.why, 'He reads scopes at his desk.')
@@ -160,7 +160,7 @@ test('No keeps a question open until the lane offers a new option; his own answe
     // 5. Tags: @pHS (a pane in the same workspace) and @closer (another scope's lane) each get a pointer line; demo's own pane gets the comment.
     const anchor = anchorInSection((await get()).doc.sections.find((s) => s.id === 'plan'), 'Voice comes last')
     await request('/api/scope/demo/threads', { method: 'POST', headers: human, body: { anchor, text: '@pHS and @closer: does this block you?' } })
-    const pointer = 'Alex tagged you on T4 (§The plan "Voice comes last"): @pHS and @closer: does this block you? Read it: unblock scope threads demo'
+    const pointer = 'Alex tagged you on T4 (§The plan "Voice comes last"): @pHS and @closer: does this block you? Read it: unblock scope comments demo'
     await until(() => h.paneLines().split('\n').some((l) => l.startsWith('agent prompt w5H:pHS ') && l.endsWith(`[scoping demo] ${pointer}`)), 'tag to pHS')
     await until(() => h.paneLines().split('\n').some((l) => l.startsWith('agent prompt w5H:pFP ') && l.endsWith(`[scoping demo] ${pointer}`)), 'tag to closer')
     await until(() => h.paneLines().includes('Alex on §The plan "Voice comes last": @pHS and @closer: does this block you? (new T4)'), 'comment in its own pane')

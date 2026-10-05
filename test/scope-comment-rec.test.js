@@ -67,7 +67,7 @@ test('a comment accepts a CLI recommendation, rejects it, then takes a replaceme
   } finally { await h.close() }
 })
 
-test('comment recommendations require an open thread and comments still cannot have options', async () => {
+test('comment recommendations require an open comment and comments still cannot have options', async () => {
   const h = await startScopeHarness(scope)
   try {
     for (const id of ['T2', 'T3']) {

@@ -1,8 +1,8 @@
 // Owner: Opus (r11, demo and video blocks). Implementers make it pass and never edit it.
 // Alex (2026-09-29 via p6): "scope pages need a demo block: an inline 'Try it' embed (iframe of a tailnet demo URL,
-// mic allowed for voice demos) and a video block, each able to anchor threads."
+// mic allowed for voice demos) and a video block, each able to anchor comments."
 // Syntax and anchors agreed with the live-docs lane (~/.agent-rails/scoping/live-docs/asks/FROM-pHY-3.md):
-// ```demo / ```video fences of `key: value` lines, then a `Figure:` caption that threads anchor to; a video
+// ```demo / ```video fences of `key: value` lines, then a `Figure:` caption that comments anchor to; a video
 // comment may carry `t` (seconds) and `t_end`.
 import assert from 'node:assert/strict'
 import http from 'node:http'

@@ -10,7 +10,7 @@ the parked ones wake up.
 You never read a transcript to find out what an agent wanted.
 
 An ask closes by itself when its filer's process ends, its permission path is
-gone, or a `closes_on` PR, issue or scope thread is done. Lanes get a keep-or-close
+gone, or a `closes_on` PR, issue or scope comment is done. Lanes get a keep-or-close
 check at 30 minutes. Asks nobody keeps are set aside, not lost; find them with
 `unblock list --aside` and bring one back with `unblock keep <ticket>`.
 
@@ -281,8 +281,8 @@ tailnet, `POST /api/links {ticket}` still mints a burn-on-answer token.
 
 ## Scoping pages
 
-A scoping page is one document with threads anchored to quotes. Open threads
-are questions or comments; resolved threads hold decisions. The page lives at
+A scoping page is one document with comments anchored to quotes. Open comments
+are questions or comments; resolved comments hold decisions. The page lives at
 `<public_origin>/s/<slug>`, with state under `UNBLOCK_SCOPING_DIR`
 (default: `~/.agent-rails/scoping`). Only the daemon writes `scope.json`.
 Set `scope_link_template` (env `UNBLOCK_SCOPE_LINK_TEMPLATE`) to an https URL containing `{slug}`; CLI `url` is the canonical link and `studio_url` is the Studio page, with both using the Studio page when no template is set.
@@ -297,46 +297,46 @@ unblock scope doc demo --from plan.md
 unblock scope patch demo plan --from section.md
 unblock scope edit demo T4 --section plan --quote "We build for phones first" --option "Phones first" --option "Desktop first"
 unblock scope resolve demo T4
-unblock scope threads demo --open
+unblock scope comments demo --open
 ```
 
 `scope resolve` requires `--decision "why"` on Alex's comment. Alex resolves his own comments; a lane may close one with either:
 
-- `--quote "his exact words"`: close words from his latest message in that thread.
+- `--quote "his exact words"`: close words from his latest message in that comment.
 - `--revision N`: for a change request, the later revision that changed the anchored section.
 
-`unblock scope reopen demo T4 [--reason "text"]` reopens one. When Alex's own answer is a question, `scope threads` flags it; reopen it and answer instead of confirming.
+`unblock scope reopen demo T4 [--reason "text"]` reopens one. When Alex's own answer is a question, `scope comments` flags it; reopen it and answer instead of confirming.
 
-`unblock scope app <slug> recruiter|closer|rails-admin` files a scope under its app in Rails Admin.
+`unblock scope app <slug> recruiter|closer|rails-admin` files a scope under its app in Development area.
 
 Approve scope on the page with an optional final note; the lane receives APPROVED and the note, then moves to build (with changes: fold the note into the doc first).
 
 Use a fence with opening line `` ```demo ``, then `src: demo.html` (or an https URL) and closing line `` ``` ``; optional keys are `height`, `frame` and `allow`, and local `src` files are uploaded.
-Use `` ```video `` with `src: recording.mp4` and optional `poster: cover.png`, then `` ``` ``; local `src`/`poster` files are uploaded, and a following `Figure:` caption anchors threads.
+Use `` ```video `` with `src: recording.mp4` and optional `poster: cover.png`, then `` ``` ``; local `src`/`poster` files are uploaded, and a following `Figure:` caption anchors comments.
 Terms, examples, do/don't pairs, before/after, steps and stats have their own fences: [docs/scope-blocks.md](docs/scope-blocks.md).
 
 A markdown doc starts with `# Title`; `## Heading {#stable-id}` starts a section.
-JSON input is a sections array or `{sections}`. Doc rewrites keep all threads;
-threads whose quotes disappeared are reported as detached. Each rewrite saves
+JSON input is a sections array or `{sections}`. Doc rewrites keep all comments;
+comments whose quotes disappeared are reported as detached. Each rewrite saves
 a revision. `scope doc <slug>` exports markdown; `--json` gives revision and sections.
-`scope edit <slug> T# [--section id --quote "text"] [--option "text" ...]` moves a thread to
+`scope edit <slug> T# [--section id --quote "text"] [--option "text" ...]` moves a comment to
 its new sentence and/or sets its options without adding a message, changing its status or notifying the pane.
-Only lanes can edit threads. Questions accept 2–5 options of 1–200 characters, with the
+Only lanes can edit comments. Questions accept 2–5 options of 1–200 characters, with the
 current recommendation first. Repeat `--option` on `ask`, `edit` or a `reply --rec`;
 a new recommendation without options removes the old list. The API also accepts an
-empty options array to remove it. `scope threads` lists options after the recommendation.
+empty options array to remove it. `scope comments` lists options after the recommendation.
 Existing v1 files are read as v2 and backed up on their first write.
-A trusted tailnet viewer can select text to comment, reply or resolve a thread.
-Their actions reach the lane's pane; Not now parks a thread. Tags such as
+A trusted tailnet viewer can select text to comment, reply or resolve a comment.
+Their actions reach the lane's pane; Not now parks a comment. Tags such as
 `@pHS` or `@another-scope` also route the comment to that lane. After a decision, the lane rewrites the doc
 and confirms it with `scope resolve`. A reply without T# is a general comment.
 `scope list`, `scope url <slug>` and `scope notes <slug> [--since N]` remain;
-all scoping commands support `--json`. Voice uses the same thread paths and the
+all scoping commands support `--json`. Voice uses the same comment paths and the
 queue's voice keys, spend ledger and $20 monthly cap.
 
 ### Unslop gate
 
-Lane-written headings, body text, captions and thread text are checked for AI tells
+Lane-written headings, body text, captions and comment text are checked for AI tells
 and internal jargon. Code, images and URLs are skipped; human and Admin relay
 words are never checked. Findings refuse the write with HTTP 422 and CLI exit 2.
 Run `/unslop`, then `unblock scope lint <slug> --from doc.md` to check locally
@@ -356,7 +356,7 @@ alt text. Exports keep the stored `asset:` references, so re-importing needs no 
 
 `POST /api/scope/<slug>/threads/<T>/pick {text}` is a human-only, read-only ask picker; `UNBLOCK_ASK_PICKER_BIN` selects its binary and `UNBLOCK_ASK_PICK_MIN` sets the confidence cut (default 0.6).
 
-### Rails Admin relay
+### Development area relay
 
 The `unblock-admin-relay` agent-secret handle (override with
 `admin_relay_key_ref` / `UNBLOCK_ADMIN_RELAY_KEY_REF`, or set
@@ -364,7 +364,7 @@ The `unblock-admin-relay` agent-secret handle (override with
 least 32 characters. Send it in `X-Unblock-Relay` on loopback hosts only.
 The relay may read `GET /api/scope`, `GET /api/scope/<slug>` and
 `GET /api/scope/<slug>/assets/<id>`, create human
-comments with `POST /api/scope/<slug>/threads`, and use the four thread write
+comments with `POST /api/scope/<slug>/threads`, and use the four comment write
 verbs `reply`, `resolve`, `reject`, `park`, `reopen`, and `delete`. Each write requires a unique
 `client_id` (1–64 letters, digits, underscores or hyphens) so retries do not
 land twice. Writes are marked `via: admin`; that field may be omitted or set
@@ -394,5 +394,5 @@ MIT
 
 Alex’s scoping comments can carry pictures; the lane gets a local path per image.
 
-`reopen` lets Alex or the Admin relay reopen a resolved or parked thread without changing the doc revision.
+`reopen` lets Alex or the Admin relay reopen a resolved or parked comment without changing the doc revision.
 `delete` lets Alex or the Admin relay delete a note Alex started and notifies the lane.

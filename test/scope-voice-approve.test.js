@@ -36,7 +36,7 @@ test('approve_scope is a tool the model is told about', () => {
   assert.ok(SCOPE_VOICE_PROMPT.length < 2600, `prompt is ${SCOPE_VOICE_PROMPT.length}`)
 })
 
-test('approve is read back with the open-thread count and sent only on his yes', async () => {
+test('approve is read back with the open-comment count and sent only on his yes', async () => {
   const { say, approvals, feed } = setup()
   const out = await say('approve_scope', { mode: 'approve', note: 'Um, ship it with the phone view first' })
   assert.equal(out.ok, true)
@@ -56,7 +56,7 @@ test('approve is read back with the open-thread count and sent only on his yes',
   assert.equal((await say('confirm')).speech, 'Nothing to confirm.')
 })
 
-test('approve without a note, with no open threads, reads back simply', async () => {
+test('approve without a note, with no open comments, reads back simply', async () => {
   const { say, approvals } = setup({ threads: [] })
   assert.equal((await say('approve_scope', { mode: 'approve' })).speech, 'Approve this scope and move to build?')
   await say('confirm')
@@ -95,7 +95,7 @@ test('an approved scope, a half sentence and a host without the route never send
   for (const s of [done, half, host]) assert.equal(s.approvals.length, 0)
 })
 
-test('the spoken read-back of a comment drops thread ids and links; the filed text keeps his words', async () => {
+test('the spoken read-back of a comment drops comment ids and links; the filed text keeps his words', async () => {
   const { say, posts } = setup()
   const out = await say('comment', { text: 'Same as T3, see https://example.com/spec for the table' })
   assert.ok(!/https?:\/\//.test(out.speech), out.speech)

@@ -5,10 +5,10 @@
  * label: index group heading.
  * margin: the margin action and reply verb ("Ask" / "Comment").
  * approve: the doc can be approved.
- * resolve: threads resolve/park (check button, Resolved chip, show-resolved filter,
- *   nav over open threads, "N open" counter). False means every thread stays listed
+ * resolve: comments resolve/park (check button, Resolved chip, show-resolved filter,
+ *   nav over open comments, "N open" counter). False means every comment stays listed
  *   and the nav runs over all of them.
- * qa: thread cards render as question and answer ("You asked", "Answer" messages).
+ * qa: comment cards render as question and answer ("You asked", "Answer" messages).
  * answerer: default for the per-doc `answerer: on|off` seam.
  */
 export const DOC_KINDS = Object.freeze({

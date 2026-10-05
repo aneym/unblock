@@ -49,7 +49,7 @@ test('lane publish refuses scopes and requires explicit closure for other docs; 
     h.writeScope({ ...initial, kind: 'draft' })
     const refused = await publish({ revision: 2 })
     assert.equal(refused.status, 409, refused.text)
-    assert.equal(refused.json.error, '1 open threads; pass --close-open to close them on publish')
+    assert.equal(refused.json.error, '1 open comments; pass --close-open to close them on publish')
     assert.equal((await read()).threads[0].status, 'open')
     const invalid = await publish({ revision: 2, close_open: 'true' })
     assert.equal(invalid.status, 400, invalid.text)
@@ -65,7 +65,7 @@ test('lane publish refuses scopes and requires explicit closure for other docs; 
   } finally { await h.close() }
 })
 
-// Exact removal is observable on the persisted thread, including duplicate replies and protected messages.
+// Exact removal is observable on the persisted comment, including duplicate replies and protected messages.
 test('unsay removes only exact agent replies, never the first message or human messages', async () => {
   const h = await startScopeHarness(initial)
   const read = async () => (await h.request('/api/scope/demo', { headers: human })).json.scope.threads[0]

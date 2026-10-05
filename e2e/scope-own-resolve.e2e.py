@@ -4,7 +4,7 @@ deliver shows in place (owner: Opus, 2026-10-03 resolve-rule; implementers make 
 
 Alex (2026-10-03 ~23:15 ET): "you're resolving comments before i read the response to my question, another falw in the
 commenting system. i should just have an easy button to resolve it myself, unless its obvious that i want ou to close it?"
-And two of his "reopen T1" writes in Rails Admin were dropped without a word (the relay got 403 RELAY_SCOPE_ONLY and acked
+And two of his "reopen T1" writes in Development area were dropped without a word (the relay got 403 RELAY_SCOPE_ONLY and acked
 them); his own actions must never vanish silently.
 
 Serves web/dist-scope from e2e/scope-stub.mjs in relay mode (STUB_RELAY_MS=1500: the page polls every 2 s, a POST answers
@@ -115,7 +115,7 @@ def scenario(phone, label):
             C(f'{label}: once read, the marker goes', "return {ok: !mark('T4')?.classList.contains('unread')}"),
             # 3. A lane resolve does not hide a reply he has not read.
             *hook('lane_answer?thread=T3', 600), *hook('agent_resolve?thread=T3'),
-            C(f'{label}: a lane-resolved thread with an unseen reply keeps its highlight, marked', "const m = mark('T3'); return {ok: !!m && m.classList.contains('unread') && getComputedStyle(m).backgroundColor !== 'rgba(0, 0, 0, 0)', cls: m?.className}"),
+            C(f'{label}: a lane-resolved comment with an unseen reply keeps its highlight, marked', "const m = mark('T3'); return {ok: !!m && m.classList.contains('unread') && getComputedStyle(m).backgroundColor !== 'rgba(0, 0, 0, 0)', cls: m?.className}"),
         ]
     else:
         steps += [

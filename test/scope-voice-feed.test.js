@@ -1,7 +1,7 @@
 // Scenario (owner: Opus; implementers make it pass, never edit it):
 // Alex watches what the page voice does (2026-09-29: "want to see live tool
 // call feed and more visibility into what's going on"). Every tool call yields
-// one feed line for the page's activity strip: what it did, on which thread,
+// one feed line for the page's activity strip: what it did, on which comment,
 // whether it posted, and whether it failed. He can also change how fast it
 // talks ("talk faster", "go 1.3"); speed works only on Grok, and asking for
 // it never drops a pending confirm.
@@ -71,12 +71,12 @@ test('every voice tool call becomes one feed line; speed is Grok-only and keeps 
     const { result, line } = await say(name, args)
     assert.equal(line.label, label, `${name} label`)
     assert.equal(line.write, write, `${name} write`)
-    assert.equal(line.thread, thread, `${name} thread`)
+    assert.equal(line.thread, thread, `${name} comment`)
     assert.equal(line.ok, ok, `${name} ok`)
     return result
   }
   try {
-    // 1. Navigation lines name the thread or the section; nothing is written.
+    // 1. Navigation lines name the comment or the section; nothing is written.
     await expect('next_question', {}, 'Next question: T2', { thread: 'T2' })
     await expect('previous_question', {}, 'Previous question: T1', { thread: 'T1' })
     await expect('read_thread', {}, 'Read T1 aloud', { thread: 'T1' })
@@ -128,7 +128,7 @@ test('every voice tool call becomes one feed line; speed is Grok-only and keeps 
     await expect('confirm', {}, 'Replied on T4', { write: true, thread: 'T4' })
     await expect('resolve', {}, 'Resolved T4', { write: true, thread: 'T4' })
 
-    // 7. A new comment names its section and its new thread; a reply names the thread.
+    // 7. A new comment names its section and its new comment; a reply names the comment.
     context.thread = null
     context.section = 'risks'
     const proposed = await say('comment', { text: 'Add a phone check' })

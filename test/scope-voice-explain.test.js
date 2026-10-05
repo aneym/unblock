@@ -72,7 +72,7 @@ test('explain prioritizes the viewed section even after a long document prefix',
     assert.ok(out.context.startsWith(`Looking at: The rollout\n${body.slice(0, 6000)}`))
     assert.equal(out.context.split('The rollout').length - 1, 1, 'the viewed section is not repeated')
     assert.ok(out.context.length <= 12000)
-    if (body.length > 6000) assert.ok(out.context.includes('Focused thread:'), 'a large viewed section leaves room for other context')
+    if (body.length > 6000) assert.ok(out.context.includes('Focused comment:'), 'a large viewed section leaves room for other context')
   }
 })
 
@@ -81,7 +81,7 @@ test('explain puts selected text in the looking-at block and strips its fences',
     thread: 'T3', section: 'gate', selection: anchorInSection(sections[1], 'holds a new tool'),
   }) })
   const out = await voice.handle('explain', { question: 'why is that needed?' })
-  const first = out.context.split('\n\nFocused thread:')[0]
+  const first = out.context.split('\n\nFocused comment:')[0]
   assert.ok(first.startsWith('Looking at: The capability gate\n'))
   assert.ok(first.includes('Selected text: "holds a new tool"'))
   assert.ok(first.includes('Figure: Approving a held tool'))
@@ -131,7 +131,7 @@ test('the prompt and tools put intent first', () => {
   assert.deepEqual(explain.parameters.required, ['question'])
   for (const line of ['Want that as a comment, or just an answer?', "I don't know from the doc"]) assert.ok(SCOPE_VOICE_PROMPT.includes(line), line)
   assert.match(SCOPE_VOICE_PROMPT, /explain/)
-  assert.doesNotMatch(SCOPE_VOICE_PROMPT, /Whatever he says while a question is focused is his answer/, 'a focused thread no longer makes every sentence an answer')
+  assert.doesNotMatch(SCOPE_VOICE_PROMPT, /Whatever he says while a question is focused is his answer/, 'a focused comment no longer makes every sentence an answer')
   assert.match(SCOPE_VOICE_PROMPT, /set_speed/, 'the speed rule stays')
 })
 
@@ -162,7 +162,7 @@ test('the daemon serves the scope BRIEF and Alex\'s earlier words, and takes a l
     const before = (await request('/api/scope/demo', { headers: human })).json.scope.threads.length
     const note = await request('/api/scope/demo/lane-note', { method: 'POST', headers: human, body: { text: 'Alex asked what a capability gate is; the gate section should say who approves.', via: 'voice' } })
     assert.equal(note.status, 200, note.text)
-    assert.equal((await request('/api/scope/demo', { headers: human })).json.scope.threads.length, before, 'no thread is created')
+    assert.equal((await request('/api/scope/demo', { headers: human })).json.scope.threads.length, before, 'no comment is created')
     const deadline = Date.now() + 5000
     while (!h.paneLines().includes('the gate section should say who approves') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))
     assert.ok(h.paneLines().includes('the gate section should say who approves'), 'the lane pane hears the note')

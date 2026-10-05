@@ -11,8 +11,8 @@ export interface DocKind {
   /** The doc can be approved. */
   approve: boolean
   /**
-   * Threads resolve/park (check button, Resolved chip, show-resolved filter,
-   * nav over open threads, "N open" counter). False means every thread stays
+   * Comments resolve/park (check button, Resolved chip, show-resolved filter,
+   * nav over open comments, "N open" counter). False means every comment stays
    * listed and the nav runs over all of them.
    */
   resolve: boolean

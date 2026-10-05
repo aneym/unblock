@@ -1,6 +1,6 @@
 // Owner: Opus (r27, scopes nested per app). Implementers make it pass and never edit it.
 // Alex (2026-09-30 via pJ0, NESTING-CONTRACT.md): each app's scopes nest under that app (Recruiter, Closer,
-// Rails Admin), linked both ways. A scope carries `app`, one of recruiter | closer | rails-admin. Until a lane
+// Development area), linked both ways. A scope carries `app`, one of recruiter | closer | rails-admin. Until a lane
 // sets it, the app is inferred from the slug (recruiter* -> recruiter, closer* -> closer, else rails-admin), the
 // same rule Admin uses, so the cutover is only data. `unblock scope app <slug> <app>` sets it.
 import assert from 'node:assert/strict'
@@ -55,7 +55,7 @@ test('a scope names its app: inferred from the slug until set, set by a lane, ke
     assert.equal(stored.app, 'recruiter', 'a refused set changes nothing')
     assert.equal(stored.revision, 1, 'setting the app is not a doc revision')
 
-    // 3. Every later write keeps it: a section patch, a doc write, a thread, an approval.
+    // 3. Every later write keeps it: a section patch, a doc write, a comment, an approval.
     assert.equal((await request('/api/scope/demo/sections/plan', { method: 'PUT', headers: bearer, body: { body_md: 'We ship the page first, for phones.' } })).status, 200)
     assert.equal((await request('/api/scope/demo/doc', { method: 'PUT', headers: bearer, body: { sections: [{ id: 'title', heading: 'Scope demo', body_md: 'A small page.' }, { id: 'plan', heading: 'The plan', body_md: 'We ship the page first.' }] } })).status, 200)
     const approved = await request('/api/scope/demo/approve', { method: 'POST', headers: human, body: { mode: 'approve' } })

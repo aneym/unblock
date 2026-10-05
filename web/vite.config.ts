@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       name: 'scope-bundle',
       transformIndexHtml() { return [{ tag: 'script', attrs: { src: './boot.js' }, injectTo: 'head-prepend' as const }] },
       generateBundle() {
-        this.emitFile({ type: 'asset', fileName: 'boot.js', source: '// Rails Admin may replace this file with scope boot configuration.\n' })
+        this.emitFile({ type: 'asset', fileName: 'boot.js', source: '// Development area may replace this file with scope boot configuration.\n' })
       },
       writeBundle(output) { const out = output.dir || resolve(dir, 'dist-scope'); renameSync(resolve(out, 'scope.html'), resolve(out, 'index.html')) },
     } satisfies Plugin] : [])],

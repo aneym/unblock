@@ -1,7 +1,7 @@
 // Owner: Opus (explainers lane for w5H:p0M, 2026-10-03). Implementers make it pass and never edit it.
 // Alex (2026-10-03): scoping, review, explainer and writing-studio docs all share one system. A doc's kind
 // (scope | explainer | review | draft | report) comes from one registry (src/doc-kinds.js) that declares the kind's
-// actions and whether the answerer is on; everything else (sections, anchors, threads, live items) is shared.
+// actions and whether the answerer is on; everything else (sections, anchors, comments, live items) is shared.
 // Contract: every registered kind validates, lists as itself, and is creatable from the CLI; a kind without approval
 // refuses an approve; the answerer follows the kind's default unless the doc sets answerer on/off.
 import assert from 'node:assert/strict'

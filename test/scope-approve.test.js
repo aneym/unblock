@@ -1,6 +1,6 @@
 // Owner: Opus (r17, approve scope). Implementers make it pass and never edit it.
 // Alex, 2026-09-29: "the scoping tool needs a submit scoping + final comment button because typically that's what
-// i'll do." Approving marks the scope approved (who, when in ET, the revision), closes open threads with the lane's
+// i'll do." Approving marks the scope approved (who, when in ET, the revision), closes open comments with the lane's
 // recommendation standing, sends the lane one line (APPROVED, his note verbatim, "Move to build."), logs it in the
 // scoping INDEX, and moves the lane's herdr tab from SCOPING to IN FLIGHT. "Approve with changes" asks the lane to fold
 // his note in first; "Not yet" only sends the note. Only Alex approves: the page, voice or the Admin relay, never a lane.
@@ -54,7 +54,7 @@ esac
 
 const ET = /^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M ET$/
 
-test('Alex approves with a note: approved, threads closed with the recommendation, one lane line, INDEX, tab moved', async () => {
+test('Alex approves with a note: approved, comments closed with the recommendation, one lane line, INDEX, tab moved', async () => {
   const h = await startScopeHarness(scopeWith('demo'))
   const { request, bearer, until } = h
   const s = stubs()
@@ -78,7 +78,7 @@ test('Alex approves with a note: approved, threads closed with the recommendatio
     const note = 'Use Aside to make the ElevenLabs key, then just finish it.\nKeep the page light.'
     const ok = await approve({ mode: 'approve', comment: note, client_id: 'appr-1' })
     assert.equal(ok.status, 200, ok.text)
-    assert.deepEqual(ok.json.closed, ['T1', 'T2'], 'open threads close; the parked one stays parked')
+    assert.deepEqual(ok.json.closed, ['T1', 'T2'], 'open comments close; the parked one stays parked')
     const scope = await get()
     assert.equal(scope.approval.mode, 'approve')
     assert.equal(scope.approval.by, 'alex')
@@ -94,10 +94,10 @@ test('Alex approves with a note: approved, threads closed with the recommendatio
     await events.next('scope', (d) => d.scope?.approval?.mode === 'approve')
 
     // 3. The lane gets one line: APPROVED, his note verbatim (on one line), move to build.
-    const want = `[scoping demo] APPROVED by Alex (r3, ${scope.approval.at_et}). Alex's note: "Use Aside to make the ElevenLabs key, then just finish it. Keep the page light." Move to build. 2 open threads closed with your recommendations.`
+    const want = `[scoping demo] APPROVED by Alex (r3, ${scope.approval.at_et}). Alex's note: "Use Aside to make the ElevenLabs key, then just finish it. Keep the page light." Move to build. 2 open comments closed with your recommendations.`
     await until(() => s.herdrLines().includes(`agent prompt w5H:pT1 ${want}`), 'the approval line in the lane pane')
     assert.equal(s.herdrLines().split('\n').filter((line) => line.includes('APPROVED')).length, 1, 'sent once')
-    assert.ok(!s.herdrLines().includes('(new T'), 'closing threads sends no per-thread notes')
+    assert.ok(!s.herdrLines().includes('(new T'), 'closing comments sends no per-comment notes')
 
     // 4. INDEX log and the tab move out of SCOPING.
     const logged = readFileSync(index, 'utf8')
@@ -124,7 +124,7 @@ test('not yet sends only his note; with changes asks the lane to fold it in firs
   const get = async () => (await request('/api/scope/demo', { headers: human })).json.scope
   const index = join(process.env.UNBLOCK_SCOPING_DIR, 'INDEX.md')
   try {
-    // Not yet: no approval of the doc, threads stay open, the tab stays, the lane hears his note.
+    // Not yet: no approval of the doc, comments stay open, the tab stays, the lane hears his note.
     const wait = await request('/api/scope/demo/approve', { method: 'POST', headers: human, body: { mode: 'not_yet', comment: 'Show me the phone layout first.' } })
     assert.equal(wait.status, 200, wait.text)
     assert.deepEqual(wait.json.closed, [])
@@ -144,7 +144,7 @@ test('not yet sends only his note; with changes asks the lane to fold it in firs
     assert.equal(done.approval.mode, 'approve_with_changes')
     assert.equal(done.approval.via, 'admin')
     assert.deepEqual(relayed.json.closed, ['T1', 'T2'])
-    await until(() => s.herdrLines().includes(`agent prompt w5H:pT1 [scoping demo] APPROVED WITH CHANGES by Alex in Admin (r3, ${done.approval.at_et}). Alex's note: "Drop the settings page." Fold his note into the doc first (unblock scope patch), then move to build. 2 open threads closed with your recommendations.`), 'the with-changes line')
+    await until(() => s.herdrLines().includes(`agent prompt w5H:pT1 [scoping demo] APPROVED WITH CHANGES by Alex in Admin (r3, ${done.approval.at_et}). Alex's note: "Drop the settings page." Fold his note into the doc first (unblock scope patch), then move to build. 2 open comments closed with your recommendations.`), 'the with-changes line')
     await until(() => s.laneLines().includes('section w5H:tAB inflight'), 'the tab moves')
     assert.match(readFileSync(index, 'utf8'), /· demo r3 · approved with changes · "Drop the settings page\."/)
   } finally { await h.close(); delete process.env.UNBLOCK_ADMIN_RELAY_TOKEN }
@@ -171,6 +171,6 @@ test('a long note reaches the lane in full through APPROVAL.md; an approval with
     const ok = await bare.request('/api/scope/demo/approve', { method: 'POST', headers: human, body: { mode: 'approve' } })
     assert.equal(ok.status, 200, ok.text)
     assert.equal((await bare.request('/api/scope/demo', { headers: human })).json.scope.approval.comment, '')
-    await bare.until(() => /\[scoping demo\] APPROVED by Alex \(r3, [^)]+\)\. Move to build\. 2 open threads closed/.test(t.herdrLines()), 'no note, no quote')
+    await bare.until(() => /\[scoping demo\] APPROVED by Alex \(r3, [^)]+\)\. Move to build\. 2 open comments closed/.test(t.herdrLines()), 'no note, no quote')
   } finally { await bare.close() }
 })

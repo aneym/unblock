@@ -3,17 +3,17 @@ import { orderThreads, anchorInSection, headingOf } from './scope-doc.js'
 const object = (properties, required = []) => ({ type: 'OBJECT', properties, required })
 const string = { type: 'STRING' }
 export const SCOPE_VOICE_TOOLS = [
-  { name: 'next_question', description: 'When asked for next, focus and read the next open thread.', parameters: object({}) },
-  { name: 'previous_question', description: 'When asked for back, focus and read the previous open thread.', parameters: object({}) },
-  { name: 'read_thread', description: 'When asked to read it, read the focused thread.', parameters: object({}) },
+  { name: 'next_question', description: 'When asked for next, focus and read the next open comment.', parameters: object({}) },
+  { name: 'previous_question', description: 'When asked for back, focus and read the previous open comment.', parameters: object({}) },
+  { name: 'read_thread', description: 'When asked to read it, read the focused comment.', parameters: object({}) },
   { name: 'next_section', description: 'Move to the next document section.', parameters: object({}) },
   { name: 'previous_section', description: 'Move to the previous document section.', parameters: object({}) },
   { name: 'go_to_section', description: 'Move to a section named by its heading or id.', parameters: object({ name: string }, ['name']) },
-  { name: 'show_resolved', description: 'Show or hide resolved threads when asked.', parameters: object({ on: { type: 'BOOLEAN' } }, ['on']) },
+  { name: 'show_resolved', description: 'Show or hide resolved comments when asked.', parameters: object({ on: { type: 'BOOLEAN' } }, ['on']) },
   { name: 'scroll', description: 'Scroll the document up or down when asked.', parameters: object({ direction: { type: 'STRING', enum: ['up', 'down'] } }, ['direction']) },
   { name: 'explain', description: 'Answer a question about what something means, why, how it works or the options. Reads context only; never writes.', parameters: object({ question: string }, ['question']) },
   { name: 'note_lane', description: 'Leave a quiet clarification note for the lane, never a comment from Alex.', parameters: object({ text: string }, ['text']) },
-  { name: 'answer', description: 'His answer, decision or feedback on the focused thread, in his own words, filler removed. Never a question to you.', parameters: object({ text: string }, ['text']) },
+  { name: 'answer', description: 'His answer, decision or feedback on the focused comment, in his own words, filler removed. Never a question to you.', parameters: object({ text: string }, ['text']) },
   { name: 'take_recommendation', description: 'When he says take the recommendation or go with yours.', parameters: object({}) },
   { name: 'reject', description: 'When he says no, try again, or give me options about the recommendation.', parameters: object({ reason: string }) },
   { name: 'park', description: 'When he says not now about the focused question.', parameters: object({}) },
@@ -21,7 +21,7 @@ export const SCOPE_VOICE_TOOLS = [
   { name: 'cancel', description: 'When he says no to the proposed answer.', parameters: object({}) },
   { name: 'resolve', description: 'When asked to resolve this, propose a decision or confirm the pending one.', parameters: object({ decision: string }) },
   { name: 'comment', description: 'Propose a comment on the selection or section in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
-  { name: 'reply', description: 'Propose a reply to the focused thread in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
+  { name: 'reply', description: 'Propose a reply to the focused comment in his own words, fillers out, never a summary. Read back and wait for yes.', parameters: object({ text: string }, ['text']) },
   { name: 'approve_scope', description: 'When he approves the scope (approve it, ship it, move to build) or says not yet. Read back and wait for yes.', parameters: object({ mode: { type: 'STRING', enum: ['approve', 'approve_with_changes', 'not_yet'] }, note: string }, ['mode']) },
   { name: 'set_speed', description: 'Change speaking speed immediately, without a read-back.', parameters: object({ speed: { type: 'NUMBER', description: 'Speaking speed multiplier, from 0.7 to 1.5.' }, change: { type: 'STRING', enum: ['faster', 'slower', 'normal'] } }) },
   { name: 'end_call', description: 'Finish the voice call when asked.', parameters: object({}) },
@@ -31,7 +31,7 @@ export const SCOPE_VOICE_KICKOFF = 'The call has started. Say "Ready." and nothi
 export const SCOPE_VOICE_PROMPT = `You are a quiet voice on a scoping doc written by a lane (an AI agent). Alex leads. Route intent, not focus.
 Questions to you (what does X mean, explain, why, how would that work, what are the options): call explain, then answer aloud from its context in three sentences or fewer. If context does not cover it, say "I don't know from the doc." Never guess. If the point is worth keeping on the doc, call comment: its read-back is the offer. Otherwise stop. If the answer shows the doc is unclear, you may note_lane: "Alex asked <X>; <section> should explain it." Do not note a point the doc already explains.
 "This", "here" or "that" in his question means the Looking at block and Selected text first.
-Feedback, decisions and answers to the doc's questions: answer on the focused thread (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
+Feedback, decisions and answers to the doc's questions: answer on the focused comment (a comment gets a reply). Read its confirm line and wait: yes calls confirm; no calls cancel; changes call answer again. Explicit replies call reply. "Take the recommendation" or "go with yours" calls take_recommendation. "No", "I hate it", "try again" or "give me options" about a recommendation calls reject with any reason. "Do X instead" calls answer. "Not now" calls park. Doc feedback or "comment on this" calls comment. "Resolve this" calls resolve.
 Wait until he finishes a thought before calling a writing tool. Pass his own words; never paraphrase. Comment and reply read back; wait for his yes, then call confirm.
 When he approves the scope or says not yet, use approve_scope; it reads back first.
 Unclear intent: ask exactly "Want that as a comment, or just an answer?" Write nothing.
@@ -162,7 +162,7 @@ export function createScopeVoiceSession(deps) {
             const question = textOf(args.question)
             if (!question) return fail("I didn't catch that.")
             const briefThread = (item) => [
-              `Thread (${item.kind}, ${item.status}): ${item.messages[0]?.text || ''}`,
+              `Comment (${item.kind}, ${item.status}): ${item.messages[0]?.text || ''}`,
               item.recommendation && `Recommendation: ${item.recommendation}`,
               item.options?.length && `Options: ${item.options.join('; ')}`,
               item.why && `Why: ${item.why}`,
@@ -176,7 +176,7 @@ export function createScopeVoiceSession(deps) {
               lookingAt && `Looking at: ${lookingAt.heading}\n${bodyOf(lookingAt).slice(0, 6000)}`,
               context.selection && `Selected text: "${context.selection.quote}"`,
             ].filter(Boolean).join('\n')
-            const parts = [looking, thread && `Focused thread:\n${briefThread(thread)}`,
+            const parts = [looking, thread && `Focused comment:\n${briefThread(thread)}`,
               ...sections.filter(section => section !== lookingAt).map(section => `${section.heading}\n${bodyOf(section)}`),
               ...scope.threads.map(briefThread)].filter(Boolean)
             let timer
@@ -267,7 +267,7 @@ export function createScopeVoiceSession(deps) {
           if (name === 'answer') return answer(textOf(args.text))
           if (name === 'take_recommendation') {
             if (!thread) return fail('Which one? Say next question.')
-            if (thread.status !== 'open' || !thread.recommendation) return fail('That thread has no open recommendation.')
+            if (thread.status !== 'open' || !thread.recommendation) return fail('That comment has no open recommendation.')
             return send(() => deps.postResolve(thread.id, { decision: thread.recommendation, alex_words: 'Take the recommendation', how: 'take', via: 'voice' }), 'Done. Took the recommendation.')
           }
           if (name === 'reject') {

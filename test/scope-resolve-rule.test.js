@@ -2,12 +2,12 @@
 // Alex (2026-10-03 ~23:15 ET): "you're resolving comments before i read the response to my question, another falw in the
 // commenting system. i should just have an easy button to resolve it myself, unless its obvious that i want ou to close it?"
 // and (~22:40 ET) "need the prpoer long term fix for this". The tool enforces it, not only the protocol:
-//   - each thread records who opened it and what kind it is: intent 'question' or 'change' on his, 'ask' on a lane's;
-//   - a lane closes a thread he opened only with (b) his own words from that thread that say close/approve/take it/ok
+//   - each comment records who opened it and what kind it is: intent 'question' or 'change' on his, 'ask' on a lane's;
+//   - a lane closes a comment he opened only with (b) his own words from that comment that say close/approve/take it/ok
 //     (--quote, his latest message there), or (c) for a change he asked for, the doc revision that made it (--revision N,
 //     a revision after his message that changed the anchored section). (a) He resolves it himself with his button.
 //   - every refusal prints the rule; the CLI passes --quote and --revision;
-//   - Rails Admin's relay may reopen and delete for him (the 403 RELAY_SCOPE_ONLY that dropped his two "reopen T1").
+//   - Development area's relay may reopen and delete for him (the 403 RELAY_SCOPE_ONLY that dropped his two "reopen T1").
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -60,7 +60,7 @@ test('a lane closes his comment only with his close words or the revision that m
   }
   const RULE = /Alex resolves his own comments[\s\S]*--quote[\s\S]*--revision/
   try {
-    // 1. Each thread says who opened it and what kind it is.
+    // 1. Each comment says who opened it and what kind it is.
     const question = await comment(plan, 'We run Sol medium for the build', 'sol 6.1 right?', 'c-1')
     const change = await comment(plan, 'Then the review', 'make the review two seats', 'c-2')
     assert.deepEqual([(await thread(question)).author, (await thread(question)).intent], ['alex', 'question'])
@@ -140,7 +140,7 @@ test('a lane closes his comment only with his close words or the revision that m
     assert.equal((await post(mine, 'resolve', {})).status, 200, 'the lane confirms his resolve')
     assert.equal((await post(ask.json.thread.id, 'resolve', { decision: 'Sonnet reviews.' })).status, 200, 'a lane closes its own ask')
 
-    // 10. Rails Admin's relay reopens and deletes for him, once each (the dropped "reopen T1").
+    // 10. Development area's relay reopens and deletes for him, once each (the dropped "reopen T1").
     const reopen = await post(question, 'reopen', { client_id: 'adm-r1' }, relay)
     assert.equal(reopen.status, 200, reopen.text)
     assert.equal((await thread(question)).status, 'open')

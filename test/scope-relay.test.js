@@ -1,5 +1,5 @@
 // Scenario (owner: Opus; implementers make it pass, never edit it):
-// Rails Admin shows the scoping pages. Hosted Rails can't reach this daemon,
+// Development area shows the scoping pages. Hosted Rails can't reach this daemon,
 // so Alex's clicks there land in an outbox and a relay on this machine posts
 // them here. The relay holds its own secret (not the agent bearer). With it,
 // and only from loopback, it may do exactly what Alex's page does on a scope,

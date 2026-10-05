@@ -3,7 +3,7 @@
 // reaction, removed when responded to?) so i dont need to go back to the scoping convo". And 09:52 ET: "what does
 // waiting for pause mean?" A comment must not wait for the lane to go idle: it goes out through lane-post (hook
 // delivery mid-turn) at once. The lane marks it seen with 👀; the 👀 clears when the lane answers, or when Alex adds
-// to or closes the thread (then the lane has something new to see).
+// to or closes the comment (then the lane has something new to see).
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
@@ -53,7 +53,7 @@ test('a comment goes out at once through lane-post; the lane marks it 👀 seen;
     await until(async () => (await get()).notes.some((note) => note.thread === id && note.delivery === 'delivered'), 'the note is delivered, not held')
     assert.ok(!h.paneLines().split('\n').some((line) => line.startsWith('agent prompt')), 'nothing is typed into the pane')
 
-    // 2. The lane marks it seen. Only a lane can; only 👀; only a real thread.
+    // 2. The lane marks it seen. Only a lane can; only 👀; only a real comment.
     const seen = await react(id, '👀')
     assert.equal(seen.status, 200, seen.text)
     const r = (await thread(id)).reaction

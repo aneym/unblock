@@ -1,25 +1,25 @@
-// Owner: Opus (r41 Reopen, Delete and resolved-hidden, from stub-r40: POST threads/T<n>/reopen and /delete; hooks /__detached_resolved). A stand-in host for the live-update focus scenario (never edit it to pass).
+// Owner: Opus (r41 Reopen, Delete and resolved-hidden, from stub-r40: POST comments/T<n>/reopen and /delete; hooks /__detached_resolved). A stand-in host for the live-update focus scenario (never edit it to pass).
 // usage: node stub-r21.mjs <port> <worktree> <bundle-dir> <log-file> <embed|solo>
-// Serves the scope bundle (web/dist-scope) under a strict CSP, the way Rails Admin does, with the live-docs routes
+// Serves the scope bundle (web/dist-scope) under a strict CSP, the way Development area does, with the live-docs routes
 // the r14 stub mirrors (agent-rails 14b3d06): view envelope, SSE stream, POST writes that answer with the store
-// thread. The stream stays open here (r14 covers planned reconnects), so a hook's change arrives by event at once. Mode embed passes boot.embed true (Admin); solo leaves it off (a standalone page).
+// comment. The stream stays open here (r14 covers planned reconnects), so a hook's change arrives by event at once. Mode embed passes boot.embed true (Admin); solo leaves it off (a standalone page).
 //   GET /scope/demo   the doc page (boot: slug demo)          GET /list/   the scope index (boot: no slug)
 //   GET /host/demo    the doc page with approve and comment in host mode (the host page draws those buttons)
 //   GET /w/api/live-scopes, /w/api/live-scopes/demo, /demo/events, /demo/assets/<id>; POST /demo/threads[/T<n>/<verb>]
-// The view carries notes (the unblock daemon's delivery notes) as well as thread.delivery (the Rails relay's field).
-// A new thread keeps anchor.general when it is on the title, as the unblock daemon does after r21 (Rails needs the same).
+// The view carries notes (the unblock daemon's delivery notes) as well as comment.delivery (the Rails relay's field).
+// A new comment keeps anchor.general when it is on the title, as the unblock daemon does after r21 (Rails needs the same).
 // Test hooks (each answers {seq}, the revision the page will show): /__reset, /__delivery?thread=T2&state=queued,
 // /__note?thread=T1&delivery=held[&read_by=<name>], /__lane_edit, /__rename_title; r33: /__grow_title (the title body grows above
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
-// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?thread&status[&by&doing&link&text&error]
-// (one live item frame), /__stream_reply?thread[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
-// /__remove_later (the Later section is deleted), /__spread (eight threads down Later)
-// Relay mode (env STUB_RELAY_MS, 2026-10-03 comment-flicker): Rails Admin's mirrored scopes. boot events:false (the page polls
+// /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?comment&status[&by&doing&link&text&error]
+// (one live item frame), /__stream_reply?comment[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
+// /__remove_later (the Later section is deleted), /__spread (eight comments down Later)
+// Relay mode (env STUB_RELAY_MS, 2026-10-03 comment-flicker): Development area's mirrored scopes. boot events:false (the page polls
 // every 2 s); a POST answers 202 {queued, client_id} and lands STUB_RELAY_MS later with the client_id on its message, the way
 // the outbox relay delivers to unblock and pushes the scope back. /__fail_next makes the next POST answer 500.
 // Relay failures (2026-10-03 resolve-rule): /__relay_fail_next?status=403&error=RELAY_SCOPE_ONLY makes the next queued write
 // answer 202 and then not land: the relay acks it as failed and the view lists it in failed[] {client_id, status, error, at},
-// the way Rails Admin's mirror read reports a write unblock refused. A relayed reopen or delete leaves a note with its
+// the way Development area's mirror read reports a write unblock refused. A relayed reopen or delete leaves a note with its
 // client_id, as the daemon's scope notes do.
 import http from 'node:http'
 import fs from 'node:fs'
@@ -105,7 +105,7 @@ function write(route, body) {
     if (verb === 'reply' || verb === 'reject') t.messages.push(msg(body.text))
     if (verb === 'resolve') { t.status = 'resolved'; t.decision = body.decision; t.by = 'alex'; t.how = body.how || 'resolve'; t.resolved_at = now; t.images = pics }
     if (verb === 'park') t.status = 'parked'
-    if (verb === 'reopen') { if (t.status === 'open') return [400, { error: 'only resolved or parked threads reopen' }]; t.status = 'open'; for (const k of ['decision', 'by', 'how', 'resolved_at', 'images']) delete t[k] }
+    if (verb === 'reopen') { if (t.status === 'open') return [400, { error: 'only resolved or parked comments reopen' }]; t.status = 'open'; for (const k of ['decision', 'by', 'how', 'resolved_at', 'images']) delete t[k] }
     if (verb === 'delete') { if (t.messages[0].from !== 'alex') return [403, { error: 'only his own notes' }]; threads = threads.filter((x) => x !== t) }
     if (RELAY_MS && body.client_id && (verb === 'reopen' || verb === 'delete')) notes = notes.concat([{ id: `N-${body.client_id}`, thread: t.id, from: 'alex', event: verb, at: now, client_id: body.client_id, delivery: 'delivered', delivered_at: now }])
   }
@@ -150,24 +150,24 @@ http.createServer((req, res) => {
     if (url.pathname === '/__rename_title') { sections.title.heading = doc.title = 'Phone scope'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__react') { const t = threads.find((x) => x.id === q.get('thread')); if (q.get('clear')) delete t.reaction; else t.reaction = { emoji: '👀', by: 'agent', at: stamp() }; bump(); return send(200, { seq }) }
     if (url.pathname === '/__lane_answer') { const t = threads.find((x) => x.id === q.get('thread')); t.messages.push({ from: 'agent', text: 'Yes, Sol 6.1 medium.', at: stamp() }); delete t.reaction; bump(); return send(200, { seq }) }
-    // r37: a Rails relay that still lets a lane close Alex's comment (what pNE did on routing-next); the answer is on the thread.
-    if (url.pathname === '/__agent_resolve') { const t = threads.find((x) => x.id === q.get('thread')); t.status = 'resolved'; t.by = 'agent'; t.how = undefined; t.decision = 'Answered in thread'; t.resolved_at = stamp(); delete t.reaction; bump(); return send(200, { seq }) }
+    // r37: a Rails relay that still lets a lane close Alex's comment (what pNE did on routing-next); the answer is on the comment.
+    if (url.pathname === '/__agent_resolve') { const t = threads.find((x) => x.id === q.get('thread')); t.status = 'resolved'; t.by = 'agent'; t.how = undefined; t.decision = 'Answered in comment'; t.resolved_at = stamp(); delete t.reaction; bump(); return send(200, { seq }) }
     // r37: Alex took the lane's recommendation and the lane confirmed it.
     if (url.pathname === '/__alex_take') { const t = threads.find((x) => x.id === q.get('thread')); t.status = 'resolved'; t.by = 'alex'; t.how = 'take'; t.decision = t.recommendation; t.resolved_at = stamp(); bump(); return send(200, { seq }) }
-    // r37: a thread resolved two days ago, on "Voice comes last".
+    // r37: a comment resolved two days ago, on "Voice comes last".
     if (url.pathname === '/__old_resolved') {
       const old = new Date(Date.now() - 2 * 86400_000).toISOString().replace(/(\.\d{3})\d*Z$/, '$1Z'), a = anchorInSection({ id: 'plan', heading: sections.plan.heading, body_md: sections.plan.body_md }, 'Voice comes last')
       threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: a.quote, prefix: a.prefix || '', suffix: a.suffix || '' }, kind: 'comment', status: 'resolved', by: 'alex', how: 'resolve', decision: 'Old news', resolved_at: old, messages: [{ from: 'alex', text: 'An old note.', at: old, via: 'admin' }] })
       bump(); return send(200, { seq })
     }
-    // r41: a resolved thread whose text is gone from the doc (it lands in the Detached group).
+    // r41: a resolved comment whose text is gone from the doc (it lands in the Detached group).
     if (url.pathname === '/__detached_resolved') { const now = stamp(); threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: 'A sentence the lane deleted', prefix: '', suffix: '' }, kind: 'comment', status: 'resolved', by: 'alex', how: 'resolve', decision: 'Done', resolved_at: now, messages: [{ from: 'alex', text: 'A detached note.', at: now, via: 'admin' }] }); bump(); return send(200, { seq }) }
     if (url.pathname === '/__grow_title') { sections.title.body_md += '\n\nThe lane added a paragraph above everything, long enough to push the rest of the doc down by a few lines on any screen width.'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__edit_later') { const s = sections.later; s.body_md = s.body_md.replace('Later paragraph 16: settings and themes wait for pass 16', 'Later paragraph 16: settings, themes and fonts wait for pass 16'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
     // pinned view (explainers lane, 2026-10-03): ten paragraphs land at the top of The plan, above T2's anchor; then T2's text goes away.
     if (url.pathname === '/__grow_plan') { const s = sections.plan; s.body_md = Array.from({ length: 10 }, (_, i) => `New plan paragraph ${i + 1}: the lane wrote this while Alex was reading, and it runs to about three lines on a desktop screen so the anchor below moves down a long way.`).join('\n\n') + '\n\n' + s.body_md; s.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__detach_t2') { const s = sections.plan; s.body_md = s.body_md.replace('Voice comes last.', 'Voice ships with the page.'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
-    // live items: one item frame; or a scripted lane turn on a thread (seen, thinking, doing, five chunks, done, then the message lands).
+    // live items: one item frame; or a scripted lane turn on a comment (seen, thinking, doing, five chunks, done, then the message lands).
     if (url.pathname === '/__item') { upsertItem(q.get('thread'), { status: q.get('status'), by: q.get('by') || 'Rooms PM', ...(q.get('doing') ? { doing: { text: q.get('doing'), ...(q.get('link') ? { link: q.get('link') } : {}) } } : {}), ...(q.get('text') ? { text: q.get('text') } : {}), ...(q.get('error') ? { error: q.get('error') } : {}) }); return send(200, { seq }) }
     if (url.pathname === '/__stream_reply') {
       const thread = q.get('thread'), by = q.get('by') || 'Rooms PM'

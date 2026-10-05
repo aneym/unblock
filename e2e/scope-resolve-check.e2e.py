@@ -98,7 +98,7 @@ def scenario(phone, label):
             C(f'{label}: one tap resolved it; with Resolved off its highlight is gone', X + " return {ok: clear(mark('T4')) && !vis(%s), bg: mark('T4') && getComputedStyle(mark('T4')).backgroundColor}" % sheet('T4')),
             *toggle,
             *js("(() => { const m = %s; m.scrollIntoView({ block: 'center' }); m.click(); return true })()" % mark('T4'), 800),
-            C(f'{label}: a resolved thread shows Reopen and no checkmark', X + " const c = %s; return {ok: vis(c) && vis(c.querySelector('[data-action=\"reopen\"]')) && !c.querySelector('.head [data-action=\"resolve\"]')}" % sheet('T4')),
+            C(f'{label}: a resolved comment shows Reopen and no checkmark', X + " const c = %s; return {ok: vis(c) && vis(c.querySelector('[data-action=\"reopen\"]')) && !c.querySelector('.head [data-action=\"resolve\"]')}" % sheet('T4')),
             *close,
         ]
     else:

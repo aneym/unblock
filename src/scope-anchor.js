@@ -96,7 +96,7 @@ export function locateEmbed(text, anchor) {
 }
 
 export function sectionLabel(section) {
-  return { plan: 'the plan', ask: 'your ask', decisions: 'the decisions', thread: 'the thread' }[section] ?? (/^q:Q\d{1,3}$/.test(section) ? section.slice(2) : section)
+  return { plan: 'the plan', ask: 'your ask', decisions: 'the decisions', thread: 'the comment' }[section] ?? (/^q:Q\d{1,3}$/.test(section) ? section.slice(2) : section)
 }
 
 export function quoteSnippet(quote, max = 80) {

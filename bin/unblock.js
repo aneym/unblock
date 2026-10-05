@@ -493,7 +493,7 @@ async function scopeLinks(health, slug) {
   return { url, studio_url }
 }
 
-const SCOPE_USAGE = `unblock scope [list|url|notes|threads]           scoping docs and anchored threads
+const SCOPE_USAGE = `unblock scope [list|url|notes|comments]           scoping docs and anchored comments
 unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|writing|report] [--parent <slug>] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
@@ -515,7 +515,7 @@ unblock scope kpi <slug> list [--json]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
-unblock explain [list|url|notes|threads|doc|patch|lint|ask|reply|edit|resolve|reopen]
+unblock explain [list|url|notes|comments|doc|patch|lint|ask|reply|edit|resolve|reopen]
 unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off]`
 
 function scopeNew(args, usage, mode = 'scope') {
@@ -578,6 +578,11 @@ async function scope(args, mode = 'scope') {
     console.log(usage)
     return
   }
+  if (args[0] === 'comments' && args.slice(1).some(arg => ['--help', '-h'].includes(arg))) {
+    console.log(usage)
+    return
+  }
+  if (args[0] === 'threads') fail(usage)
   if (args[0] === 'new') return scopeNew(args, usage, mode)
   const [sub = 'list', slug, ...words] = args
   if (sub === 'typing') {
@@ -847,7 +852,7 @@ async function scope(args, mode = 'scope') {
     lintOutput(data)
     return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
   }
-  if (verb === 'threads') {
+  if (verb === 'comments') {
     if (opts['--from'] || opts['--since']) fail(usage)
     const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
     const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')

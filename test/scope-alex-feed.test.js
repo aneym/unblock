@@ -29,9 +29,9 @@ test('Alex comments, replies and resolution words reach the feed; agent notes an
     process.env.UNBLOCK_ALEX_FEED_BIN = bin
     delete process.env.UNBLOCK_ALEX_FEED
 
-    const comment = await post('threads', { anchor: { section: 'title', quote: 'Demo scope' }, text: 'Keep every comment.' })
-    assert.equal(comment.status, 201)
-    const thread = comment.json.thread.id
+    const created = await post('threads', { anchor: { section: 'title', quote: 'Demo scope' }, text: 'Keep every comment.' })
+    assert.equal(created.status, 201)
+    const thread = created.json.thread.id
     assert.equal((await post(`threads/${thread}/reply`, { text: 'Include replies too.' })).status, 200)
     assert.equal((await post(`threads/${thread}/resolve`, { decision: 'Append to the feed', alex_words: 'Yes, keep my exact words.' })).status, 200)
     await h.until(() => payloads().length === 3, 'three feed payloads')

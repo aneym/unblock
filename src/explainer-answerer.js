@@ -49,16 +49,16 @@ function promptFor(scope, thread, scopeDir) {
     said.push(`${message.from === 'alex' ? 'Alex' : 'You'}: ${message.text}`)
   }
   if (isScope(scope)) {
-    // The stable part (role, doc, other threads) comes first so the prompt cache covers it across comments.
+    // The stable part (role, doc, other comments) comes first so the prompt cache covers it across comments.
     return [
       SCOPE_ROLE, '', `Scope folder: ${scopeDir}`, ...(sources.length ? ['Source dirs:', ...sources] : []), '',
-      `# Doc (revision ${scope.revision})`, docMarkdown(scope), '', '# Other threads', ...otherThreads(scope, thread), '',
-      `# This thread (${thread.id}, section id: ${thread.anchor?.section ?? 'title'})`,
+      `# Doc (revision ${scope.revision})`, docMarkdown(scope), '', '# Other comments', ...otherThreads(scope, thread), '',
+      `# This comment (${thread.id}, section id: ${thread.anchor?.section ?? 'title'})`,
       headingOf(scope, thread.anchor?.section ?? 'title'), quote, ...said, '', 'Answer Alex\'s last message.', '',
     ].join('\n')
   }
   return [
-    ROLE, '', 'Source dirs:', ...sources, '', '# Doc', docMarkdown(scope), '', '# Thread',
+    ROLE, '', 'Source dirs:', ...sources, '', '# Doc', docMarkdown(scope), '', '# Comment',
     headingOf(scope, thread.anchor?.section ?? 'title'), quote, ...said, '', 'Answer Alex\'s last message.', '',
   ].join('\n')
 }
@@ -88,8 +88,8 @@ function postLine(scope, thread, outcome) {
   const task = outcome.needs_owner || outcome.handoff
   const why = outcome.why || (outcome.reason === 'timeout' ? 'timed out' : 'failed')
   const suffix = !task ? '' : isScope(scope)
-    ? ` NEEDS YOU: ${why}. Reply in the thread: unblock scope reply ${scope.slug} ${thread.id} "<text>"; edit the doc: unblock scope patch ${scope.slug} <section> --from <file.md>`
-    : ` NEEDS YOU: ${why}. Reply in the thread: unblock scope reply ${scope.slug} ${thread.id} "<text>"; fold into the doc: unblock explain doc ${scope.slug} --from <file.md>`
+    ? ` NEEDS YOU: ${why}. Reply in the comment: unblock scope reply ${scope.slug} ${thread.id} "<text>"; edit the doc: unblock scope patch ${scope.slug} <section> --from <file.md>`
+    : ` NEEDS YOU: ${why}. Reply in the comment: unblock scope reply ${scope.slug} ${thread.id} "<text>"; fold into the doc: unblock explain doc ${scope.slug} --from <file.md>`
   let q = compact(question)
   let answer = compact(outcome.text)
   const edited = outcome.edited ? ` (edited §${outcome.edited})` : ''

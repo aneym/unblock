@@ -202,7 +202,7 @@ const askProperties = {
       required: ['url'],
     },
   },
-  closes_on: { type: 'array', maxItems: 5, items: { type: 'string' }, description: 'Close this ask by itself when any of these PRs or issues merges or closes, or when this scope thread is resolved.' },
+  closes_on: { type: 'array', maxItems: 5, items: { type: 'string' }, description: 'Close this ask by itself when any of these PRs or issues merges or closes, or when this scope comment is resolved.' },
   ttl_seconds: { type: 'number', exclusiveMinimum: 0 },
 }
 
