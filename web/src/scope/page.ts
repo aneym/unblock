@@ -706,6 +706,11 @@ function renderCards() {
   if (kept?.parentElement === detached && kept.dataset.t && !detachedNodes.includes(kept) && (getDraft(kept.dataset.t).trim() || getImages(kept.dataset.t).length || uploading.get(kept.dataset.t))) detachedNodes.push(kept)
   replaceAround(detached, detachedNodes, kept)
   for (const item of sending.values()) if ((!item.id && item.anchor) || item.failed) {
+    if (item.id && scope?.threads.some(t => t.id === item.id)) {
+      const threadCard = [...document.querySelectorAll<HTMLElement>('.card[data-t]')].find(card => card.dataset.t === item.id)
+      if (threadCard) threadCard.insertAdjacentHTML('beforeend', sendingLine(item))
+      continue
+    }
     const node = document.createElement('div'); node.className = 'card comment on'; node.dataset.sending = 'true'; node.dataset.client = item.clientId
     node.innerHTML = `<div class="head"><span class="who">${docFlags().qa ? 'You asked' : 'You commented'}</span></div><div class="q">${esc(item.text)}</div>${sendingLine({ ...item, text: '' })}`
     if (item.anchor) insertAtAnchor(node, item.anchor)
@@ -1367,7 +1372,7 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; es
   publishApproval()
   const settled = new Set(scope.threads.flatMap(t => [...t.messages.map(m => (m as any).client_id), (t.resolution as any)?.client_id, (t as any).parked_client_id]).concat((payload.notes || []).map(note => note.client_id)))
   const resolvedWrite = (item: Sending) => { const t = scope!.threads.find(t => t.id === item.id), r = t?.resolution; return !item.failed && !payload.failed?.some(f => f.client_id === item.clientId) && item.route === `/${item.id}/resolve` && t?.status === 'resolved' && r?.by === 'alex' && !(r as any).client_id && r.decision === item.body.decision && r.how === (item.body.how || 'resolve') && Date.parse(r.at) >= item.at }
-  for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
+  for (const [key, item] of sending) if (resolvedWrite(item) || settled.has(item.clientId) || item.id && item.route === `/${item.id}/delete` && !scope.threads.some(t => t.id === item.id) && !payload.failed?.some(f => f.client_id === item.clientId)) { if (item.clientId === postedClient) { focused = scope.threads.find(t => t.messages.some(m => (m as any).client_id === item.clientId))?.id || focused; postedClient = null }; sending.delete(key) }
   for (const item of sending.values()) { const failure = payload.failed?.find(f => f.client_id === item.clientId); if (failure) item.failed = { status: failure.status, error: failure.error } }
   for (const f of payload.failed || []) {
     const route = /^threads((?:\/T[1-9][0-9]*\/[a-z]+)?)$/.exec(f.path || '')?.[1], id = route ? route.split('/')[1] : undefined
