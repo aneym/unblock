@@ -1,8 +1,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, basename, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, basename } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { kindOf } from './doc-kinds.js'
@@ -148,7 +147,9 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
   function argv(sources, scope) {
     // Scope comments are a conversation with Alex, so they stay on Opus (Alex took it on comment-latency T2, 2026-10-05).
     const model = isScope(scope) ? process.env.UNBLOCK_SCOPE_ANSWERER_MODEL || 'claude-opus-5-5' : process.env.UNBLOCK_ANSWERER_MODEL || 'claude-sonnet-5-5'
-    const effort = isScope(scope) ? process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'medium' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
+    // A scope may pick its own effort: low answered in about 7 s, medium in 33-55 s with file reads (2026-10-05 burst tests).
+    const scopeEffort = ['low', 'medium', 'high'].includes(scope?.answerer_effort) ? scope.answerer_effort : null
+    const effort = isScope(scope) ? scopeEffort || process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'medium' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
     const args = ['-p', '--restricted', '--model', model, '--effort', effort,
       '--tools', 'Read,Grep,Glob,WebFetch', '--allowedTools', 'Read,Grep,Glob,WebFetch', '--permission-mode', 'dontAsk',
       '--strict-mcp-config', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
@@ -190,10 +191,11 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const dir = mkdtempSync(join(tmpdir(), 'unblock-edit-'))
     const file = join(dir, 'section.md')
     writeFileSync(file, `${edit.markdown}\n`)
-    const cli = process.env.UNBLOCK_CLI_BIN || join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'unblock.js')
+    // The installed daemon copy has no plugin/ beside bin/, so the edit goes through the CLI on PATH, as a lane's does.
+    const cli = process.env.UNBLOCK_CLI_BIN || join(homedir(), '.local', 'bin', 'unblock')
     return new Promise((resolve) => {
       const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' }
-      execFile(process.execPath, [cli, 'scope', 'patch', slug, edit.id, '--from', file], { timeout: 30000, encoding: 'utf8', env }, (error, _stdout, stderr) => {
+      execFile(cli, ['scope', 'patch', slug, edit.id, '--from', file], { timeout: 30000, encoding: 'utf8', env }, (error, _stdout, stderr) => {
         rmSync(dir, { recursive: true, force: true })
         if (!error) return resolve({ ...rest, text: `${rest.text}\n\nEdited §${edit.id} to match.`, edited: edit.id })
         const why = String(stderr || error.message).replace(/\s+/g, ' ').trim().slice(0, 160)
