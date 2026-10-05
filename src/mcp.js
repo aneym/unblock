@@ -5,7 +5,6 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { randomUUID } from 'node:crypto'
 import readline from 'node:readline'
 
 import { daemonRoot } from './config.js'
@@ -86,6 +85,7 @@ async function daemonFetch(pathname, options = {}) {
       const auth = daemonAuth()
       const response = await fetch(`http://${HOST}:${port}/api${pathname}`, {
         ...options,
+        signal: options.signal || AbortSignal.timeout(5000),
         headers: {
           'Content-Type': 'application/json',
           ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
@@ -116,14 +116,14 @@ async function daemonFetch(pathname, options = {}) {
   throw new Error(`unblock daemon did not start: ${lastError?.message || 'unknown error'}`)
 }
 
-function origin() {
+function origin(identity = process.env) {
   return {
     agent: process.env.UNBLOCK_AGENT || 'claude',
-    pid: process.argv.includes('--http') ? undefined : filerPid(),
-    pane_id: process.env.HERDR_PANE_ID,
-    tab_id: process.env.HERDR_TAB_ID,
-    workspace_id: process.env.HERDR_WORKSPACE_ID,
-    session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
+    pid: identity === process.env && !process.argv.includes('--http') ? filerPid() : undefined,
+    pane_id: identity.HERDR_PANE_ID,
+    tab_id: identity.HERDR_TAB_ID,
+    workspace_id: identity.HERDR_WORKSPACE_ID,
+    session_id: identity.HERDR_SESSION_ID || identity.CLAUDE_SESSION_ID,
     cwd: process.cwd(),
     kind: process.env.UNBLOCK_ORIGIN_KIND,
   }
@@ -378,11 +378,11 @@ function draftText(ask) {
   return lines.join('\n')
 }
 
-async function createAsk(kind, args) {
-  const project = process.env.UNBLOCK_PROJECT || undefined
+async function createAsk(kind, args, identity) {
+  const project = identity.UNBLOCK_PROJECT || undefined
   return daemonFetch('/asks', {
     method: 'POST',
-    body: JSON.stringify({ ask: { project, ...args, kind }, origin: origin() }),
+    body: JSON.stringify({ ask: { project, ...args, kind }, origin: origin(identity) }),
   })
 }
 
@@ -406,11 +406,11 @@ export class McpConnection {
     this.send({ jsonrpc: '2.0', method, params })
   }
 
-  async callTool(name, args, request) {
+  async callTool(name, args, request, identity = process.env) {
     if (name === 'unblock_file') {
       let ask
       try {
-        ask = await createAsk('file', args)
+        ask = await createAsk('file', args, identity)
       } catch (error) {
         if (error.status === 409 && error.data?.ticket) {
           const link = await answerLink(error.data.ticket)
@@ -422,7 +422,7 @@ export class McpConnection {
     }
 
     if (name === 'unblock_keep') {
-      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/keep`, { method: 'POST', body: JSON.stringify({ pid: origin().pid }) })
+      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/keep`, { method: 'POST', body: JSON.stringify({ pid: origin(identity).pid }) })
       return textResult(`Kept ${body.ask.ticket}.`, { ask: body.ask })
     }
 
@@ -467,7 +467,7 @@ export class McpConnection {
     }
 
     if (name === 'unblock_check') {
-      const query = new URLSearchParams(Object.entries(origin()).filter(([, value]) => value != null))
+      const query = new URLSearchParams(Object.entries(origin(identity)).filter(([, value]) => value != null))
       const pending = await daemonFetch(`/pending?${query}`)
       const collected = []
       for (const ask of pending.asks) {
@@ -512,7 +512,7 @@ export class McpConnection {
     if (name === 'unblock_park') {
       let ask
       try {
-        ask = await createAsk('park', args)
+        ask = await createAsk('park', args, identity)
       } catch (error) {
         if (error.status === 409 && error.data?.ticket) {
           const link = await answerLink(error.data.ticket)
@@ -585,7 +585,7 @@ export class McpConnection {
       if (typeof args.quote !== 'string' || !args.quote.trim()) throw new Error('quote is required')
       const payload = { by: 'alex', quote: args.quote }
       if (args.at !== undefined) payload.at = args.at
-      if (process.env.HERDR_PANE_ID) payload.pane = process.env.HERDR_PANE_ID
+      if (identity.HERDR_PANE_ID) payload.pane = identity.HERDR_PANE_ID
       const body = await daemonFetch(`/scope/${encodeURIComponent(args.slug)}/pm-approve`, { method: 'POST', body: JSON.stringify(payload) })
       return textResult(`approved ${args.slug} r${body.revision} (${body.approval.at_et}, ${body.approval.open} open)`, { approval: body.approval })
     }
@@ -593,7 +593,7 @@ export class McpConnection {
     if (name === 'unblock_scope_unapprove') {
       if (typeof args.reason !== 'string' || !args.reason.trim()) throw new Error('reason is required')
       const payload = { reason: args.reason }
-      if (process.env.HERDR_PANE_ID) payload.pane = process.env.HERDR_PANE_ID
+      if (identity.HERDR_PANE_ID) payload.pane = identity.HERDR_PANE_ID
       const body = await daemonFetch(`/scope/${encodeURIComponent(args.slug)}/unapprove`, { method: 'POST', body: JSON.stringify(payload) })
       return textResult(`unapproved ${args.slug}`, { revision: body.revision })
     }
@@ -601,7 +601,7 @@ export class McpConnection {
     throw new Error(`unknown tool: ${name}`)
   }
 
-  async handle(message) {
+  async handle(message, identity = process.env) {
     if (message.id !== undefined && (message.result !== undefined || message.error !== undefined) && !message.method) {
       const pending = this.pending.get(String(message.id))
       if (!pending) return
@@ -627,7 +627,7 @@ export class McpConnection {
       } else if (message.method === 'tools/list') {
         result = { tools: TOOLS }
       } else if (message.method === 'tools/call') {
-        result = await this.callTool(message.params?.name, message.params?.arguments || {}, message)
+        result = await this.callTool(message.params?.name, message.params?.arguments || {}, message, identity)
       } else {
         this.send({
           jsonrpc: '2.0',
@@ -678,30 +678,16 @@ function isLoopbackOrigin(origin) {
   }
 }
 
-export async function startHttp({ port = configuredPort() + 1 } = {}) {
-  const sessions = new Map()
-  const server = http.createServer(async (req, res) => {
-    if (req.method !== 'POST' || req.url !== '/mcp') {
-      res.writeHead(404).end()
-      return
-    }
-    // Without these three checks any page the user has open can reach this
-    // server: text/plain makes the request CORS-simple, so no preflight fires
-    // and fetch(..., {mode:'no-cors'}) gets through. Write access alone is
-    // enough to inject an ask whose title asks the human for a production key.
-    // The MCP spec requires Origin validation on HTTP transports for exactly
-    // this reason.
-    if (!isLoopbackHost(req.headers.host)) {
-      res.writeHead(403).end()
-      return
-    }
-    if (req.headers.origin && !isLoopbackOrigin(req.headers.origin)) {
-      res.writeHead(403).end()
-      return
+export function createHttpHandler() {
+  return async (req, res) => {
+    if (req.method !== 'POST') return res.writeHead(405, { Allow: 'POST' }).end()
+    // Reject browser cross-origin writes and DNS rebinding, just as the
+    // standalone HTTP transport does. The daemon binds only to loopback.
+    if (!isLoopbackHost(req.headers.host) || (req.headers.origin && !isLoopbackOrigin(req.headers.origin))) {
+      return res.writeHead(403).end()
     }
     if (!String(req.headers['content-type'] || '').includes('application/json')) {
-      res.writeHead(415).end()
-      return
+      return res.writeHead(415).end()
     }
     const chunks = []
     let received = 0
@@ -717,32 +703,34 @@ export async function startHttp({ port = configuredPort() + 1 } = {}) {
     let message
     try {
       message = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid request')
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' } }))
-      return
+      return res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' } }))
     }
-    let sessionId = req.headers['mcp-session-id']
-    if (!sessionId && message.method === 'initialize') sessionId = randomUUID()
-    if (!sessionId) {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Mcp-Session-Id is required' }))
-      return
+    // Stateless Streamable HTTP: no per-tab server or retained session state.
+    // Each request owns its reply callback and identity, including concurrent calls.
+    const identity = {
+      HERDR_PANE_ID: req.headers['x-herdr-pane'],
+      CLAUDE_SESSION_ID: req.headers['x-claude-session'],
+      HERDR_SESSION_ID: req.headers['x-herdr-session'],
+      UNBLOCK_PROJECT: req.headers['x-unblock-project'],
     }
     let response
-    let connection = sessions.get(sessionId)
-    if (!connection) {
-      connection = new McpConnection((payload) => {
-        if (payload.id === message.id || payload.id === String(message.id)) response = payload
-      })
-      sessions.set(sessionId, connection)
-    }
-    await connection.handle(message)
-    res.writeHead(response ? 200 : 202, {
-      'Content-Type': 'application/json',
-      'Mcp-Session-Id': sessionId,
+    const connection = new McpConnection((payload) => {
+      if (payload.id === message.id && !payload.method) response = payload
     })
+    await connection.handle(message, identity)
+    res.writeHead(response ? 200 : 202, { 'Content-Type': 'application/json' })
     res.end(response ? JSON.stringify(response) : '')
+  }
+}
+
+export async function startHttp({ port = configuredPort() + 1 } = {}) {
+  const handle = createHttpHandler()
+  const server = http.createServer((req, res) => {
+    if (req.url !== '/mcp') return res.writeHead(404).end()
+    handle(req, res).catch(() => res.writeHead(500).end())
   })
   await new Promise((resolve, reject) => {
     server.once('error', reject)

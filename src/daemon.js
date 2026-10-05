@@ -1,3 +1,4 @@
+import { createHttpHandler } from './mcp.js'
 import { processStarts, sameProcess } from './origin-process.js'
 import http from 'node:http'
 import { execFile } from 'node:child_process'
@@ -1255,8 +1256,10 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     notFound(res)
   }
 
+  const handleMcp = createHttpHandler()
   const server = http.createServer((req, res) => {
-    handle(req, res).catch((error) => {
+    const route = req.url === '/mcp' ? handleMcp : handle
+    route(req, res).catch((error) => {
       if (res.headersSent) return res.end()
       if (error && error.code === 'SECRET_NOT_REFERENCED') {
       return sendJson(res, 400, { error: error.message, code: error.code })
