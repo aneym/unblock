@@ -173,7 +173,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
   function argv(sources, scope, model) {
     // A scope may pick its own effort: low answered in about 7 s, medium in 33-55 s with file reads (2026-10-05 burst tests).
     const scopeEffort = ['low', 'medium', 'high'].includes(scope?.answerer_effort) ? scope.answerer_effort : null
-    const effort = isScope(scope) ? scopeEffort || process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'medium' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
+    const effort = isScope(scope) ? scopeEffort || process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'low' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
     const args = ['-p', '--restricted', '--model', model, '--effort', effort,
       '--tools', 'Read,Grep,Glob,WebFetch', '--allowedTools', 'Read,Grep,Glob,WebFetch', '--permission-mode', 'dontAsk',
       '--strict-mcp-config', '--no-session-persistence', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']

@@ -12,7 +12,7 @@
  * answerer: default for the per-doc `answerer: on|off` seam.
  */
 export const DOC_KINDS = Object.freeze({
-  scope:     { label: 'Scoping',    margin: 'Comment', approve: true,  resolve: true,  qa: false, answerer: false },
+  scope:     { label: 'Scoping',    margin: 'Comment', approve: true,  resolve: true,  qa: false, answerer: true  },
   explainer: { label: 'Explainers', margin: 'Ask',     approve: false, resolve: false, qa: true,  answerer: true  },
   review:    { label: 'Reviews',    margin: 'Comment', approve: false, resolve: true,  qa: false, answerer: false },
   draft:     { label: 'Drafts',     margin: 'Comment', approve: false, resolve: true,  qa: false, answerer: false },

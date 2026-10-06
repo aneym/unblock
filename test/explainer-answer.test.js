@@ -218,14 +218,20 @@ test('the concurrency cap queues extra questions but every one shows Answeringâ€
   } finally { await t.h.close() }
 })
 
-test('a plain scope keeps lane delivery and spawns no answerer; the answerer flag turns it on per scope', async () => {
-  const plain = { ...explainer('plain-scope'), kind: undefined, sources: undefined }
+test('a plain scope gets the responder by default (Alex approved comment-latency r7, 2026-10-06); answerer: off keeps lane delivery', async () => {
+  const fresh = await boot({ ...explainer('default-scope'), kind: undefined, sources: undefined })
+  try {
+    await fresh.ask('stream', 'websocket', 'Q-1 a scoping comment', 'd-1')
+    await fresh.until(() => fresh.answerer.list().length === 1, 'responder for a plain scope')
+  } finally { await fresh.h.close() }
+
+  const plain = { ...explainer('plain-scope'), kind: undefined, sources: undefined, answerer: 'off' }
   const t = await boot(plain)
   try {
     await t.ask('stream', 'websocket', 'Q-1 a normal scoping comment', 'p-1')
     await t.until(() => t.lane.posts().some((a) => t.lane.flag(a, '--kind') === 'task' && a.join(' ').includes('Q-1 a normal scoping comment')), 'old comment delivery')
     await new Promise((r) => setTimeout(r, 400))
-    assert.equal(t.answerer.list().length, 0, 'no answerer for a scope')
+    assert.equal(t.answerer.list().length, 0, 'no answerer for a scope with answerer: off')
     assert.ok(!agentMessages((await t.get()).threads[0]).length, 'no Answeringâ€¦ on a scope')
     const listed = (await t.h.request('/api/scope', { headers: human })).json
     const rows = Array.isArray(listed) ? listed : listed.scopes
