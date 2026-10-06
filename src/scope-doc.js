@@ -5,6 +5,8 @@ import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } f
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
 export const THREAD_ID = /^T\d{1,4}$/
 export const KPI_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+// An explainer may name its answerer by family alias (`fable-latest`); `route resolve` turns it into a model id at answer time.
+export const MODEL_ALIAS = /^[a-z][a-z0-9-]{0,40}$/
 const KPI_SOURCE = /^[a-z][a-z-]{0,31}(:[A-Za-z0-9_.:\/-]{1,64})?$/
 const KPI_KEYS = ['id', 'name', 'source', 'target', 'direction', 'window_days']
 export const APPS = ['recruiter', 'closer', 'rails-admin']
@@ -208,6 +210,7 @@ export function validateScope(scope) {
     }
   }
   if (scope.answerer !== undefined) check(scope.answerer === 'on' || scope.answerer === 'off', 'invalid answerer')
+  if (scope.answerer_model !== undefined) check(typeof scope.answerer_model === 'string' && MODEL_ALIAS.test(scope.answerer_model), 'invalid answerer_model')
   if (scope.sources !== undefined) check(Array.isArray(scope.sources) && scope.sources.length >= 1 && scope.sources.length <= 8 && scope.sources.every((dir) => typeof dir === 'string' && isAbsolute(dir)), 'invalid sources')
   if (scope.approve_default !== undefined) check(['try', 'ship'].includes(scope.approve_default), 'invalid approve_default')
   if (scope.ships !== undefined) {

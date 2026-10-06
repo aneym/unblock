@@ -10,7 +10,7 @@ import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './doc-kinds.js'
-import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES } from './scope-doc.js'
+import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 import { createLiveItems, MAX_TEXT } from './live-items.js'
 
@@ -551,6 +551,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       finally { if (writes.get(slug) === pending) writes.delete(slug) }
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
+    const answererWrite = req.method === 'PUT' && parts.length === 2 && action === 'answerer'
     const kpiWrite = req.method === 'PUT' && parts.length === 2 && action === 'kpis'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const publishWrite = req.method === 'POST' && parts.length === 2 && action === 'publish'
@@ -561,7 +562,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const batchThread = req.method === 'POST' && parts.length === 3 && action === 'threads' && threadId === 'batch'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'unsay', 'delete'].includes(verb)
-    if (!appWrite && !kpiWrite && !approvalWrite && !publishWrite && !destinationWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!appWrite && !answererWrite && !kpiWrite && !approvalWrite && !publishWrite && !destinationWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
     if (batchThread && human) return sendJson(res, 403, { error: 'lanes ask through the CLI' })
@@ -575,7 +576,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     if (publishWrite && human && !relay) requireHumanPath(req)
     if (destinationWrite && human) return sendJson(res, 403, { error: 'lanes set the destination through the CLI' })
-    if ((docWrite || appWrite || kpiWrite) && human) {
+    if ((docWrite || appWrite || answererWrite || kpiWrite) && human) {
       const error = new Error('lanes rewrite the doc through the CLI')
       error.code = 'HUMAN_ONLY'; error.status = 403; throw error
     }
@@ -593,6 +594,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body?.images !== undefined && !human) return sendJson(res, 400, { error: 'invalid images' })
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
+    if (answererWrite && (!body || typeof body !== 'object' || Object.keys(body).some((key) => key !== 'model') || (body.model !== null && (typeof body.model !== 'string' || !MODEL_ALIAS.test(body.model))))) return sendJson(res, 400, { error: 'invalid answerer model' })
     if (kpiWrite) {
       const normalized = normalizeKpis(body?.kpis)
       if (normalized.error) return sendJson(res, 400, { error: normalized.error })
@@ -614,7 +616,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay && body.via === undefined) body.via = 'admin'
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -913,7 +915,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, appWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
+  function changeScope(slug, { body, human, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -928,6 +930,19 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (entry) entry.meta = metadata(slug)
       emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
       return { app: scope.app }
+    }
+    if (answererWrite) {
+      if (kindOf(scope) === 'scope') bad('only an explainer takes an answerer model')
+      if (body.model === null) delete scope.answerer_model
+      else scope.answerer_model = body.model
+      const problems = validateScope(scope)
+      if (problems.length) bad(problems[0])
+      writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+      renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+      return { answerer_model: scope.answerer_model ?? null }
     }
     if (kpiWrite) {
       const normalized = normalizeKpis(body.kpis)

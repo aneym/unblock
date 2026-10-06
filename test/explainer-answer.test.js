@@ -255,10 +255,15 @@ test('unblock explain new writes an explainer with absolute sources; scope new s
     child.on('close', (status) => resolve({ status, out, err }))
   })
   const relA = sourceA.split('/').at(-1)
-  const made = await run(['explain', 'new', 'cc-mods', '--pane', 'w5H:pQA', '--title', 'Claude Code mods', '--sources', relA, sourceB])
+  const made = await run(['explain', 'new', 'cc-mods', '--pane', 'w5H:pQA', '--title', 'Claude Code mods', '--sources', relA, sourceB, '--answerer-model', 'fable-latest'])
   assert.equal(made.status, 0, made.err)
   const scope = JSON.parse(readFileSync(join(scopes, 'cc-mods', 'scope.json'), 'utf8'))
   assert.equal(scope.kind, 'explainer')
+  assert.equal(scope.answerer_model, 'fable-latest', 'the answerer model is stored as the alias, not a resolved id')
+  const badAlias = await run(['explain', 'new', 'cc-bad-model', '--pane', 'w5H:pQA', '--sources', sourceA, '--answerer-model', 'claude opus'])
+  assert.notEqual(badAlias.status, 0, 'an answerer model that is not a family alias is refused')
+  const scopeModel = await run(['scope', 'new', 'scope-with-model', '--pane', 'w5H:pQA', '--answerer-model', 'opus-latest'])
+  assert.notEqual(scopeModel.status, 0, 'a plain scope takes no answerer model')
   assert.deepEqual(scope.sources, [sourceA, sourceB], 'relative sources resolve to absolute paths')
   assert.equal(scope.title, 'Claude Code mods')
   assert.equal(scope.pane, 'w5H:pQA')
@@ -267,6 +272,67 @@ test('unblock explain new writes an explainer with absolute sources; scope new s
   const plain = await run(['scope', 'new', 'just-a-scope', '--pane', 'w5H:pQA'])
   assert.equal(plain.status, 0, plain.err)
   assert.equal(JSON.parse(readFileSync(join(scopes, 'just-a-scope', 'scope.json'), 'utf8')).kind ?? 'scope', 'scope')
+})
+
+// Explainer-lane design slice 2 (2026-10-06): an explainer names its answerer by family alias. Each answer runs
+// `route resolve <alias>` and passes the id; an alias that does not resolve falls back to UNBLOCK_ANSWERER_MODEL, then
+// Opus, and logs answerer_model_fallback. A lane sets the alias with `unblock explain answerer`; Alex's browser cannot.
+test('an explainer answerer runs on its resolved alias, falls back to Opus with a log line, and a lane can change it', async () => {
+  const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'route-stub-')))
+  const map = join(stubDir, 'aliases.json')
+  writeFileSync(map, JSON.stringify({ 'fable-latest': 'claude-fable-5-1', 'opus-latest': 'claude-opus-from-route' }))
+  writeFileSync(join(stubDir, 'route'), `#!/usr/bin/env node
+const aliases = JSON.parse(require('node:fs').readFileSync(${JSON.stringify(map)}, 'utf8'))
+const [verb, alias] = process.argv.slice(2)
+if (verb !== 'resolve' || !aliases[alias]) { console.error('route: unknown alias ' + alias); process.exit(3) }
+console.log(aliases[alias])
+`)
+  chmodSync(join(stubDir, 'route'), 0o755)
+  const savedModel = process.env.UNBLOCK_ANSWERER_MODEL
+  delete process.env.UNBLOCK_ANSWERER_MODEL
+  const logged = []
+  const consoleError = console.error
+  console.error = (...args) => { logged.push(args.join(' ')); consoleError(...args) }
+  const t = await boot(explainer('qa-model', { answerer_model: 'fable-latest' }), { STUB_ANSWER_MS: '100', PATH: `${stubDir}:${process.env.PATH}` })
+  const modelOf = (tag) => { const run = t.answerer.list().find((r) => r.prompt.match(/Q-\d+/g).at(-1) === tag); return run && run.args[run.args.indexOf('--model') + 1] }
+  const answered = (n) => t.until(async () => (await t.get()).threads.filter((th) => agentMessages(th).some((m) => !m.pending)).length >= n, `${n} answers`)
+  const cli = (args) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { env: process.env })
+    let out = '', err = ''
+    child.stdout.on('data', (d) => { out += d }); child.stderr.on('data', (d) => { err += d })
+    child.on('close', (status) => resolve({ status, out, err }))
+  })
+  try {
+    await t.ask('stream', 'websocket', 'Q-1 which websocket?', 'm-1')
+    await answered(1)
+    assert.equal(modelOf('Q-1'), 'claude-fable-5-1', 'the alias resolves through route at answer time')
+
+    writeFileSync(map, JSON.stringify({ 'opus-latest': 'claude-opus-from-route' }))
+    await t.ask('tools', 'collapsible row', 'Q-2 collapsed by default?', 'm-2')
+    await answered(2)
+    assert.equal(modelOf('Q-2'), 'claude-opus-5-5', 'an alias route cannot resolve falls back to Opus')
+    assert.ok(logged.some((line) => /answerer_model_fallback slug=qa-model alias=fable-latest exit=3 model=claude-opus-5-5/.test(line)), logged.join('\n'))
+
+    const set = await cli(['explain', 'answerer', 'qa-model', '--model', 'opus-latest'])
+    assert.equal(set.status, 0, set.err)
+    const root = process.env.UNBLOCK_SCOPING_DIR
+    assert.equal(JSON.parse(readFileSync(join(root, 'qa-model', 'scope.json'), 'utf8')).answerer_model, 'opus-latest')
+    await t.ask('stream', 'Events arrive over a websocket', 'Q-3 who reconnects?', 'm-3')
+    await answered(3)
+    assert.equal(modelOf('Q-3'), 'claude-opus-from-route', 'the next answer uses the alias the lane set')
+
+    const browser = await t.h.request('/api/scope/qa-model/answerer', { method: 'PUT', headers: human, body: { model: 'fable-latest' } })
+    assert.equal(browser.status, 403, 'Alex\'s browser does not pick the model')
+    assert.notEqual((await cli(['explain', 'answerer', 'qa-model', '--model', 'Claude Opus'])).status, 0, 'a non-alias is refused')
+    const cleared = await cli(['explain', 'answerer', 'qa-model', '--clear'])
+    assert.equal(cleared.status, 0, cleared.err)
+    assert.equal(JSON.parse(readFileSync(join(root, 'qa-model', 'scope.json'), 'utf8')).answerer_model, undefined)
+  } finally {
+    console.error = consoleError
+    if (savedModel === undefined) delete process.env.UNBLOCK_ANSWERER_MODEL
+    else process.env.UNBLOCK_ANSWERER_MODEL = savedModel
+    await t.h.close()
+  }
 })
 
 // Verifier repro (2026-10-03): MCP respawns a daemon on any connection error. A second start that loses the port must

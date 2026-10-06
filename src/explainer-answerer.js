@@ -5,10 +5,11 @@ import { join, basename } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { kindOf } from './doc-kinds.js'
-import { headingOf } from './scope-doc.js'
+import { headingOf, MODEL_ALIAS } from './scope-doc.js'
 import { quoteSnippet } from './scope-anchor.js'
 
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,80}$/
 const DROP_ENV = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
 const ROLE = 'You answer Alex\'s margin questions about an explainer doc. Answer in plain short prose: two to five sentences, no headings, and a short list only when you name three or more parallel things. Lead with the direct answer. Cite file:line or the URL for every claim you take from a source. Read the sources before answering when the doc alone does not settle it. If the answer needs a decision or new work from the doc\'s owner, end with one line `NEEDS_OWNER: <why>`.'
 
@@ -144,9 +145,31 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     pump()
   }
 
-  function argv(sources, scope) {
-    // Scope comments are a conversation with Alex, so they stay on Opus (Alex took it on comment-latency T2, 2026-10-05).
-    const model = isScope(scope) ? process.env.UNBLOCK_SCOPE_ANSWERER_MODEL || 'claude-opus-5-5' : process.env.UNBLOCK_ANSWERER_MODEL || 'claude-sonnet-5-5'
+  // Scope comments are a conversation with Alex, so they stay on Opus (Alex took it on comment-latency T2, 2026-10-05).
+  // An explainer with `answerer_model` resolves that alias each answer; an alias that does not resolve falls back to
+  // UNBLOCK_ANSWERER_MODEL, then Opus, and the fallback is logged (explainer-lane design slice 2, 2026-10-06).
+  function modelFor(scope) {
+    if (isScope(scope)) return Promise.resolve(process.env.UNBLOCK_SCOPE_ANSWERER_MODEL || 'claude-opus-5-5')
+    const alias = scope?.answerer_model
+    if (alias === undefined) return Promise.resolve(process.env.UNBLOCK_ANSWERER_MODEL || 'claude-sonnet-5-5')
+    const fallback = (why) => {
+      const model = process.env.UNBLOCK_ANSWERER_MODEL || 'claude-opus-5-5'
+      log(`unblock: answerer_model_fallback slug=${scope.slug} alias=${String(alias).slice(0, 40)} ${why} model=${model}`)
+      return model
+    }
+    if (typeof alias !== 'string' || !MODEL_ALIAS.test(alias)) return Promise.resolve(fallback('invalid-alias'))
+    const bin = process.env.UNBLOCK_ROUTE_BIN || 'route'
+    const env = { ...process.env, PATH: `${process.env.PATH ?? ''}:${join(homedir(), '.local', 'bin')}` }
+    return new Promise((resolve) => {
+      execFile(bin, ['resolve', alias], { timeout: 10000, encoding: 'utf8', env }, (error, stdout) => {
+        const id = String(stdout ?? '').trim()
+        if (!error && MODEL_ID.test(id)) return resolve(id)
+        resolve(fallback(`exit=${error ? (typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error') : 'bad-output'}`))
+      })
+    })
+  }
+
+  function argv(sources, scope, model) {
     // A scope may pick its own effort: low answered in about 7 s, medium in 33-55 s with file reads (2026-10-05 burst tests).
     const scopeEffort = ['low', 'medium', 'high'].includes(scope?.answerer_effort) ? scope.answerer_effort : null
     const effort = isScope(scope) ? scopeEffort || process.env.UNBLOCK_SCOPE_ANSWERER_EFFORT || 'medium' : process.env.UNBLOCK_ANSWERER_EFFORT || 'medium'
@@ -230,7 +253,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       if (!stopped) await postOwner(scope, thread, outcome)
     }
     if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
-    return new Promise((resolve) => {
+    return modelFor(scope).then((model) => stopped ? undefined : new Promise((resolve) => {
       let settled = false
       let exited = false
       let partial = ''
@@ -269,7 +292,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       let child
       try {
         const cwd = sources[0] && existsSync(sources[0]) ? sources[0] : job.scopeDir
-        child = spawn(process.env.UNBLOCK_ANSWERER_BIN || join(homedir(), '.local', 'bin', 'claude-lb-launch'), argv(sources, scope), {
+        child = spawn(process.env.UNBLOCK_ANSWERER_BIN || join(homedir(), '.local', 'bin', 'claude-lb-launch'), argv(sources, scope, model), {
           cwd,
           env: childEnv(job),
           detached: true,
@@ -337,7 +360,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       }
       child.on('error', onDone)
       child.on('close', onDone)
-    })
+    }))
   }
 
   function stop() {

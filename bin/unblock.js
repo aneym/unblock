@@ -15,7 +15,7 @@ import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
 import { quoteSnippet } from '../src/scope-anchor.js'
 import { kindOf } from '../src/doc-kinds.js'
-import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES } from '../src/scope-doc.js'
+import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES, MODEL_ALIAS } from '../src/scope-doc.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -516,12 +516,13 @@ unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
 unblock explain [list|url|notes|comments|doc|patch|lint|ask|reply|edit|resolve|reopen]
-unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off]`
+unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off] [--answerer-model <alias>]
+unblock explain answerer <slug> --model <alias> | --clear    the margin answerer's model, a family alias resolved by \`route resolve\` per answer`
 
 function scopeNew(args, usage, mode = 'scope') {
   const slugRe = /^[a-z0-9][a-z0-9-]{0,63}$/
   const paneRe = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
-  let pane, app, title, kind = mode === 'explain' ? 'explainer' : undefined, answerer, parent
+  let pane, app, title, kind = mode === 'explain' ? 'explainer' : undefined, answerer, parent, answererModel
   const sources = []
   const words = []
   for (let i = 1; i < args.length; i++) {
@@ -532,7 +533,7 @@ function scopeNew(args, usage, mode = 'scope') {
       if (!sources.length) fail(usage)
       continue
     }
-    if (word === '--pane' || word === '--app' || word === '--title' || word === '--kind' || word === '--answerer' || word === '--parent') {
+    if (word === '--pane' || word === '--app' || word === '--title' || word === '--kind' || word === '--answerer' || word === '--parent' || word === '--answerer-model') {
       const value = args[++i]
       if (value === undefined) fail(usage)
       if (word === '--pane') pane = value
@@ -540,6 +541,7 @@ function scopeNew(args, usage, mode = 'scope') {
       else if (word === '--kind') kind = value
       else if (word === '--answerer') answerer = value
       else if (word === '--parent') parent = value
+      else if (word === '--answerer-model') answererModel = value
       else title = value
     } else if (word.startsWith('-')) fail(usage)
     else words.push(word)
@@ -549,6 +551,7 @@ function scopeNew(args, usage, mode = 'scope') {
   if (kind !== undefined && !DOC_KINDS.includes(kind)) fail(usage)
   if (parent !== undefined && !slugRe.test(parent)) fail(usage)
   if (answerer !== undefined && answerer !== 'on' && answerer !== 'off') fail(usage)
+  if (answererModel !== undefined && (!MODEL_ALIAS.test(answererModel) || (kind ?? 'scope') === 'scope')) fail(usage)
   const resolved = sources.map((dir) => {
     const abs = resolve(dir)
     let stat
@@ -563,7 +566,7 @@ function scopeNew(args, usage, mode = 'scope') {
   const path = join(dir, 'scope.json')
   if (existsSync(path)) fail(`${path} exists`, 4)
   const heading = title ?? slug
-  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), ...(kind ? { kind } : {}), ...(parent ? { parent } : {}), ...(answerer ? { answerer } : {}), ...(resolved.length ? { sources: resolved } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
+  const scope = { version: 2, slug, title: heading, pane, ...(app ? { app } : {}), ...(kind ? { kind } : {}), ...(parent ? { parent } : {}), ...(answerer ? { answerer } : {}), ...(answererModel ? { answerer_model: answererModel } : {}), ...(resolved.length ? { sources: resolved } : {}), revision: 1, updated_at: new Date().toISOString(), doc: { sections: [{ id: 'title', heading, body_md: '' }] }, threads: [] }
   const problems = validateScope(scope)
   if (problems.length) fail(problems.join('\n'), 1)
   mkdirSync(dir, { recursive: true })
@@ -584,6 +587,14 @@ async function scope(args, mode = 'scope') {
   }
   if (args[0] === 'threads') fail(usage)
   if (args[0] === 'new') return scopeNew(args, usage, mode)
+  if (args[0] === 'answerer') {
+    const { rest, opts } = flags(args, { '--model': true, '--clear': false })
+    const [, name, ...extra] = rest
+    const model = opts['--clear'] ? null : opts['--model']
+    if (!name || extra.length || (opts['--clear'] && opts['--model'] !== undefined) || (model !== null && !MODEL_ALIAS.test(model ?? ''))) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/answerer`, { model }, { method: 'PUT' })
+    return output(data, `answerer model ${data.answerer_model ?? 'default'}`)
+  }
   const [sub = 'list', slug, ...words] = args
   if (sub === 'typing') {
     const { rest, opts } = flags(args, { '--doing': true, '--link': true })
