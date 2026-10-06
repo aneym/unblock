@@ -5,7 +5,7 @@ import { join, basename } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { kindOf } from './doc-kinds.js'
-import { headingOf, MODEL_ALIAS } from './scope-doc.js'
+import { headingOf, sectionHash, MODEL_ALIAS } from './scope-doc.js'
 import { remoteScopeHost, scopePostCommand } from './pane-notice.js'
 import { quoteSnippet } from './scope-anchor.js'
 
@@ -223,11 +223,15 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     writeFileSync(file, `${edit.markdown}\n`)
     // The installed daemon copy has no plugin/ beside bin/, so the edit goes through the CLI on PATH, as a lane's does.
     const cli = process.env.UNBLOCK_CLI_BIN || join(homedir(), '.local', 'bin', 'unblock')
+    // The edit lands only if the section is still the one this answer read (exit 6 = it changed).
+    const read = scope.doc?.sections?.find((section) => section.id === edit.id)
+    const guard = read ? ['--if-section-hash', sectionHash(read)] : []
     return new Promise((resolve) => {
       const env = { ...process.env, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' }
-      execFile(cli, ['scope', 'patch', slug, edit.id, '--from', file], { timeout: 30000, encoding: 'utf8', env }, (error, _stdout, stderr) => {
+      execFile(cli, ['scope', 'patch', slug, edit.id, '--from', file, ...guard], { timeout: 30000, encoding: 'utf8', env }, (error, _stdout, stderr) => {
         rmSync(dir, { recursive: true, force: true })
         if (!error) return resolve({ ...rest, text: `${rest.text}\n\nEdited §${edit.id} to match.`, edited: edit.id })
+        if (error.code === 6) return resolve({ ...rest, conflict: edit.id })
         const why = String(stderr || error.message).replace(/\s+/g, ' ').trim().slice(0, 160)
         log(`unblock: scope responder edit failed slug=${slug} section=${edit.id} ${why}`)
         resolve({ ...rest, text: `${rest.text}\n\n(Couldn't edit §${edit.id}: ${why})`, needs_owner: true, why: rest.why || 'section edit failed' })
@@ -235,27 +239,13 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     })
   }
 
-  function run(job) {
-    const scope = readScope(job.slug)
-    const thread = scope?.threads?.find((item) => item.id === job.threadId)
+  // One model call: resolves with the parsed outcome when it settles; `gone` resolves when the child has exited.
+  function ask(job, scope, thread, model, item) {
     const sources = Array.isArray(scope?.sources) ? scope.sources.filter((dir) => typeof dir === 'string') : []
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
-    const item = (patch) => liveItems?.upsert(job.slug, { thread: job.threadId, to: job.messageAt, by: isScope(scope) ? 'Responder' : 'Explainer', ...patch })
-    const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
-    const settle = async (outcome) => {
-      if (stopped) return
-      if (outcome.edit) outcome = await applyEdit(job.slug, scope, outcome)
-      try {
-        await patch(outcome)
-        item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
-      } catch (error) {
-        item({ status: 'failed', doing: null, error: `Couldn't save the answer: ${error.message}`.slice(0, 200) })
-        log(`unblock: explainer save failed: ${error.message}`)
-      }
-      if (!stopped) await postOwner(scope, thread, outcome)
-    }
-    if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
-    return modelFor(scope).then((model) => stopped ? undefined : new Promise((resolve) => {
+    let closed
+    const gone = new Promise((resolve) => { closed = resolve })
+    const result = new Promise((resolve) => {
       let settled = false
       let exited = false
       let partial = ''
@@ -264,15 +254,13 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       let partialAt = 0
       let partialTimer = null
       let timer = null
-      const finishSlot = () => { if (settled && exited) resolve() }
       const finish = (outcome) => {
         if (settled) return
         if (partialTimer) flushPartial()
         settled = true
         clearTimeout(timer)
         clearTimeout(partialTimer)
-        if (stopped) { finishSlot(); return }
-        settle(outcome).finally(finishSlot).catch((error) => log(`unblock: explainer settle failed: ${error.message}`))
+        resolve(stopped ? undefined : outcome)
       }
       const flushPartial = () => {
         partialTimer = null
@@ -302,6 +290,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
         })
       } catch {
         exited = true
+        closed()
         finish({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
         return
       }
@@ -355,14 +344,58 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       child.stdin?.end()
       const onDone = () => {
         exited = true
+        closed()
         if (buf.trim()) handle(buf)
         buf = ''
         if (!settled) finish(resultText != null && !badResult ? takeAnswer(resultText) : { text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
-        else finishSlot()
       }
       child.on('error', onDone)
       child.on('close', onDone)
-    }))
+    })
+    return { result, gone }
+  }
+
+  function run(job) {
+    let scope = readScope(job.slug)
+    let thread = scope?.threads?.find((item) => item.id === job.threadId)
+    const pane = typeof scope?.pane === 'string' ? scope.pane : ''
+    const item = (patch) => liveItems?.upsert(job.slug, { thread: job.threadId, to: job.messageAt, by: isScope(scope) ? 'Responder' : 'Explainer', ...patch })
+    const patch = (outcome) => writeAnswer(job.slug, { threadId: job.threadId, at: job.messageAt, text: outcome.text, pending: false, needs_owner: outcome.needs_owner, handoff: outcome.handoff })
+    const settle = async (outcome) => {
+      if (stopped) return
+      try {
+        await patch(outcome)
+        item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
+      } catch (error) {
+        item({ status: 'failed', doing: null, error: `Couldn't save the answer: ${error.message}`.slice(0, 200) })
+        log(`unblock: explainer save failed: ${error.message}`)
+      }
+      if (!stopped) await postOwner(scope, thread, outcome)
+    }
+    if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
+    return modelFor(scope).then(async (model) => {
+      if (stopped) return
+      const exits = []
+      // Answer, then apply the edit against the snapshot this answer read; a changed section means answer again once.
+      const answer = async () => {
+        const call = ask(job, scope, thread, model, item)
+        exits.push(call.gone)
+        const outcome = await call.result
+        return outcome?.edit && !stopped ? applyEdit(job.slug, scope, outcome) : outcome
+      }
+      let outcome = await answer()
+      if (outcome?.conflict) {
+        scope = readScope(job.slug)
+        thread = scope?.threads?.find((value) => value.id === job.threadId)
+        if (!scope || !thread) outcome = { text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' }
+        else {
+          outcome = await answer()
+          if (outcome?.conflict) outcome = { ...outcome, text: `${outcome.text}\n\n(Didn't edit §${outcome.conflict}: it changed again while I answered, so the lane has it.)`, needs_owner: true, why: `§${outcome.conflict} changed while the responder answered` }
+        }
+      }
+      if (outcome) await settle(outcome)
+      await Promise.all(exits)
+    })
   }
 
   function stop() {

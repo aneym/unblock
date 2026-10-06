@@ -103,6 +103,7 @@ async function request(path, body, { start = true, method } = {}) {
     if (response.status === 422 && data.error === 'unslop') lintOutput(data)
     const message = data.error || `HTTP ${response.status}`
     if (['ASK_NOT_OPEN', 'PAY_NOT_ALLOWED', 'RECEIPT_NOT_ALLOWED'].includes(data.code)) fail(message, 5)
+    if (data.code === 'SECTION_CHANGED') fail(message, 6)
     if (response.status === 404) fail(message, 3)
     if (response.status === 400 || response.status === 409 || response.status === 422) {
       if (data.code === 'ALREADY_OPEN' && data.ticket) {
@@ -513,7 +514,7 @@ unblock scope app <slug> recruiter|closer|rails-admin
 unblock scope kpi <slug> set --from <file.json>
 unblock scope kpi <slug> list [--json]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
-unblock scope patch <slug> <id> --from <section.md> [--keep "term" ...]
+unblock scope patch <slug> <id> --from <section.md> [--if-section-hash <h>] [--keep "term" ...]
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
 unblock explain [list|url|notes|comments|doc|patch|lint|ask|reply|edit|resolve|reopen]
 unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off] [--answerer-model <alias>]
@@ -769,8 +770,9 @@ async function scope(args, mode = 'scope') {
     }
     return output(data, `replied ${data.thread.id}`)
   }
-  const { rest, opts } = flags(args, { '--since': true, '--from': true, '--open': false, '--keep': true })
+  const { rest, opts } = flags(args, { '--since': true, '--from': true, '--open': false, '--keep': true, '--if-section-hash': true })
   const [verb = 'list', name, ...extra] = rest
+  if (opts['--if-section-hash'] && verb !== 'patch') fail(usage)
   if (verb === 'list' && !name && !extra.length && !Object.keys(opts).length) {
     const { scopes } = await request('/api/scope')
     const want = mode === 'explain' ? 'explainer' : 'scope'
@@ -811,7 +813,7 @@ async function scope(args, mode = 'scope') {
       section = { body_md: (heading ? raw.slice(heading[0].length) : raw).trim(), ...(heading ? { heading: heading[1] } : {}) }
       await uploadDocImages(name, [section], opts['--from'])
     } catch (error) { fail(error.message, 1) }
-    const data = await request(`/api/scope/${encodeURIComponent(name)}/sections/${encodeURIComponent(extra[0])}`, { ...section, ...(opts['--keep'] ? { keep: opts['--keep'] } : {}) }, { method: 'PUT' })
+    const data = await request(`/api/scope/${encodeURIComponent(name)}/sections/${encodeURIComponent(extra[0])}`, { ...section, ...(opts['--keep'] ? { keep: opts['--keep'] } : {}), ...(opts['--if-section-hash'] ? { if_section_hash: opts['--if-section-hash'] } : {}) }, { method: 'PUT' })
     lintOutput(data)
     return output(data, `revision ${data.revision}${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
   }
@@ -1164,7 +1166,7 @@ unblock rails status                             hosted Unblock connection and o
 unblock mcp                                      run the MCP server
 
 --json works on every command except reveal, ui and mcp.
-Exit codes: 0 ok · 1 daemon unreachable or unexpected error · 2 usage error · 3 no such ask · 4 rejected by the queue · 5 ask is not open.`)
+Exit codes: 0 ok · 1 daemon unreachable or unexpected error · 2 usage error · 3 no such ask · 4 rejected by the queue · 5 ask is not open · 6 section changed (scope patch --if-section-hash).`)
 }
 try {
   if (['help', '-h', '--help'].includes(command)) help()

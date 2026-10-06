@@ -10,7 +10,7 @@ import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './doc-kinds.js'
-import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
+import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, sectionHash, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 import { createLiveItems, MAX_TEXT } from './live-items.js'
 
@@ -611,7 +611,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (shipWrite && (Object.keys(body).some((key) => !['pr', 'head', 'build', 'client_id'].includes(key))
       || !Number.isSafeInteger(body.pr) || body.pr <= 0 || !Number.isSafeInteger(body.build) || body.build <= 0
       || typeof body.head !== 'string' || !/^[0-9a-f]{40}$/.test(body.head))) return sendJson(res, 400, { error: 'invalid ship' })
-    if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep'].includes(key))
+    if (sectionWrite && (Object.keys(body).some((key) => !['body_md', 'heading', 'keep', 'if_section_hash'].includes(key))
       || typeof body.body_md !== 'string' || (body.heading !== undefined && typeof body.heading !== 'string'))) return sendJson(res, 400, { error: 'invalid section patch' })
     if (body.via !== undefined && !(relay ? ['admin', 'voice'] : ['voice']).includes(body.via)) return sendJson(res, 400, { error: 'invalid via' })
     if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
@@ -624,6 +624,9 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const result = await pending
       if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision) })
       return sendJson(res, result.error === 'unslop' ? 422 : ((newThread || batchThread) && !result.duplicate) ? 201 : 200, result)
+    } catch (error) {
+      if (error.code === 'SECTION_CHANGED') return sendJson(res, 409, { error: error.message, code: error.code })
+      throw error
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
@@ -965,7 +968,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (shipWrite) return shipScope(slug, scope, body, human)
     const storedSections = scope.doc.sections
     if (sectionWrite) {
-      if (!storedSections.some((section) => section.id === threadId)) bad('no such section', 404)
+      const stored = storedSections.find((section) => section.id === threadId)
+      if (!stored) bad('no such section', 404)
+      if (body.if_section_hash !== undefined) {
+        if (typeof body.if_section_hash !== 'string' || !/^[0-9a-f]{16}$/.test(body.if_section_hash)) bad('invalid if_section_hash')
+        // changeScope is synchronous, so this check and the write below are atomic per slug.
+        if (body.if_section_hash !== sectionHash(stored)) { const error = new Error('section changed'); error.code = 'SECTION_CHANGED'; error.status = 409; throw error }
+      }
       body = { sections: storedSections.map((section) => section.id === threadId
         ? { ...section, body_md: body.body_md, ...(body.heading !== undefined ? { heading: body.heading } : {}) }
         : section), ...(body.keep !== undefined ? { keep: body.keep } : {}) }
