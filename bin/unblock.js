@@ -427,7 +427,7 @@ async function uploadDocImages(slug, doc, source) {
     for (let i = 0; i < lines.length; i++) {
       if (fence !== null) {
         if (/^```\s*$/.test(lines[i])) { fence = null; continue }
-        if (['demo', 'video'].includes(fence)) {
+        if (['demo', 'video', 'tabs'].includes(fence)) {
           const pair = lines[i].match(/^\s*(src|poster):\s*(.*?)\s*$/)
           if (pair && (pair[1] === 'src' || fence === 'video') && !/^(?:https?:\/\/|asset:)/i.test(pair[2])) {
             const file = localFile(dirname(resolve(source)), pair[2])
@@ -440,7 +440,7 @@ async function uploadDocImages(slug, doc, source) {
         }
         continue
       }
-      if (/^```/.test(lines[i])) { fence = lines[i].match(/^```(demo|video)\s*$/)?.[1] ?? ''; continue }
+      if (/^```/.test(lines[i])) { fence = lines[i].match(/^```(demo|video|tabs)\s*$/)?.[1] ?? ''; continue }
       const image = lines[i].match(IMAGE_LINE)
       if (!image || image[2].startsWith('asset:')) continue
       if (image[3] !== undefined && image[3] !== 'phone') throw new Error('image title must be "phone"')
