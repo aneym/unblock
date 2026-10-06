@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { promptPane } from './pane-notice.js'
+import { promptPane, remoteScopeHost, scopePostCommand } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText } from './scope-lint.js'
 import { buildDocError, buildFences } from './scope-build.js'
@@ -186,7 +186,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           const ref = options.ref
           const supervised = process.env.UNBLOCK_SUPERVISED === '1'
           const lanePost = process.env.UNBLOCK_LANE_POST_BIN || (supervised && existsSync(join(homedir(), '.local', 'bin', 'lane-post')) ? join(homedir(), '.local', 'bin', 'lane-post') : null)
-          const useLanePost = Boolean(lanePost)
+          const remote = remoteScopeHost(scope?.host)
+          const useLanePost = remote || Boolean(lanePost)
           let status
           if (!useLanePost && !supervised) try { status = JSON.parse(await promptPane(['agent', 'get', targetPane])).result?.agent?.agent_status } catch { /* Missing herdr never holds a note. */ }
           if (closed) return
@@ -203,7 +204,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           try {
             if (useLanePost) {
               if (ref) {
-                const posted = bulletinWithRef(ref, targetPane)
+                const posted = remote ? null : bulletinWithRef(ref, targetPane)
                 if (posted) {
                   console.error(`unblock: lane-post skipped slug=${slug} pane=${targetPane} ref=${ref} bulletin=${posted.id} (already posted)`)
                   mark('delivered', { bulletin: posted.id, pane: targetPane })
@@ -216,7 +217,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
               if (ref) args.push('--ref', ref)
               args.push('--text', text)
               const bulletin = await new Promise((resolve, reject) => {
-                execFile(lanePost, args, { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
+                const command = scopePostCommand(lanePost || 'lane-post', args, scope?.host)
+                execFile(command.bin, command.args, { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
                   const id = String(stdout ?? '').match(/\bb-\d{14}-[0-9a-f]{4}\b/)?.[0] ?? null
                   const exit = error ? typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error' : 0
                   const errText = String(stderr ?? '').replace(/\r\n|\r|\n/g, ' ').trim().slice(0, 80)

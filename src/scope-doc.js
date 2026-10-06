@@ -2,6 +2,11 @@ import { isAbsolute } from 'node:path'
 import { KIND_IDS } from './doc-kinds.js'
 import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } from './scope-anchor.js'
 
+/** Scope hosts are SSH aliases, never options, user names or shell fragments. */
+export function validScopeHost(host) {
+  return host === undefined || (typeof host === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/.test(host))
+}
+
 export const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
 export const THREAD_ID = /^T\d{1,4}$/
 export const KPI_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
@@ -108,7 +113,7 @@ export function migrateV1(input, now = '1970-01-01T00:00:00.000Z') {
   }
   for (const section of sections) section.body_md = section.body_md.trim()
   if (v1.unverified) sections.push({ id: 'unverified', heading: 'Not verified yet', body_md: Array.isArray(v1.unverified) ? v1.unverified.join('\n') : String(v1.unverified) })
-  const scope = { version: 2, slug: v1.slug ?? '', title, pane: v1.pane ?? '', revision: 1, updated_at: at, doc: { sections }, threads: [] }
+  const scope = { version: 2, slug: v1.slug ?? '', title, pane: v1.pane ?? '', ...(v1.host === undefined ? {} : { host: v1.host }), revision: 1, updated_at: at, doc: { sections }, threads: [] }
   const titleAnchor = () => anchorInSection(sections[0], title)
   const resolution = (decision, words, by, time) => ({ decision, alex_words: words, by, at: time, confirmed_at: time, revision: 1 })
   for (const q of v1.questions ?? []) {
@@ -168,6 +173,7 @@ export function validateScope(scope) {
   check(typeof scope.slug === 'string' && SLUG.test(scope.slug), 'invalid slug')
   check(typeof scope.title === 'string', 'invalid title')
   check(typeof scope.pane === 'string', 'invalid pane')
+  check(validScopeHost(scope.host), 'invalid host')
   check(Number.isInteger(scope.revision) && scope.revision >= 1, 'invalid revision')
   const sections = scope.doc?.sections
   check(Array.isArray(sections) && sections.length > 0, 'invalid sections')

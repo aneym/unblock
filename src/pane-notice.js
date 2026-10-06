@@ -2,7 +2,8 @@
 import { spawn } from 'node:child_process'
 import { openSync, closeSync, statSync, unlinkSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, hostname } from 'node:os'
+import { validScopeHost } from './scope-doc.js'
 
 export function promptPane(args) {
   return new Promise((resolve, reject) => {
@@ -104,4 +105,16 @@ function postNotice(pane, topic, text) {
       resolve(code === 0 ? 'sent' : 'failed')
     })
   })
+}
+
+export function remoteScopeHost(host) {
+  if (!validScopeHost(host)) throw new Error('invalid scope host')
+  return host !== undefined && !['localhost', hostname(), hostname().split('.')[0]].includes(host)
+}
+
+/** SSH runs a shell remotely, so quote every argument rather than joining raw text. */
+export function scopePostCommand(bin, args, host) {
+  if (!remoteScopeHost(host)) return { bin, args }
+  const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
+  return { bin: 'ssh', args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', host, '"$HOME/.local/bin/lane-post" ' + args.map(quote).join(' ')] }
 }

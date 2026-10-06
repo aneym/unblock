@@ -133,6 +133,8 @@ export interface ScopeV2 {
   slug: string
   title: string
   pane: string
+  /** Optional SSH host alias. Omitted means the local host. */
+  host?: string
   /** Increments on every doc rewrite (not on thread changes). Starts at 1. */
   revision: number
   updated_at: string

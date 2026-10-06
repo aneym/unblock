@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { kindOf } from './doc-kinds.js'
 import { headingOf, MODEL_ALIAS } from './scope-doc.js'
+import { remoteScopeHost, scopePostCommand } from './pane-notice.js'
 import { quoteSnippet } from './scope-anchor.js'
 
 const PANE = /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/
@@ -196,11 +197,12 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     if (typeof pane !== 'string' || !PANE.test(pane) || !thread) return Promise.resolve()
     const { line, task } = postLine(scope, thread, outcome)
     const bin = process.env.UNBLOCK_LANE_POST_BIN || join(homedir(), '.local', 'bin', 'lane-post')
-    if (!process.env.UNBLOCK_LANE_POST_BIN && !existsSync(bin)) return Promise.resolve()
+    if (!remoteScopeHost(scope.host) && !process.env.UNBLOCK_LANE_POST_BIN && !existsSync(bin)) return Promise.resolve()
     return new Promise((resolve) => {
       const scoped = isScope(scope)
       // A scope responder's answer is a digest for the lane; only a hand-off wakes it.
-      execFile(bin, ['post', '--to', pane, '--from', `${scoped ? 'scope' : 'explainer'}:${scope.slug}`, '--kind', task ? 'task' : 'info', '--topic', `${scoped ? 'scope' : 'explainer'}-${scope.slug}`, '--wake', scoped && !task ? 'never' : 'auto', '--text', line], { timeout: 20000, encoding: 'utf8' }, (error, _stdout, stderr) => {
+      const command = scopePostCommand(bin, ['post', '--to', pane, '--from', `${scoped ? 'scope' : 'explainer'}:${scope.slug}`, '--kind', task ? 'task' : 'info', '--topic', `${scoped ? 'scope' : 'explainer'}-${scope.slug}`, '--wake', scoped && !task ? 'never' : 'auto', '--text', line], scope.host)
+      execFile(command.bin, command.args, { timeout: 20000, encoding: 'utf8' }, (error, _stdout, stderr) => {
         if (error) log(`unblock: lane-post slug=${scope.slug} pane=${pane} exit=${typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error'} stderr=${String(stderr ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)} text=${line.slice(0, 80)}`)
         resolve()
       })
