@@ -127,7 +127,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
 
   function pump() {
     if (stopped) return
-    const cap = positiveInt(process.env.UNBLOCK_EXPLAINER_CONCURRENCY, 8)
+    const cap = positiveInt(process.env.UNBLOCK_EXPLAINER_CONCURRENCY, 24)
     for (let i = 0; i < queue.length && active < cap; i++) {
       const job = queue[i]
       const key = `${job.slug}:${job.threadId}`
@@ -203,7 +203,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       // A scope responder's answer is a digest for the lane; only a hand-off wakes it.
       const command = scopePostCommand(bin, ['post', '--to', pane, '--from', `${scoped ? 'scope' : 'explainer'}:${scope.slug}`, '--kind', task ? 'task' : 'info', '--topic', `${scoped ? 'scope' : 'explainer'}-${scope.slug}`, '--wake', scoped && !task ? 'never' : 'auto', '--text', line], scope.host)
       execFile(command.bin, command.args, { timeout: 20000, encoding: 'utf8' }, (error, _stdout, stderr) => {
-        if (error) log(`unblock: lane-post slug=${scope.slug} pane=${pane} exit=${typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error'} stderr=${String(stderr ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)} text=${line.slice(0, 80)}`)
+        if (error && !stopped) log(`unblock: lane-post slug=${scope.slug} pane=${pane} exit=${typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error'} stderr=${String(stderr ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)} text=${line.slice(0, 80)}`)
         resolve()
       })
     })
@@ -217,7 +217,8 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
     const heading = headingOf(scope, edit.id)
     if (!lines[0].startsWith('## ')) lines.unshift(`## ${heading} {#${edit.id}}`, '')
     else if (!/\{#[A-Za-z0-9_-]+\}\s*$/.test(lines[0])) lines[0] = `${lines[0].trimEnd()} {#${edit.id}}`
-    edit.markdown = lines.join('\n')
+    // The doc lint refuses curly quotes, so a section that already holds them would never take an edit.
+    edit.markdown = lines.join('\n').replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'")
     const dir = mkdtempSync(join(tmpdir(), 'unblock-edit-'))
     const file = join(dir, 'section.md')
     writeFileSync(file, `${edit.markdown}\n`)
@@ -370,7 +371,10 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
         item({ status: 'failed', doing: null, error: `Couldn't save the answer: ${error.message}`.slice(0, 200) })
         log(`unblock: explainer save failed: ${error.message}`)
       }
-      if (!stopped) await postOwner(scope, thread, outcome)
+      // The slot frees once the answer is saved; a slow lane-post never holds the queue.
+      if (!stopped) {
+        try { postOwner(scope, thread, outcome).catch((error) => log(`unblock: lane-post failed: ${error.message}`)) } catch (error) { log(`unblock: lane-post failed: ${error.message}`) }
+      }
     }
     if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
     return modelFor(scope).then(async (model) => {
@@ -378,6 +382,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       const exits = []
       // Answer, then apply the edit against the snapshot this answer read; a changed section means answer again once.
       const answer = async () => {
+        if (stopped) return
         const call = ask(job, scope, thread, model, item)
         exits.push(call.gone)
         const outcome = await call.result
@@ -387,7 +392,8 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       if (outcome?.conflict) {
         scope = readScope(job.slug)
         thread = scope?.threads?.find((value) => value.id === job.threadId)
-        if (!scope || !thread) outcome = { text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' }
+        if (stopped) outcome = undefined
+        else if (!scope || !thread) outcome = { text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' }
         else {
           outcome = await answer()
           if (outcome?.conflict) outcome = { ...outcome, text: `${outcome.text}\n\n(Didn't edit §${outcome.conflict}: it changed again while I answered, so the lane has it.)`, needs_owner: true, why: `§${outcome.conflict} changed while the responder answered` }
