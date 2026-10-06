@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { KIND_IDS } from './doc-kinds.js'
 import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } from './scope-anchor.js'
@@ -52,6 +53,7 @@ export function anchorInSection(section, quote) {
   const found = locateAnchor(text, { quote, prefix: '', suffix: '' }) ?? (plain !== quote ? locateAnchor(text, { quote: plain, prefix: '', suffix: '' }) : null)
   return found ? makeAnchor(section.id, text, found.start, found.end) : null
 }
+export function sectionHash(section) { return createHash('sha256').update(JSON.stringify([section.heading ?? '', section.body_md ?? ''])).digest('hex').slice(0, 16) }
 export function headingOf(scope, id) { return scope.doc.sections.find((s) => s.id === id)?.heading ?? id }
 export function nextThreadId(scope) { return `T${Math.max(0, ...scope.threads.map((t) => Number(t.id.slice(1)))) + 1}` }
 export function orderThreads(scope) {
