@@ -1,5 +1,6 @@
 import './scope.css'
 import { placeCards } from './card-layout'
+import { payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
 import '../vendor/page-chrome/v1.css'
 import './page-chrome.css'
 import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
@@ -1181,17 +1182,22 @@ function highlightEmbed(id: string) {
   } else embedCommand(frame, { action: 'highlight', anchor: anchor.embed })
 }
 const demoHeights = new Map<string, number>()
+// A demo sized to its own frame can answer each resize with a new size; the gate and one layout per frame stop the ping-pong.
+const pendingSizes = new Map<HTMLElement, number>()
+let sizeFrame = 0
+const demoSize = sizeGate<HTMLElement>((stage, h) => {
+  pendingSizes.set(stage, h)
+  if (!sizeFrame) sizeFrame = requestAnimationFrame(() => {
+    sizeFrame = 0
+    for (const [stage, h] of pendingSizes) { stage.style.height = `${h}px`; if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, h) }
+    pendingSizes.clear(); layout()
+  })
+})
 window.addEventListener('message', event => {
   const frame = [...doc.querySelectorAll<HTMLIFrameElement>('.demo-stage iframe')].find(frame => frame.contentWindow === event.source)
   if (frame) {
     const size = readDemoMessage(event.data)
-    if (size?.type === 'rails-demo/size') {
-      const stage = frame.closest<HTMLElement>('.demo-stage')!
-      stage.style.height = `${size.h}px`
-      if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, size.h)
-      layout()
-      return
-    }
+    if (size?.type === 'rails-demo/size') { demoSize.offer(frame.closest<HTMLElement>('.demo-stage')!, size.h); return }
   }
   if (event.data?.type !== 'rails-embed') return
   const connection = frame && embedConnections.get(frame)
@@ -1321,13 +1327,11 @@ $('#resolvedChip').onclick = () => { showResolved = !showResolved; storage.set('
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderCards() })
 document.addEventListener('keydown', e => { if (!zoom.hidden) return; if (e.key === 'Escape') { if (composing && (phone() || composing.general)) cancelComposer(); else closeSheet(); return }; if ((e.target as HTMLElement).closest('button,a,summary,select,textarea,input,[contenteditable]')) return; if (e.key === 'j') step(1); if (e.key === 'k') step(-1); if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && focused && !phone()) { e.preventDefault(); focusBox(focused) } })
 addEventListener('resize', () => { layout(); showSelection() }); document.fonts.ready.then(layout)
-let docWidth = doc.getBoundingClientRect().width, layoutFrame = 0
-new ResizeObserver(() => {
-  const width = doc.getBoundingClientRect().width
-  if (Math.abs(width - docWidth) < .5) return
-  docWidth = width
-  cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layout)
-}).observe(doc)
+// A scrollbar that comes and goes with the rail's height flips the doc width; the gate keeps that from relaying out every frame.
+let layoutFrame = 0
+const docWidth = sizeGate<HTMLElement>(() => { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(layout) })
+docWidth.offer(doc, doc.getBoundingClientRect().width)
+new ResizeObserver(() => docWidth.offer(doc, doc.getBoundingClientRect().width)).observe(doc)
 let scrollTimer = 0
 addEventListener('scroll', () => { selectionScrolling = true; showSelection(); clearTimeout(scrollTimer); scrollTimer = window.setTimeout(() => { selectionScrolling = false; if (!zoom.hidden) return; showSelection(); if (phone() && document.body.classList.contains('sheet-open')) return; const cardRect = !phone() && focusedCard()?.getBoundingClientRect(); if (focused && (threadOnScreen(focused) || cardRect && cardRect.bottom > 0 && cardRect.top < innerHeight)) return; const next = open().find(t => threadOnScreen(t.id)); if (next) focus(next.id, false, false) }, 150) })
 function context() { const sections = [...doc.querySelectorAll<HTMLElement>('section[data-section]')]; const section = sections.filter(n => n.getBoundingClientRect().top <= innerHeight * .3).at(-1) || sections[0]; return { thread: focused, section: section?.id || null, selection } }
@@ -1364,7 +1368,7 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: Refused[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = JSON.stringify({ scope: payload.scope, notes: payload.notes, failed: payload.failed }); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: Refused[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = payloadKey(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
@@ -1393,7 +1397,7 @@ async function start() {
     doc.innerHTML = KIND_IDS.map((id) => group(DOC_KINDS[id].label, scopes.filter((item) => kindOf(item) === id))).join('')
     chrome = mountPage($('#page'), { title: 'Scoping', initialize: false }); return
   }
-  if (boot.events === false) { await poll(); setInterval(() => void poll(), 2000); return }
+  if (boot.events === false) { await poll(); pollWhileVisible(() => void poll(), 2000); return }
   accept(await api(endpoint)); goodRead()
   const events = new EventSource(`${endpoint}/events`)
   events.addEventListener('item', e => { if (mergeItem(JSON.parse((e as MessageEvent).data))) patchLive(); goodRead() })
