@@ -1186,6 +1186,7 @@ const demoHeights = new Map<string, number>()
 const pendingSizes = new Map<HTMLElement, number>()
 let sizeFrame = 0
 const demoSize = sizeGate<HTMLElement>((stage, h) => {
+  if (!stage.isConnected) return // a redrawn section's old stage must not overwrite its replacement's height
   if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, h)
   pendingSizes.set(stage, h)
   if (!sizeFrame) sizeFrame = requestAnimationFrame(() => {
