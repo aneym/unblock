@@ -35,6 +35,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   const liveItems = createLiveItems({ emit })
   const delivering = new Map()
   const writes = new Map()
+  const noteWaits = new Map()
   let answerer
   const paneNames = new Map()
   let closed = false
@@ -97,8 +98,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     for (const client of listeners.get(slug)?.clients ?? []) client.write(message)
   }
 
+  function emitNote(note) {
+    emit(note.slug, 'note', note)
+    for (const settle of noteWaits.get(note.slug)?.get(note.id) ?? []) settle(note.delivery)
+  }
+
   function emitNotes(notes) {
-    for (const note of notes) emit(note.slug, 'note', note)
+    for (const note of notes) emitNote(note)
   }
 
   function watch(slug, req, res) {
@@ -333,6 +339,34 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (job.again && !closed) schedule(slug)
   }
 
+  // A comment write waits for its note's delivery to leave 'queued' before answering, so the relay's read-back
+  // tells the truth. Capped: a slower lane-post still finishes in the background and marks the note then.
+  function waitNotes(slug, ids) {
+    const pending = ids.filter((id) => (store.scopeNote(id)?.delivery ?? 'queued') === 'queued')
+    if (!pending.length) return Promise.resolve()
+    return new Promise((resolve) => {
+      let waits = noteWaits.get(slug)
+      if (!waits) noteWaits.set(slug, (waits = new Map()))
+      const settle = (delivery) => { if (delivery !== 'queued') done() }
+      const timer = setTimeout(() => settle('timeout'), delay(process.env.UNBLOCK_SCOPE_DELIVER_WAIT_MS, 1500))
+      timer.unref()
+      for (const id of pending) {
+        let set = waits.get(id)
+        if (!set) waits.set(id, (set = new Set()))
+        set.add(settle)
+      }
+      function done() {
+        clearTimeout(timer)
+        for (const id of pending) {
+          const set = waits.get(id)
+          if (set?.delete(settle) && !set.size) waits.delete(id)
+        }
+        if (!waits.size) noteWaits.delete(slug)
+        resolve()
+      }
+    })
+  }
+
   function page(res, slug) {
     let html
     try {
@@ -443,7 +477,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       const duplicate = body.client_id && store.scopeNoteByClientId(slug, body.client_id)
       if (duplicate) return sendJson(res, 200, { note: duplicate, duplicate: true })
       const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'lane_note', text: body.text, who: (relay || proxyIdentity(req)).login, via: 'voice', client_id: body.client_id })
-      emit(slug, 'note', note)
+      emitNote(note)
       schedule(slug)
       return sendJson(res, 200, { note })
     }
@@ -643,10 +677,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (typeof body[key] === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(body[key]) && Number.isFinite(Date.parse(body[key]))) stamps[key] = body[key]
     }
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
+    const wait = []
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }))
     writes.set(slug, pending)
     try {
       const result = await pending
+      if (wait.length) await waitNotes(slug, wait)
       if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision) })
       return sendJson(res, result.error === 'unslop' ? 422 : ((newThread || batchThread) && !result.duplicate) ? 201 : 200, result)
     } catch (error) {
@@ -684,7 +720,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: body.mode, text: comment, who: human.login, via: body.via })
-    emit(slug, 'note', note)
+    emitNote(note)
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
     emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
@@ -728,7 +764,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     if (human) {
       const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'publish', text: `Published v${n}${target ? ` to ${target}` : ''}`, who: human.login, via: body.via })
-      emit(slug, 'note', note)
+      emitNote(note)
     }
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
@@ -785,7 +821,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'approve', comment: quote, at_et })
     try {
       const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'approve', text: quote, who, via: 'pm-relay' })
-      emit(slug, 'note', note)
+      emitNote(note)
       const entry = listeners.get(slug)
       if (entry) entry.meta = metadata(slug)
       emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
@@ -835,7 +871,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     const text = `[${slug}] SHIP IT from Alex (${at_et}): build ${ship.build}, PR #${ship.pr} at ${ship.head.slice(0, 7)}. Record it with python3 scripts/queue_pr.py ship ${ship.pr} --by aneym --via button --head ${ship.head} --evidence "unblock scope ${slug} SHIP-${ship.pr}.md", then queue it.`
     const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'ship', text, who: human.login })
-    emit(slug, 'note', note)
+    emitNote(note)
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
     emit(slug, 'scope', { ...readScope(slug), notes: store.scopeNotes(slug) })
@@ -946,7 +982,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
+  function changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -1305,9 +1341,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       let note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
       if (noteData.event === 'new') note = store.mergeScopeNoteStamps(note.id, stamps) ?? note
       if (answerJob) {
-        const [marked] = store.markScopeNotes([note.id], 'answerer')
-        emit(slug, 'note', marked ?? note)
-      } else emit(slug, 'note', note)
+        const [marked] = store.markScopeNotes([note.id], 'answerer', new Date().toISOString())
+        emitNote(marked ?? note)
+      } else emitNote(note)
+      if (wait && (newThread || verb === 'reply')) wait.push(note.id)
     }
     const state = readScope(slug)
     const entry = listeners.get(slug)
@@ -1453,6 +1490,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       for (const client of entry.clients) client.end()
     }
     listeners.clear()
+    for (const waits of noteWaits.values()) for (const set of waits.values()) for (const settle of set) settle('closed')
+    noteWaits.clear()
     for (const job of delivering.values()) {
       clearTimeout(job.timer)
       job.wake?.()

@@ -324,6 +324,10 @@ export class Store {
     return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE slug = ? AND client_id = ?').get(slug, clientId))
   }
 
+  scopeNote(id) {
+    return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(id))
+  }
+
   scopeNotes(slug, { since = 0, author } = {}) {
     const sql = `SELECT * FROM scope_notes WHERE slug = ? AND id > ?${author ? ' AND author = ?' : ''} ORDER BY id ASC`
     return this.#db.prepare(sql).all(...(author ? [slug, since, author] : [slug, since])).map((row) => this.#scopeNote(row))

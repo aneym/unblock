@@ -13,6 +13,7 @@ import { anchorFromRange, sectionText, rangeFromAnchor } from './dom-anchor'
 import { esc, markdown, renderMermaid } from './markdown'
 import { buildSignature, buildStrip, layoutBuildGraphs, setBuildEstimates } from './build.ts'
 import { answerHtml } from './answer.ts'
+import { commentState } from './comment-state'
 import { approvalBannerHtml } from './approval-banner.js'
 import { prepareAudio } from '../lib/voice-audio'
 import type { ScopeVoiceUi, ScopeFeedLine } from '../../../src/scope-voice.js'
@@ -431,17 +432,8 @@ const commentStates = new Map<string, { state: CommentState; takenAt?: number; t
 function delivery(id: string): CommentState | '' {
   const note = [...notes.values()].filter(n => n.thread === id && n.from === 'alex' && !['lane_note', 'approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(n.event)).sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1)
   const thread = scope?.threads.find(t => t.id === id), section = scope?.doc.sections.find(s => s.id === thread?.anchor.section)
-  if (!note) {
-    const state = (thread as Thread & { delivery?: string })?.delivery
-    if (state === 'in_doc') return 'Answered'
-    if (state !== 'with_lane' && state !== 'queued') return thread && seenBy(thread) ? 'Seen 👀' : ''
-    const lastAlex = thread?.messages.filter(m => m.from === 'alex').at(-1)
-    const taken = lastAlex && (thread?.messages.some(m => m.from !== 'alex' && m.at > lastAlex.at) || (section as DocSection & { updated_at?: string })?.updated_at! > lastAlex.at) || thread?.status === 'resolved' && thread.resolution?.confirmed_at
-    return taken ? 'Answered' : thread && seenBy(thread) ? 'Seen 👀' : state === 'queued' ? 'Sending…' : 'Sent'
-  }
-  if (note.delivery === 'delivered' && (thread?.messages.some(m => m.from !== 'alex' && m.at > note.delivered_at) || (section as DocSection & { updated_at?: string })?.updated_at! > note.delivered_at || thread?.status === 'resolved' && thread.resolution?.confirmed_at)) return 'Answered'
-  if (thread && seenBy(thread) && !['retrying', 'failed', 'no_pane'].includes(note.delivery)) return 'Seen 👀'
-  return ({ held: 'Sending…', delivered: 'Sent', queued: 'Sending…', retrying: 'Retrying', failed: 'Not sent', no_pane: 'No lane pane' } as Record<string, CommentState>)[note.delivery] || ''
+  if (!thread) return ''
+  return commentState({ note, thread, section, seen: !!seenBy(thread) })
 }
 function updateCommentStates() {
   for (const t of scope?.threads || []) {
