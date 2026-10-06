@@ -94,6 +94,20 @@ test('a hidden tab does not poll; it polls once on showing and then on every tic
   assert.equal(polls, 2)
 })
 
+test('a tab hidden and shown between ticks still polls once on showing, every time', () => {
+  const listeners = {}, doc = { hidden: false, addEventListener: (name, fn) => { listeners[name] = fn } }
+  let polls = 0
+  pollWhileVisible(() => { polls++ }, 2000, { doc, setInterval: () => 1 })
+  for (let i = 1; i <= 3; i++) { doc.hidden = true; listeners.visibilitychange(); doc.hidden = false; listeners.visibilitychange(); assert.equal(polls, i) }
+})
+
+test('a wobble long after the last change is a real change and applies', () => {
+  const clock = fakeClock(), applied = [], stage = {}
+  const gate = sizeGate((key, h) => applied.push(h), clock)
+  gate.offer(stage, 520); clock.advance(5000); gate.offer(stage, 523); clock.advance(60_000); gate.offer(stage, 520)
+  assert.deepEqual(applied, [520, 523, 520])
+})
+
 test('the payload key does not read the scope body when revision, updated_at and a change marker are there', () => {
   const scope = { revision: 7, updated_at: '2026-10-06T18:00:00.000Z', version: 2 }
   Object.defineProperty(scope, 'threads', { enumerable: true, get() { throw new Error('read the threads') } })

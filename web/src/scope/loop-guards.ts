@@ -2,8 +2,8 @@
 export type Clock = { now(): number; setTimeout(fn: () => void, ms: number): unknown; clearTimeout(timer: unknown): void }
 const browserClock: Clock = { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: timer => clearTimeout(timer as number) }
 
-type SizeState = { current?: number; previous?: number; lastApply: number; recent: number[]; stamps: number[]; pending?: number; timer?: unknown }
-const WOBBLE = 4, BOUNCE_MS = 250, WINDOW_MS = 1000, PER_WINDOW = 10
+type SizeState = { current?: number; previous?: number; lastApply: number; recent: { h: number; at: number }[]; stamps: number[]; pending?: number; timer?: unknown }
+const WOBBLE = 4, WOBBLE_MS = 2000, BOUNCE_MS = 250, WINDOW_MS = 1000, PER_WINDOW = 10
 
 // A size reported back to the page can depend on the size the page just set (a demo sized to its own frame, a
 // scrollbar that comes and goes). offer() applies real changes at once; it drops a few-px wobble back to a recent
@@ -13,8 +13,8 @@ export function sizeGate<K extends object>(apply: (key: K, h: number) => void, c
   const states = new WeakMap<K, SizeState>()
   function decide(key: K, st: SizeState, h: number) {
     if (st.current !== undefined && Math.abs(h - st.current) < .5) { st.pending = undefined; return }
-    if (st.current !== undefined && Math.abs(h - st.current) <= WOBBLE && st.recent.some(r => r !== st.current && Math.abs(r - h) <= 1)) { st.pending = undefined; return }
     const now = clock.now()
+    if (st.current !== undefined && Math.abs(h - st.current) <= WOBBLE && st.recent.some(r => r.h !== st.current && now - r.at < WOBBLE_MS && Math.abs(r.h - h) <= 1)) { st.pending = undefined; return }
     st.stamps = st.stamps.filter(s => now - s < WINDOW_MS)
     const bounceWait = st.previous !== undefined && Math.abs(h - st.previous) <= 1 ? BOUNCE_MS - (now - st.lastApply) : 0
     const rateWait = st.stamps.length >= PER_WINDOW ? st.stamps[0] + WINDOW_MS - now : 0
@@ -26,7 +26,7 @@ export function sizeGate<K extends object>(apply: (key: K, h: number) => void, c
     }
     st.pending = undefined
     st.previous = st.current; st.current = h; st.lastApply = now
-    st.recent = [...st.recent, h].slice(-4); st.stamps.push(now)
+    st.recent = [...st.recent, { h, at: now }].slice(-4); st.stamps.push(now)
     apply(key, h)
   }
   return {
@@ -38,11 +38,11 @@ export function sizeGate<K extends object>(apply: (key: K, h: number) => void, c
   }
 }
 
-// The poll path (boot.events === false): a hidden tab does not poll; it polls once when it shows again.
+// The poll path (boot.events === false): a hidden tab does not poll; it polls once each time it shows again.
 export function pollWhileVisible(poll: () => void, every: number, env: { doc: Pick<Document, 'hidden' | 'addEventListener'>; setInterval(fn: () => void, ms: number): unknown } = { doc: document, setInterval: (fn, ms) => setInterval(fn, ms) }) {
-  let missed = false
-  env.setInterval(() => { if (env.doc.hidden) { missed = true; return }; poll() }, every)
-  env.doc.addEventListener('visibilitychange', () => { if (!env.doc.hidden && missed) { missed = false; poll() } })
+  let hidden = env.doc.hidden
+  env.setInterval(() => { if (!env.doc.hidden) poll() }, every)
+  env.doc.addEventListener('visibilitychange', () => { const was = hidden; hidden = env.doc.hidden; if (was && !hidden) poll() })
 }
 
 // Change key for a scope payload. Every scope.json rewrite moves the daemon's mtime_ms and every relay push moves

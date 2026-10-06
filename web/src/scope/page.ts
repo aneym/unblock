@@ -1186,10 +1186,11 @@ const demoHeights = new Map<string, number>()
 const pendingSizes = new Map<HTMLElement, number>()
 let sizeFrame = 0
 const demoSize = sizeGate<HTMLElement>((stage, h) => {
+  if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, h)
   pendingSizes.set(stage, h)
   if (!sizeFrame) sizeFrame = requestAnimationFrame(() => {
     sizeFrame = 0
-    for (const [stage, h] of pendingSizes) { stage.style.height = `${h}px`; if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, h) }
+    for (const [stage, h] of pendingSizes) stage.style.height = `${h}px`
     pendingSizes.clear(); layout()
   })
 })
