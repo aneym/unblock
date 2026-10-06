@@ -1,6 +1,7 @@
 import './scope.css'
 import { placeCards } from './card-layout'
 import { payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
+import { startTelemetry } from './telemetry'
 import '../vendor/page-chrome/v1.css'
 import './page-chrome.css'
 import { mountPage, commentsHeader, type PageAction } from '../vendor/page-chrome/v1.js'
@@ -217,6 +218,7 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   const result = await res.json(); if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`); return result
 }
 const endpoint = `${apiBase}/${encodeURIComponent(slug)}`
+const telemetry = slug ? startTelemetry({ url: `${endpoint}/telemetry`, mode: boot.events === false ? 'poll' : 'events' }) : null
 type QueuedApproval = { clientId: string; comment: string; mode: string; failed: boolean; timer?: number }
 let queuedApproval: QueuedApproval | null = null
 function isApproved() { return scope?.approval?.mode === 'approve_to_try' || scope?.approval?.mode === 'approve' || scope?.approval?.mode === 'approve_with_changes' }
@@ -1362,7 +1364,7 @@ function onFeed(line: ScopeFeedLine) { feedRows.push({ ...line, at: new Date() }
 $('#talk').hidden = boot.voice === false
 $('#talk').onclick = async () => { if (boot.voice === false) return; try { const audio = prepareAudio(); const { mountVoice } = await import('./voice-mount'); mountVoice(audio, { getScope: async () => ({ slug, scope: scope! }), getContext: context, postThread, postReply, postResolve, postReject, postPark, fetchContext: q => api(`${endpoint}/context?q=${encodeURIComponent(q)}`), postLaneNote: body => api(`${endpoint}/lane-note`, { ...body, client_id: clientId() }), postApprove: async body => { const result = await api<{ queued?: boolean; client_id?: string }>(`${endpoint}/approve`, body); if (result.queued === true) trackQueuedApproval(result.client_id || body.client_id, body.mode, body.comment ?? ''); try { accept(await api(endpoint)) } catch {}; return result }, onFeed }, voiceUi, active => { if (active) { feedRows.length = 0; feedExpanded = false; feedClosed = false; renderFeed() }; $('#talk').classList.toggle('active', active) }) } catch (error) { $('#talk').title = error instanceof Error ? error.message : 'Voice unavailable' } }
 let lastPayload = ''
-function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: Refused[]; error?: string }) { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return }; const fingerprint = payloadKey(payload); if (fingerprint === lastPayload) return; lastPayload = fingerprint
+function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; estimates?: unknown[]; failed?: Refused[]; error?: string }): boolean { const changed = (payload.items || []).map(mergeItem).some(Boolean); if (changed) patchLive(); if (payload.estimates && setBuildEstimates(payload.estimates)) lastPayload = ''; if (!payload.scope) { lastPayload = ''; doc.textContent = payload.error || 'The lane has not published a doc yet.'; return false }; const fingerprint = payloadKey(payload); if (fingerprint === lastPayload) return false; lastPayload = fingerprint
   const firstPayload = !scope
   scope = payload.scope
   settleQueuedApproval()
@@ -1377,11 +1379,19 @@ function accept(payload: { scope: ScopeV2; notes?: any[]; items?: LiveItem[]; es
     const { client_id: _, ...body } = f.body
     sending.set(f.client_id, { route, body, clientId: f.client_id, id, anchor: body.anchor as Anchor | undefined, text: String(body.text ?? body.alex_words ?? body.decision ?? ''), at: Date.parse(f.at) || Date.now(), failed: { status: f.status, error: f.error } })
   }
-  for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash() }
+  for (const note of payload.notes || []) notes.set(note.id, note); render(); if (firstPayload) focusHash(); telemetry?.docRendered(); return true }
 let lastOk = 0, stale = false
 function goodRead() { lastOk = Date.now(); if (stale) { stale = false; chrome?.update({ updatedAt: undefined }) } }
 function failedRead() { if (lastOk && !stale) { stale = true; chrome?.update({ updatedAt: lastOk, staleAfterMs: 60_000, onRefresh: () => void poll() }) } }
-async function poll() { try { accept(await api(endpoint)); goodRead() } catch { failedRead() } }
+async function poll() {
+  try {
+    const t0 = performance.now(), res = await fetch(endpoint, { method: 'GET', headers: {}, cache: 'no-store' }), text = await res.text(), t1 = performance.now()
+    const payload = JSON.parse(text); if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`)
+    const t2 = performance.now(), changed = accept(payload), t3 = performance.now()
+    telemetry?.poll({ at: t0, fetch: t1 - t0, parse: t2 - t1, render: t3 - t2, kb: text.length / 1024, changed })
+    goodRead()
+  } catch { failedRead() }
+}
 async function start() {
   if (!slug) {
     const { scopes } = await api<{ scopes: { slug: string; title?: string; kind?: string }[] }>(apiBase)

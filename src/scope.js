@@ -13,6 +13,7 @@ import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './do
 import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, sectionHash, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 import { createLiveItems, MAX_TEXT } from './live-items.js'
+import { handleScopeTelemetry } from './scope-telemetry.js'
 
 // Writing docs retain the upstream draft kind's comment and approval policy.
 const kindOf = (scope) => scope.kind === 'writing' ? 'writing' : registeredKindOf(scope)
@@ -439,6 +440,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (!SLUG.test(slug)) return sendJson(res, 404, { error: 'no such scope' })
     const state = readScope(slug)
     if (!state) return sendJson(res, 404, { error: 'no such scope' })
+    if (req.method === 'POST' && parts.length === 2 && action === 'telemetry') return handleScopeTelemetry({ req, res, slug, proxyIdentity, sendJson })
     if (req.method === 'GET' && parts.length === 2 && action === 'context') {
       requireHumanPath(req)
       let brief = ''
