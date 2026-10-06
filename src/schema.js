@@ -619,6 +619,7 @@ export function normalizeOrigin(raw = {}) {
     agent: optionalStr(raw.agent, 'origin.agent', { max: 40 }) ?? 'unknown',
     session_id: optionalStr(raw.session_id, 'origin.session_id', { max: 200 }),
     pane_id: optionalStr(raw.pane_id, 'origin.pane_id', { max: 200 }),
+    lane_name: optionalStr(raw.lane_name, 'origin.lane_name', { max: 200 }),
     tab_id: optionalStr(raw.tab_id, 'origin.tab_id', { max: 200 }),
     workspace_id: optionalStr(raw.workspace_id, 'origin.workspace_id', { max: 200 }),
     workspace_name: optionalStr(raw.workspace_name, 'origin.workspace_name', { max: 200 }),

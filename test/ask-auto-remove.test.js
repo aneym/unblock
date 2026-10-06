@@ -32,7 +32,22 @@ process.env.UNBLOCK_LANE_POST_BIN = lanePost
 // herdr stub: typing into a pane is the wrong channel for all of this.
 const herdrLog = join(stateDir, 'herdr-calls')
 const herdr = join(stateDir, 'herdr-stub')
-writeFileSync(herdr, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${herdrLog}'\nprintf '{"result":{"pane":{"agent_status":"idle"}}}'\n`)
+const panePids = join(stateDir, 'pane-pids.json')
+const members = new Map()
+function paneMember(pane, pid) {
+  members.set(pane, [...new Set([...(members.get(pane) || []), pid])])
+  writeFileSync(panePids, JSON.stringify(Object.fromEntries(members)))
+}
+writeFileSync(herdr, `#!${process.execPath}
+const fs = require('node:fs')
+fs.appendFileSync(${JSON.stringify(herdrLog)}, process.argv.slice(2).join(' ') + '\\n')
+if (process.argv[3] === 'process-info') {
+  const pane = process.argv[5]
+  const pids = JSON.parse(fs.readFileSync(${JSON.stringify(panePids)}, 'utf8'))[pane] || []
+  console.log(JSON.stringify({ result: { process_info: { pane_id: pane, foreground_processes: pids.map(pid => ({ pid, name: 'node' })) } } }))
+} else console.log(JSON.stringify({ result: { pane: { agent_status: 'idle' } } }))
+`)
+writeFileSync(panePids, '{}')
 chmodSync(herdr, 0o700)
 process.env.HERDR_BIN_PATH = herdr
 // gh stub: prints {"state": <contents of gh-state>} and logs its argv.
@@ -94,10 +109,10 @@ function cliEnv(extra = {}) {
   for (const name of ['UNBLOCK_ORIGIN_PID', 'UNBLOCK_PORT', 'UNBLOCK_AUTH']) if (!(name in extra)) delete env[name]
   return env
 }
-function cliList(...args) {
+function cliCommand(args, input, extra = {}) {
   // Async: the daemon runs in this process, so a blocking spawnSync would starve it (owner fix, r42 impl report).
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, 'list', ...args, '--json'], { env: cliEnv() })
+    const child = spawn(process.execPath, [cli, ...args, '--json'], { env: cliEnv(extra), stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = '', stderr = ''
     const timer = setTimeout(() => child.kill(), 20000)
     child.stdout.setEncoding('utf8').on('data', (c) => { stdout += c })
@@ -105,11 +120,13 @@ function cliList(...args) {
     child.on('error', reject)
     child.on('close', (status) => {
       clearTimeout(timer)
-      assert.equal(status, 0, `unblock list ${args.join(' ')} failed: ${stderr}`)
-      resolve(JSON.parse(stdout).asks)
+      assert.equal(status, 0, `unblock ${args.join(' ')} failed: ${stderr}`)
+      resolve(JSON.parse(stdout))
     })
+    child.stdin.end(input)
   })
 }
+async function cliList(...args) { return (await cliCommand(['list', ...args])).asks }
 // A process that stays alive until the test tells it to exit.
 function sleeper() {
   const child = spawn(process.execPath, ['-e', 'process.stdin.resume(); process.stdin.on("end", () => process.exit(0))'], { stdio: ['pipe', 'ignore', 'ignore'] })
@@ -159,6 +176,7 @@ test('done scenario: an ask filed from a short-lived process closes on the next 
   const filer = spawn(process.execPath, [filerScript, process.execPath, cli, askFile], {
     stdio: ['pipe', 'pipe', 'inherit'], env: cliEnv({ HERDR_PANE_ID: 'w5H:p6', UNBLOCK_AGENT: 'codex' }),
   })
+  paneMember('w5H:p6', filer.pid)
   const exited = new Promise((resolve) => filer.once('exit', resolve))
   try {
     let out = ''
@@ -200,6 +218,116 @@ test('done scenario: an ask filed from a short-lived process closes on the next 
   }
 })
 
+// OS ancestry is the simulated edge; filing, persistence and process exit are real.
+function processProbe(mode) {
+  const previousPath = process.env.PATH
+  const tools = mkdtempSync(join(stateDir, 'process-tools-'))
+  const modeFile = join(tools, 'mode')
+  const set = (value) => writeFileSync(modeFile, value)
+  set(mode)
+  writeFileSync(join(tools, 'ps'), `#!/bin/sh
+if [ "$2" = 'ppid=,comm=' ]; then
+  mode=$(cat '${modeFile}')
+  if [ "$mode" = ssh ]; then
+    if [ "$4" = '99999999' ]; then printf '1 sshd: user@pts/0\\n'; else printf '99999999 codex\\n'; fi
+  elif [ "$mode" = unknown ]; then printf '1 worker\\n'
+  else printf '1 node\\n'; fi
+else
+  for pid in $(printf '%s' "$4" | tr ',' ' '); do
+    printf '%s Mon Oct 5 12:00:00 2026\\n' "$pid"
+  done
+fi
+`)
+  chmodSync(join(tools, 'ps'), 0o700)
+  process.env.PATH = `${tools}:${previousPath}`
+  return { set, restore: () => { process.env.PATH = previousPath } }
+}
+
+test('SSH-origin asks outlive their transport, including explicit PID bodies', async () => {
+  const probe = processProbe('ssh')
+  const { daemon, base } = await daemonWith({})
+  const askFile = join(stateDir, 'ssh-ask.json')
+  writeFileSync(askFile, JSON.stringify(decision('Choose the remote report title')))
+  const script = `
+    const { spawnSync } = require('node:child_process')
+    const [node, cli, askFile] = process.argv.slice(1)
+    const run = spawnSync(node, [cli, 'file', '--json', askFile], { encoding: 'utf8' })
+    process.stdout.write(JSON.stringify({ status: run.status, stdout: run.stdout, stderr: run.stderr }) + '\\n')
+    process.stdin.resume()
+    process.stdin.on('end', () => process.exit(0))
+  `
+  const transport = spawn(process.execPath, ['-e', script, process.execPath, cli, askFile], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: cliEnv({ HERDR_PANE_ID: 'w5H:pSSH', LANE_NAME: 'remote-report', UNBLOCK_AGENT: 'codex' }),
+  })
+  const exited = new Promise((resolve) => transport.once('exit', resolve))
+  try {
+    let output = ''
+    for await (const chunk of transport.stdout) { output += chunk; if (output.includes('\n')) break }
+    const run = JSON.parse(output.split('\n')[0])
+    assert.equal(run.status, 0, run.stderr)
+    const automatic = JSON.parse(run.stdout)
+    const explicit = await file(base, decision('Choose the remote review title'), {
+      agent: 'codex', pane_id: 'w5H:pSSH', pid: transport.pid,
+    })
+    const init = await file(base, decision('Choose the fallback review title'), { agent: 'codex', pane_id: 'w5H:pSSH', pid: 1 })
+    transport.stdin.end()
+    await exited
+    await daemon.sweep()
+    for (const ask of [explicit, automatic, init]) {
+      const current = await get(base, ask.ticket)
+      assert.equal(current.status, 'open', 'SSH exit must not silently cancel the ask')
+      assert.equal(current.origin.pid, undefined, 'a transport is not a pane lifecycle owner')
+      assert.equal(current.origin.pane_id, 'w5H:pSSH')
+      assert.ok(tickets(await webQueue(base)).includes(ask.ticket))
+    }
+    assert.equal(automatic.origin.lane_name, 'remote-report')
+  } finally {
+    if (transport.exitCode === null) { transport.stdin.end(); await exited }
+    await daemon.close()
+    probe.restore()
+  }
+})
+
+test('only verified pane agents own lifecycle; overrides work and SSH keep relinquishes PID ownership', async () => {
+  const probe = processProbe('local')
+  const { daemon, base } = await daemonWith({})
+  const seat = sleeper()
+  paneMember('w5H:pOwner', seat.pid)
+  try {
+    const ask = await cliCommand(['file', '-'], JSON.stringify(decision('Choose the local report title')), {
+      HERDR_PANE_ID: 'w5H:pOwner', UNBLOCK_AGENT: 'codex', UNBLOCK_ORIGIN_PID: String(seat.pid),
+    })
+    assert.equal(ask.origin.pid, seat.pid, 'the explicit override selects the verified agent, not the CLI parent')
+    assert.equal(ask.origin.pid_verified, true)
+    assert.ok(ask.origin.pid_start)
+    const noPid = await cliCommand(['file', '-', '--origin', 'remote-review'], JSON.stringify({
+      ask: decision('Choose the lane report title'), origin: { pane_id: 'w5H:pOwner', pid: seat.pid },
+    }), { UNBLOCK_ORIGIN_PID: '1' })
+    assert.equal(noPid.origin.pid, undefined, 'PID 1 disables tracking even for an explicit body')
+    assert.equal(noPid.origin.lane_name, 'remote-review')
+    const notMember = await file(base, decision('Choose the other report title'), {
+      pane_id: 'w5H:pOther', agent: 'codex', pid: seat.pid, pid_verified: true,
+    })
+    assert.equal(notMember.origin.pid, undefined, 'an agent PID is not proof it owns another pane')
+    probe.set('unknown')
+    const unknown = await file(base, decision('Choose the unknown report title'), {
+      pane_id: 'w5H:pOwner', agent: 'codex', pid: seat.pid,
+    })
+    assert.equal(unknown.origin.pid, undefined, 'unrecognized processes never own cleanup')
+    probe.set('ssh')
+    const kept = await cliCommand(['keep', ask.ticket])
+    assert.equal(kept.ask.origin.pid, undefined, 'a remote claimant relinquishes the prior PID lifecycle')
+    await seat.stop()
+    await daemon.sweep()
+    for (const filed of [ask, noPid, notMember, unknown]) assert.equal((await get(base, filed.ticket)).status, 'open')
+  } finally {
+    await seat.stop()
+    await daemon.close()
+    probe.restore()
+  }
+})
+
 test('a pid that was not alive at file time is never recorded, so it can never close the ask', async () => {
   const { daemon, base } = await daemonWith({})
   try {
@@ -218,9 +346,13 @@ test('a live origin stays; another process can claim an ask with keep', async ()
   const { daemon, base } = await daemonWith({})
   const seat = sleeper()
   try {
+    paneMember('w5H:pT3', process.pid)
+    paneMember('w5H:pT3', seat.pid)
     const live = await file(base, decision('Order the nav tabs'), { agent: 'claude', pane_id: 'w5H:pT3', pid: process.pid })
     assert.equal(live.origin.pid, process.pid)
-    const claimed = await file(base, decision('Name the review lane'), { agent: 'codex', pane_id: 'w5H:pT3', pid: seat.pid })
+    const claimed = await cliCommand(['file', '-'], JSON.stringify(decision('Name the review lane')), {
+      UNBLOCK_AGENT: 'codex', HERDR_PANE_ID: 'w5H:pT3', UNBLOCK_ORIGIN_PID: String(seat.pid),
+    })
     assert.equal(claimed.origin.pid, seat.pid)
     const kept = await json(base, `/api/asks/${claimed.ticket}/keep`, { method: 'POST', body: JSON.stringify({ pid: process.pid }) })
     assert.equal(kept.response.status, 200, JSON.stringify(kept.body))
@@ -346,6 +478,7 @@ test('an answer to an ask whose origin is gone goes to the owner pane by lane-po
   const { daemon, base } = await daemonWith({})
   const seat = sleeper()
   try {
+    paneMember('w5H:p6', seat.pid)
     const ask = await file(base, decision('Choose the placement rule'), { agent: 'codex', pane_id: 'w5H:p6', pid: seat.pid })
     assert.equal(ask.origin.pid, seat.pid)
     await seat.stop()

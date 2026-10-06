@@ -9,7 +9,7 @@ import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
 import { latencySince, scopeLatency } from '../src/scope-latency.js'
 import { IMAGE_LINE } from '../src/scope-assets.js'
-import { filerPid } from '../src/origin-process.js'
+import { filerPid, laneIdentity } from '../src/origin-process.js'
 import { lintDoc } from '../src/scope-lint.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
@@ -317,7 +317,7 @@ async function pay(args) {
 async function keep(args) {
   const { rest } = flags(args, {})
   if (rest.length !== 1) fail('usage: unblock keep <ticket>')
-  const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/keep`, { pid: filerPid() })
+  const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/keep`, { pid: filerPid() ?? null })
   output({ ask: safe(result.ask) }, `kept ${rest[0]}`)
 }
 async function close(args) {
@@ -339,23 +339,28 @@ async function readBody(path) {
   try { return JSON.parse(text) } catch { fail('expected JSON input') }
 }
 async function file(args) {
-  const { rest } = flags(args, {})
-  if (rest.length > 1) fail('usage: unblock file [path|-]')
+  const { rest, opts } = flags(args, { '--origin': true })
+  if (rest.length > 1) fail('usage: unblock file [path|-] [--origin lane]')
   // Same JSON the MCP tool takes. A body already shaped {ask, origin} passes through.
   const body = await readBody(rest[0])
-  const ask = await request('/api/asks', body && typeof body === 'object' && 'ask' in body ? body : {
+  const detectedPid = filerPid()
+  const payload = body && typeof body === 'object' && 'ask' in body ? body : {
     ask: body,
     origin: {
       agent: process.env.UNBLOCK_AGENT || 'cli',
-      pid: filerPid(),
+      pid: detectedPid,
       session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
-      pane_id: process.env.HERDR_PANE_ID,
+      ...laneIdentity(),
       tab_id: process.env.HERDR_TAB_ID,
       workspace_id: process.env.HERDR_WORKSPACE_ID,
       cwd: process.cwd(),
       kind: process.env.UNBLOCK_ORIGIN_KIND,
     },
-  })
+  }
+  payload.origin = { ...laneIdentity(), ...payload.origin }
+  if (detectedPid === undefined) delete payload.origin.pid
+  if (opts['--origin']) payload.origin = { ...payload.origin, lane_name: opts['--origin'] }
+  const ask = await request('/api/asks', payload)
   const link = stable(await request('/api/health'), ask.ticket)
   output({ ...safe(ask), link }, [ask.ticket, link].filter(Boolean).join('\n'))
 }
@@ -1171,7 +1176,7 @@ unblock receipt <ticket> [--before a.png] [--after b.png] [--url U]
 unblock pay <ticket> [--payment-method <id>]
 unblock keep <ticket>                            keep an ask in today’s queue
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
-unblock file [path|-]                            file an ask from JSON (same shape as the MCP tool)
+unblock file [path|-] [--origin lane]            file an ask from JSON (same shape as the MCP tool)
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
 unblock link <ticket> [--share]                  the stable queue link; --share mints a 15-minute link
 unblock peek <ticket>                            what they have typed so far

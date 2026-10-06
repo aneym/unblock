@@ -1,5 +1,5 @@
 import { createHttpHandler } from './mcp.js'
-import { processStarts, sameProcess } from './origin-process.js'
+import { processStarts, sameProcess, verifiedOrigin, hasVerifiedPid } from './origin-process.js'
 import http from 'node:http'
 import { execFile } from 'node:child_process'
 import { guardedAnswerNotice, recheckNotice, originFinishedNotice } from './pane-notice.js'
@@ -547,8 +547,8 @@ function scrubFieldBounce(raw) {
   return out
 }
 
-  async function routeFinished(ask, starts = processStarts([ask.origin?.pid])) {
-    if (starts === null || ask.status !== 'answered' || !ask.origin?.pid || ask.routed_at || sameProcess(ask.origin.pid, ask.origin.pid_start, starts)) return ask
+  async function routeFinished(ask, starts = processStarts(hasVerifiedPid(ask.origin) ? [ask.origin.pid] : [])) {
+    if (starts === null || ask.status !== 'answered' || !hasVerifiedPid(ask.origin) || ask.routed_at || sameProcess(ask.origin.pid, ask.origin.pid_start, starts)) return ask
     const attempts = routeFailures.get(ask.ticket) || 0
     if (attempts >= 3) return ask
     if (ask.origin.pane_id && await originFinishedNotice(ask) === 'sent') {
@@ -838,12 +838,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         path.includes('-wt/') || path.includes('/factory-worktrees/') || path.includes('/.claude/worktrees/'))) {
         return sendJson(res, 403, { error: 'worktree origins cannot file asks while refuseWorktreeOrigins is enabled', code: 'WORKTREE_ORIGIN' })
       }
-      if (origin.pid) {
-        const start = processStarts([origin.pid])?.get(origin.pid)
-        if (start) origin.pid_start = start
-        else delete origin.pid
-      }
-      const ask = store.create(validateAsk(body.ask), origin)
+      const ask = store.create(validateAsk(body.ask), await verifiedOrigin(origin))
       emitQueue()
       return sendJson(res, 201, ask)
     }
@@ -862,14 +857,11 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     let ticket = routeTicket(pathname, '/keep')
     if (ticket && req.method === 'POST') {
       const body = await readJson(req)
-      const ask = await withTicket(ticket, () => {
+      const ask = await withTicket(ticket, async () => {
         const existing = store.get(ticket)
         if (!existing) return null
         let origin
-        if (Number.isSafeInteger(body.pid) && body.pid > 0) {
-          const start = processStarts([body.pid])?.get(body.pid)
-          if (start) origin = { ...existing.origin, pid: body.pid, pid_start: start }
-        }
+        if (Object.hasOwn(body, 'pid')) origin = await verifiedOrigin({ ...existing.origin, pid: body.pid })
         return store.keep(ticket, origin)
       })
       if (!ask) return sendJson(res, 404, { error: 'not found' })
@@ -1308,14 +1300,14 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   async function sweep() {
     let changed = false
     const lifecycle = store.list({ profile: '*', status: ['open', 'answered'] })
-    const starts = processStarts(lifecycle.map((ask) => ask.origin?.pid))
+    const starts = processStarts(lifecycle.filter((ask) => hasVerifiedPid(ask.origin)).map((ask) => ask.origin.pid))
     for (const candidate of lifecycle) {
       try {
         await withTicket(candidate.ticket, async () => {
           const ask = store.get(candidate.ticket)
           if (ask?.status === 'answered') { await routeFinished(ask, starts); return }
           if (ask?.status !== 'open') return
-          const reason = starts !== null && ask.origin?.pid && !sameProcess(ask.origin.pid, ask.origin.pid_start, starts) ? 'origin_finished' : await deadReference(ask)
+          const reason = starts !== null && hasVerifiedPid(ask.origin) && !sameProcess(ask.origin.pid, ask.origin.pid_start, starts) ? 'origin_finished' : await deadReference(ask)
           if (reason) {
             const closed = store.autoClose(ask.ticket, reason)
             if (closed) { changed = true; emitAsk(closed, closed.status) }

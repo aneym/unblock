@@ -1,3 +1,4 @@
+import { laneIdentity } from '../src/origin-process.js'
 import { spawn } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
@@ -44,7 +45,7 @@ export async function origin() {
   const extra = await paneOrigin(pane_id)
   return {
     agent: process.env.UNBLOCK_AGENT || 'claude',
-    pane_id,
+    ...laneIdentity(),
     tab_id: process.env.HERDR_TAB_ID,
     workspace_id: process.env.HERDR_WORKSPACE_ID,
     session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,

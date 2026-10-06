@@ -49,7 +49,7 @@ test('CLI files, lists, answers and closes asks through a real daemon', async ()
     assert.equal(blocker.status, 0, blocker.stderr)
     const blockerTicket = blocker.stdout.match(/ub_[a-z0-9]+/)[0]
 
-    const decision = await run(['file'], JSON.stringify({
+    const decision = await run(['file', '--origin', 'launch-review', '--json'], JSON.stringify({
       ask: { ...common, purpose: 'decision', only_you: 'judgment', title: 'Choose rollout', fields: [
         { name: 'plan', type: 'choice', label: 'Rollout plan', required: true,
           choices: [{ value: 'first', label: 'First version' }, { value: 'later', label: 'Wait' }],
@@ -58,6 +58,8 @@ test('CLI files, lists, answers and closes asks through a real daemon', async ()
       origin: { agent: 'claude', workspace_name: 'launch', session_id: 'cli-decision' },
     }))
     assert.equal(decision.status, 0, decision.stderr)
+    assert.equal(JSON.parse(decision.stdout).origin.lane_name, 'launch-review')
+    assert.equal(JSON.parse(decision.stdout).origin.workspace_name, 'launch')
     const decisionTicket = decision.stdout.match(/ub_[a-z0-9]+/)[0]
     const listed = await run(['list', '--json'])
     assert.equal(listed.status, 0, listed.stderr)

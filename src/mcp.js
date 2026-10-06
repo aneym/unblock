@@ -1,4 +1,4 @@
-import { filerPid } from './origin-process.js'
+import { filerPid, laneIdentity } from './origin-process.js'
 import http from 'node:http'
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -120,7 +120,7 @@ function origin(identity = process.env) {
   return {
     agent: process.env.UNBLOCK_AGENT || 'claude',
     pid: identity === process.env && !process.argv.includes('--http') ? filerPid() : undefined,
-    pane_id: identity.HERDR_PANE_ID,
+    ...laneIdentity(identity),
     tab_id: identity.HERDR_TAB_ID,
     workspace_id: identity.HERDR_WORKSPACE_ID,
     session_id: identity.HERDR_SESSION_ID || identity.CLAUDE_SESSION_ID,
@@ -422,7 +422,7 @@ export class McpConnection {
     }
 
     if (name === 'unblock_keep') {
-      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/keep`, { method: 'POST', body: JSON.stringify({ pid: origin(identity).pid }) })
+      const body = await daemonFetch(`/asks/${encodeURIComponent(args.ticket)}/keep`, { method: 'POST', body: JSON.stringify({ pid: origin(identity).pid ?? null }) })
       return textResult(`Kept ${body.ask.ticket}.`, { ask: body.ask })
     }
 
@@ -712,6 +712,7 @@ export function createHttpHandler() {
     // Each request owns its reply callback and identity, including concurrent calls.
     const identity = {
       HERDR_PANE_ID: req.headers['x-herdr-pane'],
+      UNBLOCK_LANE_NAME: req.headers['x-unblock-origin'],
       CLAUDE_SESSION_ID: req.headers['x-claude-session'],
       HERDR_SESSION_ID: req.headers['x-herdr-session'],
       UNBLOCK_PROJECT: req.headers['x-unblock-project'],
