@@ -38,6 +38,28 @@ export function sizeGate<K extends object>(apply: (key: K, h: number) => void, c
   }
 }
 
+type DemoStage = { isConnected: boolean; dataset: { embedSrc?: string }; style: { height: string } }
+
+// The page's demo-size wiring: an accepted height is remembered by embed src at once, so a section redrawn before the
+// frame starts at it; one animation frame writes every pending stage height and runs one layout. A stage that left the
+// document (its section was redrawn) never touches the remembered heights, even from a deferred report.
+export function demoSizes<S extends DemoStage>(heights: Map<string, number>, frame: (fn: () => void) => unknown, layout: () => void, clock: Clock = browserClock) {
+  const pending = new Map<S, number>()
+  let scheduled = false
+  return sizeGate<S>((stage, h) => {
+    if (!stage.isConnected) return
+    if (stage.dataset.embedSrc) heights.set(stage.dataset.embedSrc, h)
+    pending.set(stage, h)
+    if (scheduled) return
+    scheduled = true
+    frame(() => {
+      scheduled = false
+      for (const [stage, h] of pending) stage.style.height = `${h}px`
+      pending.clear(); layout()
+    })
+  }, clock)
+}
+
 // The poll path (boot.events === false): a hidden tab does not poll; it polls once each time it shows again.
 export function pollWhileVisible(poll: () => void, every: number, env: { doc: Pick<Document, 'hidden' | 'addEventListener'>; setInterval(fn: () => void, ms: number): unknown } = { doc: document, setInterval: (fn, ms) => setInterval(fn, ms) }) {
   let hidden = env.doc.hidden

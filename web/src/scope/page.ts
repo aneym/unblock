@@ -1,6 +1,6 @@
 import './scope.css'
 import { placeCards } from './card-layout'
-import { payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
+import { demoSizes, payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
 import { startTelemetry } from './telemetry'
 import '../vendor/page-chrome/v1.css'
 import './page-chrome.css'
@@ -1177,18 +1177,7 @@ function highlightEmbed(id: string) {
 }
 const demoHeights = new Map<string, number>()
 // A demo sized to its own frame can answer each resize with a new size; the gate and one layout per frame stop the ping-pong.
-const pendingSizes = new Map<HTMLElement, number>()
-let sizeFrame = 0
-const demoSize = sizeGate<HTMLElement>((stage, h) => {
-  if (!stage.isConnected) return // a redrawn section's old stage must not overwrite its replacement's height
-  if (stage.dataset.embedSrc) demoHeights.set(stage.dataset.embedSrc, h)
-  pendingSizes.set(stage, h)
-  if (!sizeFrame) sizeFrame = requestAnimationFrame(() => {
-    sizeFrame = 0
-    for (const [stage, h] of pendingSizes) stage.style.height = `${h}px`
-    pendingSizes.clear(); layout()
-  })
-})
+const demoSize = demoSizes<HTMLElement>(demoHeights, fn => requestAnimationFrame(fn), () => layout())
 window.addEventListener('message', event => {
   const frame = [...doc.querySelectorAll<HTMLIFrameElement>('.demo-stage iframe')].find(frame => frame.contentWindow === event.source)
   if (frame) {

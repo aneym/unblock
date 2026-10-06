@@ -6,12 +6,15 @@
 //   value, defers a fast bounce back to the previous value and anything past 10 applies per key per second, and later
 //   applies the latest deferred value, so a feedback loop runs a few layouts a second instead of one per frame and the
 //   last reported size still wins.
+// - demoSizes(heights, frame, layout, clock): the page's demo-size wiring. An accepted height is remembered by the
+//   stage's embed src at once (a section redrawn before the animation frame starts at it); the frame writes the
+//   stage heights and runs one layout; a stage no longer in the document never touches the remembered heights.
 // - pollWhileVisible(poll, every, env): no polls while the document is hidden; one poll when it shows again.
 // - payloadKey(payload): when the payload carries an integer scope.revision, a string scope.updated_at and a change
 //   marker (daemon mtime_ms or Rails received_at), the key never reads the rest of the scope.
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { sizeGate, pollWhileVisible, payloadKey } from '../web/src/scope/loop-guards.ts'
+import { sizeGate, demoSizes, pollWhileVisible, payloadKey } from '../web/src/scope/loop-guards.ts'
 
 function fakeClock() {
   let t = 1000
@@ -128,4 +131,45 @@ test('without those markers the key is the whole scope, so any change re-renders
   assert.notEqual(payloadKey(base), payloadKey(changed))
   const noMarker = { scope: { ...base.scope, revision: 3, updated_at: 'x' }, notes: [] }
   assert.notEqual(payloadKey(noMarker), payloadKey({ ...noMarker, scope: { ...noMarker.scope, threads: [] } }))
+})
+
+function fakeStage(src) { return { isConnected: true, dataset: { embedSrc: src }, style: { height: '' } } }
+
+test('page wiring: a redraw before the animation frame starts the new stage at the accepted height', () => {
+  const clock = fakeClock(), heights = new Map(), frames = []
+  let layouts = 0
+  const sizes = demoSizes(heights, fn => frames.push(fn), () => { layouts++ }, clock)
+  const stage = fakeStage('asset:demo')
+  sizes.offer(stage, 520); frames.shift()(); clock.advance(1000)
+  sizes.offer(stage, 800)
+  assert.equal(heights.get('asset:demo'), 800, 'remembered before the frame runs')
+  stage.isConnected = false
+  const redrawn = fakeStage('asset:demo'); redrawn.style.height = `${heights.get('asset:demo')}px`
+  assert.equal(redrawn.style.height, '800px')
+  for (const fn of frames.splice(0)) fn()
+  assert.equal(layouts, 2)
+})
+
+test('page wiring: a replaced stage\'s deferred size never overwrites its replacement (codex-verifier repro on 7eef629)', () => {
+  const clock = fakeClock(), heights = new Map(), frames = []
+  const sizes = demoSizes(heights, fn => frames.push(fn), () => {}, clock)
+  const old = fakeStage('asset:demo')
+  sizes.offer(old, 600); sizes.offer(old, 640); sizes.offer(old, 600)
+  old.isConnected = false
+  const next = fakeStage('asset:demo')
+  sizes.offer(next, 700)
+  clock.advance(3000); for (const fn of frames.splice(0)) fn()
+  assert.equal(heights.get('asset:demo'), 700)
+  assert.equal(old.style.height === '600px', false, 'the detached stage was not resized by its deferred report')
+})
+
+test('page wiring: several stages sized in one frame run one layout', () => {
+  const clock = fakeClock(), heights = new Map(), frames = []
+  let layouts = 0
+  const sizes = demoSizes(heights, fn => frames.push(fn), () => { layouts++ }, clock)
+  const a = fakeStage('asset:a'), b = fakeStage('asset:b')
+  sizes.offer(a, 300); sizes.offer(b, 400)
+  assert.equal(frames.length, 1)
+  frames.shift()()
+  assert.deepEqual([a.style.height, b.style.height, layouts], ['300px', '400px', 1])
 })
