@@ -13,7 +13,7 @@
 // everything), /__edit_later (paragraph 16 of Later changes), /__lane_reply (the lane replies on T1 and asks a new question),
 // /__grow_plan (ten paragraphs above T2's anchor), /__detach_t2 (T2's quote leaves the doc), /__item?comment&status[&by&doing&link&text&error]
 // (one live item frame), /__stream_reply?comment[&by] (a scripted lane turn: seen, thinking, doing, five chunks, done, message),
-// /__remove_later (the Later section is deleted), /__spread (eight comments down Later)
+// /__remove_later (the Later section is deleted), /__spread (eight comments down Later), /__wide_doc (a 12-tab fence and a wide table end The plan)
 // Relay mode (env STUB_RELAY_MS, 2026-10-03 comment-flicker): Development area's mirrored scopes. boot events:false (the page polls
 // every 2 s); a POST answers 202 {queued, client_id} and lands STUB_RELAY_MS later with the client_id on its message, the way
 // the outbox relay delivers to unblock and pushes the scope back. /__fail_next makes the next POST answer 500.
@@ -162,6 +162,8 @@ http.createServer((req, res) => {
     }
     // r41: a resolved comment whose text is gone from the doc (it lands in the Detached group).
     if (url.pathname === '/__detached_resolved') { const now = stamp(); threads.push({ id: `T${threads.length + 1}`, anchor: { section: 'plan', quote: 'A sentence the lane deleted', prefix: '', suffix: '' }, kind: 'comment', status: 'resolved', by: 'alex', how: 'resolve', decision: 'Done', resolved_at: now, messages: [{ from: 'alex', text: 'A detached note.', at: now, via: 'admin' }] }); bump(); return send(200, { seq }) }
+    // scope-tabs-overflow (2026-10-06): a 12-tab fence and a 9-column table land at the end of The plan.
+    if (url.pathname === '/__wide_doc') { const s = sections.plan, names = ['Settings overview', 'Connected accounts', 'Notification rules', 'Billing history', 'Team members', 'Audit trail', 'Data exports', 'Integrations', 'Security keys', 'Usage limits', 'Workspace defaults', 'Danger zone']; s.body_md += '\n\n```tabs\n' + names.map((n) => `caption: ${n}: the ${n.toLowerCase()} screen`).join('\n---\n') + '\n```\n\n| ' + Array.from({ length: 9 }, (_, i) => `Column heading ${i + 1}`).join(' | ') + ' |\n|' + ' --- |'.repeat(9) + '\n| ' + Array.from({ length: 9 }, (_, i) => `row-value-${i + 1}-without-spaces`).join(' | ') + ' |'; s.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__grow_title') { sections.title.body_md += '\n\nThe lane added a paragraph above everything, long enough to push the rest of the doc down by a few lines on any screen width.'; sections.title.updated_at = stamp(); bump(); return send(200, { seq }) }
     if (url.pathname === '/__edit_later') { const s = sections.later; s.body_md = s.body_md.replace('Later paragraph 16: settings and themes wait for pass 16', 'Later paragraph 16: settings, themes and fonts wait for pass 16'); s.updated_at = stamp(); bump(); return send(200, { seq }) }
     // pinned view (explainers lane, 2026-10-03): ten paragraphs land at the top of The plan, above T2's anchor; then T2's text goes away.
