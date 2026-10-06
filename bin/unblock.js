@@ -856,6 +856,15 @@ async function scope(args, mode = 'scope') {
           })
         }
       } catch { console.error('Could not read the current scope; linting every section.') }
+      const wordHint = spawnSync('python3', [
+        '/Volumes/StudioExt/repos/of/scripts/words_report.py',
+        'hint', '--file', resolve(opts['--from']),
+      ], { encoding: 'utf8', timeout: 10000 })
+      if (wordHint.stdout) process.stderr.write(wordHint.stdout)
+      if (wordHint.error || wordHint.status !== 0) {
+        console.error('Factory word hints unavailable. Warning only; lint continues.')
+      }
+      // Word hints never change the existing lint result or approval behavior.
       const result = lintDoc(sections, { keep: opts['--keep'] })
       lintOutput(result)
       return output(result, 'No unslop findings.')
