@@ -366,14 +366,16 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
       if (stopped) return
       try {
         await patch(outcome)
+        if (stopped) return
         item({ status: outcome.handoff ? 'failed' : 'done', doing: null, text: outcome.text, ...(outcome.handoff ? { error: outcome.text } : {}) })
       } catch (error) {
+        if (stopped) return
         item({ status: 'failed', doing: null, error: `Couldn't save the answer: ${error.message}`.slice(0, 200) })
         log(`unblock: explainer save failed: ${error.message}`)
       }
       // The slot frees once the answer is saved; a slow lane-post never holds the queue.
       if (!stopped) {
-        try { postOwner(scope, thread, outcome).catch((error) => log(`unblock: lane-post failed: ${error.message}`)) } catch (error) { log(`unblock: lane-post failed: ${error.message}`) }
+        try { postOwner(scope, thread, outcome).catch((error) => { if (!stopped) log(`unblock: lane-post failed: ${error.message}`) }) } catch (error) { log(`unblock: lane-post failed: ${error.message}`) }
       }
     }
     if (!scope || !thread) return settle({ text: `Couldn't answer: sent to ${pane}`, handoff: true, reason: 'fail' })
