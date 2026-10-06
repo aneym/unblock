@@ -46,6 +46,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   let bulletinTail = Buffer.alloc(0)
   const bulletinReads = new Map()
 
+  function stampThread(slug, threadId, stamps) {
+    const note = store.scopeNotes(slug).find(note => note.thread === threadId && note.event === 'new' && note.stamps)
+    if (note) {
+      const stamped = store.mergeScopeNoteStamps(note.id, stamps)
+      if (stamped) emit(slug, 'note', stamped)
+    }
+  }
+
   function metadata(slug) {
     try {
       const { ino, mtimeMs, size } = statSync(join(root, slug, 'scope.json'))
@@ -413,6 +421,19 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       })
       return sendJson(res, 200, { brief, said })
     }
+    if (req.method === 'POST' && parts.length === 2 && action === 'stamps') {
+      if (!relayIdentity(req)) return sendJson(res, 403, { error: 'relay only' })
+      const body = await readJson(req)
+      if (typeof body?.pushed_at !== 'string' || !Number.isFinite(Date.parse(body.pushed_at))) return sendJson(res, 400, { error: 'invalid pushed_at' })
+      if (!Array.isArray(body.threads) || !body.threads.every(id => typeof id === 'string' && THREAD_ID.test(id))) return sendJson(res, 400, { error: 'invalid threads' })
+      let stamped = 0
+      for (const note of store.scopeNotes(slug)) {
+        if (note.event !== 'new' || !body.threads.includes(note.thread) || !note.stamps?.answered_at || note.stamps.pushed_at) continue
+        emit(slug, 'note', store.mergeScopeNoteStamps(note.id, { pushed_at: body.pushed_at }))
+        stamped++
+      }
+      return sendJson(res, 200, { stamped })
+    }
     if (req.method === 'POST' && parts.length === 2 && action === 'lane-note') {
       const relay = relayIdentity(req)
       if (!relay) requireHumanPath(req)
@@ -617,8 +638,12 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if ((relay || body.client_id !== undefined) && (typeof body.client_id !== 'string' || !CLIENT_ID.test(body.client_id))) return sendJson(res, 400, { error: 'invalid client_id' })
     if (body.keep !== undefined && (!Array.isArray(body.keep) || body.keep.length > 50 || !body.keep.every((term) => typeof term === 'string' && term.length <= 60))) return sendJson(res, 400, { error: 'invalid keep' })
     if (relay && body.via === undefined) body.via = 'admin'
+    const stamps = newThread ? { daemon_received_at: new Date().toISOString() } : null
+    if (stamps && relay) for (const key of ['rails_queued_at', 'relay_seen_at']) {
+      if (typeof body[key] === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(body[key]) && Number.isFinite(Date.parse(body[key]))) stamps[key] = body[key]
+    }
     const previous = writes.get(slug) ?? Promise.resolve()
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -871,6 +896,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (problems.length) { console.error(`unblock: explainer answer rejected slug=${slug} ${problems[0]}`); return }
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    if (!patch.pending && !patch.handoff && text.trim()) stampThread(slug, thread.id, { answered_at: scope.updated_at })
     const entry = listeners.get(slug)
     if (entry) entry.meta = metadata(slug)
     emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
@@ -920,7 +946,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
+  function changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
@@ -1267,6 +1293,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
     renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
     if (!human && verb === 'reply') {
+      stampThread(slug, thread.id, { answered_at: at })
       const to = [...thread.messages].reverse().find(message => message.from === 'alex')?.at
       // Never wait on herdr here: the turn's item already names the lane; a reply with no item uses the cached name or the pane.
       if (to) {
@@ -1275,7 +1302,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
     }
     if (noteData) {
-      const note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
+      let note = store.addScopeNote({ slug, author: 'alex', kind: ['resolve', 'take', 'own'].includes(noteData.event) ? 'answer' : 'thought', who: human.login, thread: thread.id, anchor: thread.anchor, via: body.via ?? null, targets: tagTargets(scope, noteData.words ?? noteData.text), images: images.map(image => join(root, slug, 'assets', image.id)), ...client, ...noteData })
+      if (noteData.event === 'new') note = store.mergeScopeNoteStamps(note.id, stamps) ?? note
       if (answerJob) {
         const [marked] = store.markScopeNotes([note.id], 'answerer')
         emit(slug, 'note', marked ?? note)
@@ -1404,7 +1432,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { scanningReads = false }
   }
 
-  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer, liveItems })
+  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer, liveItems, stampThread })
 
   readTimer = setInterval(() => { void scanBulletinReads() }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
   readTimer.unref()

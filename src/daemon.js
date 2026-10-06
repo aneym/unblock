@@ -765,7 +765,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const slug = '[a-z0-9][a-z0-9-]{0,63}'
       const allowed = req.method === 'GET'
         ? pathname === '/api/scope' || new RegExp(`^/api/scope/${slug}(?:/assets/${ASSET_ID.source.slice(1, -1)})?$`).test(pathname)
-        : req.method === 'POST' && (routeTicket(pathname, '/answer') || new RegExp(`^/api/scope/${slug}/(?:assets|approve|lane-note|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park|reopen|delete))?)$`).test(pathname))
+        : req.method === 'POST' && (routeTicket(pathname, '/answer') || new RegExp(`^/api/scope/${slug}/(?:assets|approve|lane-note|stamps|threads(?:/T[1-9][0-9]*/(?:reply|resolve|reject|park|reopen|delete))?)$`).test(pathname))
       if (!allowed) return sendJson(res, 403, { code: 'RELAY_SCOPE_ONLY' })
     }
 

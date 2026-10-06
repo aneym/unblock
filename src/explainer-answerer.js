@@ -118,7 +118,7 @@ function killGroup(child) {
   child.once('exit', () => clearTimeout(timer))
 }
 
-export function createAnswerer({ readScope, writeAnswer, liveItems, log = console.error }) {
+export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread = () => {}, log = console.error }) {
   const queue = []
   const running = new Set()
   const children = new Set()
@@ -242,6 +242,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
 
   // One model call: resolves with the parsed outcome when it settles; `gone` resolves when the child has exited.
   function ask(job, scope, thread, model, item) {
+    const firstText = () => { if (!job.texted) { job.texted = true; stampThread(job.slug, job.threadId, { answer_first_text_at: new Date().toISOString() }) } }
     const sources = Array.isArray(scope?.sources) ? scope.sources.filter((dir) => typeof dir === 'string') : []
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
     let closed
@@ -309,9 +310,11 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
         const event = msg.event
         if (msg.type === 'stream_event' && event?.type === 'message_start') partial = ''
         else if (msg.type === 'stream_event' && event?.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
+          if (event.delta.text) firstText()
           partial += event.delta.text
           schedulePartial()
         } else if (msg.type === 'assistant') {
+          if (msg.message?.content?.some(block => block.type === 'text' && block.text)) firstText()
           const tool = msg.message?.content?.filter(block => block.type === 'tool_use').at(-1)
           if (tool) {
             const input = tool.input ?? {}
@@ -331,7 +334,10 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
           }
         } else if (msg.type === 'result') {
           if (msg.is_error || typeof msg.result !== 'string') badResult = true
-          else { badResult = false; resultText = msg.result }
+          else {
+            if (msg.result) firstText()
+            badResult = false; resultText = msg.result
+          }
         }
       }
       child.stdout?.setEncoding('utf8')
@@ -357,6 +363,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, log = consol
   }
 
   function run(job) {
+    stampThread(job.slug, job.threadId, { answer_started_at: new Date().toISOString() })
     let scope = readScope(job.slug)
     let thread = scope?.threads?.find((item) => item.id === job.threadId)
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''

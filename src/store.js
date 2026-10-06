@@ -227,7 +227,7 @@ export class Store {
         PRIMARY KEY (note_id, pane)
       );
     `)
-    for (const [name, type] of [['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT'], ['images', 'TEXT'], ['bulletin', 'TEXT'], ['bulletin_pane', 'TEXT'], ['read_at', 'TEXT'], ['read_by', 'TEXT']]) this.#addColumn('scope_notes', name, type)
+    for (const [name, type] of [['stamps', 'TEXT'], ['anchor', 'TEXT'], ['reply_to', 'INTEGER'], ['via', 'TEXT'], ['thread', 'TEXT'], ['event', 'TEXT'], ['words', 'TEXT'], ['client_id', 'TEXT'], ['images', 'TEXT'], ['bulletin', 'TEXT'], ['bulletin_pane', 'TEXT'], ['read_at', 'TEXT'], ['read_by', 'TEXT']]) this.#addColumn('scope_notes', name, type)
     this.#addColumn('asks', 'reply', 'TEXT')
     this.#addColumn('asks', 'purpose', "TEXT NOT NULL DEFAULT 'blocker'")
     this.#addColumn('asks', 'project', 'TEXT')
@@ -272,6 +272,7 @@ export class Store {
   #scopeNote(row) {
     return row && {
       id: row.id, slug: row.slug, from: row.author, kind: row.kind,
+      ...(row.stamps ? { stamps: JSON.parse(row.stamps) } : {}),
       qid: row.qid, text: row.text, images: row.images ? JSON.parse(row.images) : [], at: row.created_at,
       delivery: row.delivery, delivered_at: row.delivered_at,
       bulletin: row.bulletin ?? null, read_at: row.read_at ?? null, read_by: row.read_by ?? null,
@@ -308,6 +309,17 @@ export class Store {
     return note
   }
 
+  mergeScopeNoteStamps(id, stamps) {
+    const row = this.#db.prepare('SELECT stamps FROM scope_notes WHERE id = ?').get(id)
+    if (!row) return
+    const merged = row.stamps ? JSON.parse(row.stamps) : {}
+    let changed = false
+    for (const [key, value] of Object.entries(stamps)) if (!Object.hasOwn(merged, key)) { merged[key] = value; changed = true }
+    if (!changed) return
+    this.#db.prepare('UPDATE scope_notes SET stamps = ? WHERE id = ?').run(JSON.stringify(merged), id)
+    return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE id = ?').get(id))
+  }
+
   scopeNoteByClientId(slug, clientId) {
     return this.#scopeNote(this.#db.prepare('SELECT * FROM scope_notes WHERE slug = ? AND client_id = ?').get(slug, clientId))
   }
@@ -342,7 +354,9 @@ export class Store {
     return this.transaction(() => ids.map((id) => {
       if (extra.bulletin) update.run(delivery, deliveredAt, extra.bulletin, extra.pane ?? null, id)
       else update.run(delivery, deliveredAt, id)
-      return this.#scopeNote(read.get(id))
+      const note = this.#scopeNote(read.get(id))
+      if (note?.stamps && ['delivered', 'answerer'].includes(delivery)) return this.mergeScopeNoteStamps(id, { delivered_at: deliveredAt ?? new Date().toISOString() }) ?? note
+      return note
     }).filter(Boolean))
   }
 

@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, extname, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
+import { latencySince, scopeLatency } from '../src/scope-latency.js'
 import { IMAGE_LINE } from '../src/scope-assets.js'
 import { filerPid } from '../src/origin-process.js'
 import { lintDoc } from '../src/scope-lint.js'
@@ -495,6 +496,7 @@ async function scopeLinks(health, slug) {
 }
 
 const SCOPE_USAGE = `unblock scope [list|url|notes|comments]           scoping docs and anchored comments
+unblock scope latency <slug> [--since <ISO|30m|2h|1d>] [--json]
 unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|writing|report] [--parent <slug>] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
@@ -588,6 +590,17 @@ async function scope(args, mode = 'scope') {
   }
   if (args[0] === 'threads') fail(usage)
   if (args[0] === 'new') return scopeNew(args, usage, mode)
+  if (args[0] === 'latency') {
+    const { rest, opts } = flags(args, { '--since': true })
+    const [, name, ...extra] = rest
+    if (!name || extra.length) fail(usage)
+    let since
+    try { since = latencySince(opts['--since']) } catch (error) { fail(error.message) }
+    const { notes } = await request(`/api/scope/${encodeURIComponent(name)}/notes`)
+    const report = scopeLatency(notes, since)
+    const seconds = value => value === null ? '-' : `${value.toFixed(1)}s`
+    return output(report, report.steps.map(row => `${row.step} ${row.n} ${seconds(row.p50_s)} ${seconds(row.p95_s)}`).join('\n'))
+  }
   if (args[0] === 'answerer') {
     const { rest, opts } = flags(args, { '--model': true, '--clear': false })
     const [, name, ...extra] = rest
