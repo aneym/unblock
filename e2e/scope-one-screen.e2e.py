@@ -41,6 +41,22 @@ for section in fixture.values():
     section['updated_at'] = at
 
 
+BUILD_TABLE = """| Piece | Runs on | Check | Estimate |
+|---|---|---|---|
+| 1 One-screen overview | Studio | real page at 1280 by 700, no scroll, a note survives reload | 40-90 min |
+| 2 Comments saved in Open Factory | box | note saved, server restarted, note still anchored | 60-120 min |
+| 3 Serve on the tailnet | box | page opens on Book from the tailnet | 30-60 min |
+| 4 Approval binds the pieces | box | the agent's input matches the approved record | 60-120 min |
+| 5 Check build against approval | box | a changed mock fails the check | 60-120 min |"""
+TABLE_PIECES = [
+    ['1 One-screen overview', '40-90 min'],
+    ['2 Comments saved in Open Factory', '60-120 min'],
+    ['3 Serve on the tailnet', '30-60 min'],
+    ['4 Approval binds the pieces', '60-120 min'],
+    ['5 Check build against approval', '60-120 min'],
+]
+
+
 def run():
     env = {**os.environ, 'PATH': str(WT / 'web/node_modules/.bin') + ':' + os.environ['PATH']}
     if '--no-build' not in sys.argv:
@@ -99,8 +115,26 @@ def run():
                 page = browser.new_page(viewport={'width': 390, 'height': 700})
                 page.goto(f'http://127.0.0.1:{PORT}/scope/demo')
                 page.wait_for_selector('.overview-chapters')
+                check('mobile: text at least 11px', page.locator('#picture svg').evaluate("(svg) => { const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width; return [...svg.querySelectorAll('text')].every(text => parseFloat(getComputedStyle(text).fontSize) * scale >= 11 - .01) }"))
                 check('mobile: no horizontal scroll', page.evaluate('document.scrollingElement.scrollWidth <= innerWidth'))
                 page.screenshot(path=str(OUT / 'scope-one-screen-mobile.png'), full_page=True)
+                page.close()
+                table_fixture = json.loads(json.dumps(fixture))
+                table_fixture['build']['body_md'] = BUILD_TABLE
+                table_page = browser.new_page(viewport={'width': 1280, 'height': 700}, color_scheme='light')
+                def table_scope(route):
+                    response = route.fetch()
+                    envelope = response.json()
+                    for key in ('scope', 'data'):
+                        envelope[key]['doc']['sections'] = [dict(section, id=id) for id, section in table_fixture.items()]
+                    route.fulfill(response=response, json=envelope)
+                table_page.route(f'**/w/api/live-scopes/demo', table_scope)
+                table_page.goto(f'http://127.0.0.1:{PORT}/scope/demo')
+                table_page.wait_for_selector('.overview-piece')
+                pieces = table_page.locator('.overview-piece').evaluate_all("nodes => nodes.map(node => [node.firstChild.textContent, node.querySelector('small').textContent])")
+                check('table fixture: five ordered pieces and estimates', pieces == TABLE_PIECES, pieces)
+                check('table fixture: no page scroll', table_page.evaluate('document.scrollingElement.scrollHeight <= innerHeight'))
+                table_page.screenshot(path=str(OUT / 'scope-one-screen-table.png'))
                 browser.close()
         finally:
             stub.terminate()

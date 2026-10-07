@@ -638,7 +638,8 @@ body.one-screen .overview-build .build-strip { margin: 0; }
   body.one-screen #context, body.one-screen .overview-centre { overflow: visible; }
   body.one-screen .side { display: block; overflow: visible; }
   body.one-screen .overview-build { min-height: 84px; }
-  body.one-screen #picture svg, body.one-screen #picture img { max-width: 100%; max-height: none; }
+  body.one-screen #picture .fig-wide, body.one-screen #picture .fig-phone { overflow-x: auto; }
+  body.one-screen #picture svg, body.one-screen #picture img { max-width: none; max-height: none; }
 }
 
 .overview-pieces { display: flex; gap: 8px; flex: 0 0 auto; }

@@ -11,7 +11,7 @@ const sizes = new WeakMap<Element, { width: number; height: number }>()
 const observer = new ResizeObserver(() => fitPicture())
 
 export function fitPicture() {
-  if (!oneScreen(current) || innerWidth < 900) return
+  if (!oneScreen(current)) return
   const centre = document.getElementById('picture')
   if (!centre || centre.hidden) return
   const figure = centre.querySelector<HTMLElement>('figure')
@@ -27,7 +27,9 @@ export function fitPicture() {
   }
   const caption = figure!.querySelector('figcaption')?.getBoundingClientRect().height || 0
   const heading = centre.querySelector('h2')?.getBoundingClientRect().height || 0
-  const scale = Math.max(1 / 1.5, Math.min(2, centre.clientWidth / size.width, (centre.clientHeight - caption - heading - 64) / size.height))
+  const fonts = [...media.querySelectorAll('text')].map(text => parseFloat(getComputedStyle(text).fontSize)).filter(font => font > 0)
+  const readable = fonts.length ? 11 / Math.min(...fonts) : 1 / 1.5
+  const scale = innerWidth < 900 ? Math.max(readable, Math.min(1, centre.clientWidth / size.width)) : Math.max(1 / 1.5, Math.min(2, centre.clientWidth / size.width, (centre.clientHeight - caption - heading - 64) / size.height))
   media.style.width = `${size.width * scale}px`; media.style.height = `${size.height * scale}px`
 }
 
