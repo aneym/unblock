@@ -7,6 +7,29 @@ const TOP = 10
 const MAX_BYTES = 15000
 const ms = (n: number) => Math.round(n)
 
+// A slow resource is reported by kind only: no pathname, query, host or any other part of its URL is sent,
+// because scope pages carry names and ids in them.
+const EXT_KINDS: Record<string, string> = {
+  js: 'script', mjs: 'script', css: 'style', html: 'doc', htm: 'doc',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image', avif: 'image', ico: 'image',
+  mp4: 'media', webm: 'media', mov: 'media', m4v: 'media', mp3: 'media', m4a: 'media', wav: 'media', ogg: 'media',
+  woff: 'font', woff2: 'font', ttf: 'font', otf: 'font',
+}
+const INITIATOR_KINDS: Record<string, string> = {
+  script: 'script', css: 'style', img: 'image', image: 'image', video: 'media', audio: 'media', track: 'media', iframe: 'doc', frame: 'doc', navigation: 'doc',
+}
+export function resourceKind(entry: { name?: unknown; initiatorType?: unknown }): { kind: string; origin: 'self' | 'cross' } {
+  let kind = 'other', origin: 'self' | 'cross' = 'cross'
+  try {
+    const url = new URL(String(entry.name))
+    origin = url.origin === location.origin ? 'self' : 'cross'
+    const path = url.pathname, ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase()
+    if (origin === 'self' && (path.startsWith('/w/api/') || path.startsWith('/api/'))) kind = 'api'
+    else kind = INITIATOR_KINDS[String(entry.initiatorType)] || (ext && EXT_KINDS[ext]) || 'other'
+  } catch {}
+  return { kind, origin }
+}
+
 // Counts every item but keeps only the worst few.
 function tracker<T>(score: (item: T) => number) {
   const state = { n: 0, total: 0, max: 0, top: [] as T[] }
@@ -35,9 +58,11 @@ export function startTelemetry(opts: { url: string; mode: Mode }): { docRendered
   const slowInputs = tracker<{ at: number; type: string; delay: number; dur: number }>(i => i.dur)
   const longtasks = tracker<{ at: number; dur: number; attr: string }>(t => t.dur)
   const gaps = tracker<{ at: number; dur: number }>(g => g.dur)
-  const fetches = tracker<{ at: number; dur: number; path: string; kb: number }>(f => f.dur)
+  const fetches = tracker<{ at: number; dur: number; kind: string; origin: 'self' | 'cross'; kb: number }>(f => f.dur)
   const polls = { n: 0, unchanged: 0, fetch_max_ms: 0, parse_max_ms: 0, render_max_ms: 0, total_ms: 0 }
   const slowPolls = tracker<PollTiming>(p => p.fetch + p.parse + p.render)
+
+  let lastTick = performance.now(), lastVisible = document.visibilityState === 'visible'
 
   // Visible time, kept by visibilitychange.
   let visibleSince: number | null = document.visibilityState === 'visible' ? performance.now() : null
@@ -47,15 +72,21 @@ export function startTelemetry(opts: { url: string; mode: Mode }): { docRendered
       const t = performance.now()
       if (document.visibilityState === 'visible') { if (visibleSince === null) visibleSince = t }
       else if (visibleSince !== null) { visibleTotal += t - visibleSince; visibleSince = null }
+      lastTick = t // time spent hidden is never a freeze, in either direction
     } catch {}
   })
 
-  // Composer: first <textarea> anywhere in the document.
+  // Composer: the first comment box (textarea[data-draft]) that is on screen. A textarea in a dialog (approval note)
+  // or inside a closed card has either no business here or no layout box.
   try {
-    const found = () => { if (composerAt === null && document.querySelector('textarea')) { composerAt = now(); return true } return false }
+    const usable = (box: Element) => !box.closest('dialog') && box.getClientRects().length > 0
+    const found = () => {
+      if (composerAt === null && [...document.querySelectorAll('textarea[data-draft]')].some(usable)) { composerAt = now(); return true }
+      return composerAt !== null
+    }
     if (!found()) {
       const watcher = new MutationObserver(() => { try { if (found()) watcher.disconnect() } catch {} })
-      watcher.observe(document.documentElement, { childList: true, subtree: true })
+      watcher.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open'] })
     }
   } catch {}
 
@@ -66,18 +97,16 @@ export function startTelemetry(opts: { url: string; mode: Mode }): { docRendered
   observe('longtask', {}, entry => {
     if (entry.duration <= 200) return
     const a = entry.attribution?.[0]
-    const attr = [a?.containerType, a?.containerName, a?.name].filter(Boolean).join('/').slice(0, 80)
+    // entry.name says whose task it was (self, same-origin-descendant, cross-origin-ancestor, ...).
+    const attr = [entry.name, a?.containerType, a?.containerName, a?.name].filter(Boolean).join('/').slice(0, 80)
     longtasks.add({ at: ms(entry.startTime), dur: ms(entry.duration), attr })
   })
   observe('resource', {}, entry => {
     if (entry.duration <= 2000) return
-    let path = ''
-    try { path = new URL(entry.name).pathname } catch {}
-    fetches.add({ at: ms(entry.startTime), dur: ms(entry.duration), path, kb: ms((entry.encodedBodySize || 0) / 1024) })
+    fetches.add({ at: ms(entry.startTime), dur: ms(entry.duration), ...resourceKind(entry), kb: ms((entry.encodedBodySize || 0) / 1024) })
   })
 
   // Main-thread heartbeat: a tick that arrives much later than 250 ms while the page stayed visible is a freeze.
-  let lastTick = performance.now(), lastVisible = document.visibilityState === 'visible'
   setInterval(() => {
     try {
       const t = performance.now(), visible = document.visibilityState === 'visible', gap = t - lastTick - 250
