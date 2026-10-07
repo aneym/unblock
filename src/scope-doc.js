@@ -233,11 +233,16 @@ export function validateScope(scope) {
   }
   if (scope.approval !== undefined) {
     const a = scope.approval
-    check(object(a) && ['approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(a.mode) && a.by === 'alex'
+    // An agent approval (agents decide, under an owner steer) names the approving pane, its reason and the steer file.
+    const agent = object(a) && a.by === 'agent' && a.mode === 'approve' && a.via === 'agent'
+      && typeof a.approver === 'string' && /^w[A-Za-z0-9]+:p[A-Za-z0-9]+$/.test(a.approver)
+      && typeof a.reason === 'string' && !!a.reason.trim() && a.reason.length <= 1000
+      && typeof a.steer === 'string' && isAbsolute(a.steer) && a.steer.length <= 500 && a.quote === undefined
+    check(object(a) && ['approve', 'approve_to_try', 'approve_with_changes', 'not_yet'].includes(a.mode) && (a.by === 'alex' || agent)
       && typeof a.who === 'string' && typeof a.at === 'string' && Number.isFinite(Date.parse(a.at)) && typeof a.at_et === 'string'
       && Number.isInteger(a.revision) && a.revision >= 1 && typeof a.comment === 'string' && a.comment.length <= 4000
       && !/[\x00-\x09\x0b-\x1f\x7f]/.test(a.comment) && (['approve', 'approve_to_try'].includes(a.mode) || !!a.comment.trim())
-      && (a.via === undefined || ['voice', 'admin', 'pm-relay'].includes(a.via))
+      && (agent || a.via === undefined || ['voice', 'admin', 'pm-relay'].includes(a.via))
       && (a.quote === undefined || (typeof a.quote === 'string' && a.quote.length <= 4000))
       && (a.via !== 'pm-relay' || (typeof a.quote === 'string' && !!a.quote.trim()))
       && (a.open === undefined || (Number.isInteger(a.open) && a.open >= 0))

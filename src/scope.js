@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync, writeFileSync, renameSync, mkdirSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 import { promptPane, remoteScopeHost, scopePostCommand } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
@@ -568,12 +568,18 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (req.method === 'POST' && parts.length === 2 && (action === 'pm-approve' || action === 'unapprove')) {
       if (proxyIdentity(req) || relayIdentity(req)) return sendJson(res, 403, { error: 'lanes relay approvals; Alex approves on the page' })
       const body = await readJson(req)
-      const keys = action === 'pm-approve' ? ['by', 'quote', 'at', 'pane'] : ['reason', 'pane']
+      const keys = action === 'pm-approve' ? ['by', 'quote', 'at', 'pane', 'approver', 'reason', 'steer'] : ['reason', 'pane']
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => !keys.includes(key))) return sendJson(res, 400, { error: 'invalid approval' })
       if (body.pane !== undefined && (typeof body.pane !== 'string' || !RELAY_PANE.test(body.pane))) return sendJson(res, 400, { error: 'invalid pane' })
       if (action === 'pm-approve') {
-        if (body.by !== 'alex') return sendJson(res, 400, { error: 'invalid approval' })
-        if (typeof body.quote !== 'string') return sendJson(res, 400, { error: 'invalid quote' })
+        if (body.by === 'agent') {
+          if (body.quote !== undefined) return sendJson(res, 400, { error: 'an agent approval quotes no one' })
+          if (typeof body.approver !== 'string' || !RELAY_PANE.test(body.approver)) return sendJson(res, 400, { error: 'invalid approver' })
+          if (typeof body.reason !== 'string') return sendJson(res, 400, { error: 'invalid reason' })
+          if (typeof body.steer !== 'string') return sendJson(res, 400, { error: 'invalid steer' })
+        } else if (body.by !== 'alex' || body.approver !== undefined || body.reason !== undefined || body.steer !== undefined) {
+          return sendJson(res, 400, { error: 'invalid approval' })
+        } else if (typeof body.quote !== 'string') return sendJson(res, 400, { error: 'invalid quote' })
         if (body.at !== undefined && typeof body.at !== 'string') return sendJson(res, 400, { error: 'invalid at' })
       } else if (typeof body.reason !== 'string') return sendJson(res, 400, { error: 'invalid reason' })
       const previous = writes.get(slug) ?? Promise.resolve()
@@ -823,6 +829,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   function relayApproval(slug, body) {
     const { dir, scope } = readDisk(slug)
     if (!kindSpec(scope).approve) bad('this doc kind has no approval', 409)
+    if (body.by === 'agent') return agentApproval(slug, dir, scope, body)
     const quote = body.quote.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '').trim()
     if (!quote || quote.length > 4000) bad('invalid quote')
     const now = Date.now()
@@ -845,6 +852,35 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'approve', comment: quote, at_et })
     try {
       const note = store.addScopeNote({ slug, author: 'alex', kind: 'thought', event: 'approve', text: quote, who, via: 'pm-relay' })
+      emitNote(note)
+      const entry = listeners.get(slug)
+      if (entry) entry.meta = metadata(slug)
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+    } catch { /* The approval is already on disk. */ }
+    schedule(slug)
+    return { approval: scope.approval, revision: scope.revision }
+  }
+
+  function agentApproval(slug, dir, scope, body) {
+    const reason = body.reason.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, ' ').trim()
+    if (!reason || reason.length > 1000) bad('invalid reason')
+    const steer = body.steer.trim()
+    if (!isAbsolute(steer) || steer.length > 500) bad('invalid steer')
+    try { if (!statSync(steer).isFile()) bad('steer is not a file') } catch (error) { if (error.status) throw error; bad('steer not found') }
+    if (approved(scope.approval)) bad('already approved', 409)
+    const now = new Date().toISOString(), at_et = eastern(now)
+    const who = `agent:${body.approver}`
+    const open = scope.threads.filter((thread) => thread.status === 'open').length
+    scope.approval = { mode: 'approve', by: 'agent', who, at: now, at_et, revision: scope.revision, comment: reason, reason, approver: body.approver, steer, via: 'agent', open, recorded_at: now }
+    scope.updated_at = now
+    const problems = validateScope(scope)
+    if (problems.length) bad(problems[0])
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    writeFileSync(join(dir, 'APPROVAL.md'), `# Scope approval (agent decision)\n\nMode: approve\nWhen: ${at_et}\nRevision: ${scope.revision}\nWho: ${who}\nVia: agent\nSteer: ${steer}\nOpen comments: ${open} open\n\n${reason}\n`)
+    appendApprovalIndex(root, { slug, revision: scope.revision, mode: 'approve', comment: `agent ${body.approver}: ${reason}`, at_et })
+    try {
+      const note = store.addScopeNote({ slug, author: 'agent', kind: 'thought', event: 'approve', text: reason, who, via: null })
       emitNote(note)
       const entry = listeners.get(slug)
       if (entry) entry.meta = metadata(slug)

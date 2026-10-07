@@ -96,14 +96,18 @@ export type DocAsset = { type: 'image'; width: number | null; height: number | n
 
 export interface ScopeApproval {
   mode: 'approve' | 'approve_with_changes' | 'not_yet' | 'approve_to_try'
-  by: 'alex'
+  by: 'alex' | 'agent'
   who: string
   at: string
   at_et: string
   revision: number
   comment: string
-  via?: 'voice' | 'admin' | 'pm-relay'
+  via?: 'voice' | 'admin' | 'pm-relay' | 'agent'
   quote?: string
+  /** by 'agent' only: the approving pane, its reason and the absolute path of the steer it cites. */
+  approver?: string
+  reason?: string
+  steer?: string
   open?: number
   recorded_at?: string
   client_id?: string

@@ -9,10 +9,12 @@ const labels = {
 
 export function approvalBannerHtml(approval) {
   if (!approval) return ''
-  const label = labels[approval.mode] || ''
-  const meta = approval.via === 'pm-relay'
-    ? `<div class="approval-meta">Relayed by the PM from chat${approval.open ? ` · approved with ${esc(approval.open)} open` : ''}</div>`
-    : ''
+  const agent = approval.by === 'agent'
+  const label = agent ? `Approved by an agent (${approval.approver ?? ''})` : labels[approval.mode] || ''
+  const open = approval.open ? ` · approved with ${esc(approval.open)} open` : ''
+  const meta = agent
+    ? `<div class="approval-meta">Agent decision, not Alex · steer ${esc(approval.steer ?? '')}${open}</div>`
+    : approval.via === 'pm-relay' ? `<div class="approval-meta">Relayed by the PM from chat${open}</div>` : ''
   const words = approval.quote ?? approval.comment
   const quoteBlock = words ? `<blockquote class="approval-note">${esc(words)}</blockquote>` : ''
   return `<div class="approval" data-cm-skip><strong>${esc(label)}</strong> · ${esc(approval.at_et ?? '')}${meta}${quoteBlock}</div>`

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, extname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve, resolve as resolvePath } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
 import { latencySince, scopeLatency } from '../src/scope-latency.js'
@@ -514,6 +514,7 @@ unblock scope resolve <slug> T# [--decision "text"] [--quote "his exact words" |
 unblock scope reopen <slug> T# [--reason "text"]
 unblock scope unsay <slug> T# --text "exact text"
 unblock scope approve <slug> --by alex --quote "<verbatim>" [--at <iso>]
+unblock scope approve <slug> --by agent --approver <pane> --reason "<why>" --steer <file>
 unblock scope unapprove <slug> --reason "<why>"
 unblock scope publish <slug> [--where published|sent|posted|submitted] [--target "text"] [--close-open]
 unblock scope destination <slug> --where published|sent|posted|submitted [--target "text"]
@@ -678,7 +679,7 @@ async function scope(args, mode = 'scope') {
   }
   if (sub === 'approve' || sub === 'unapprove') {
     if (!slug) fail(usage)
-    const allowed = sub === 'approve' ? ['--by', '--quote', '--at'] : ['--reason']
+    const allowed = sub === 'approve' ? ['--by', '--quote', '--at', '--approver', '--reason', '--steer'] : ['--reason']
     const opts = {}
     for (let i = 0; i < words.length; i++) {
       const word = words[i]
@@ -687,6 +688,12 @@ async function scope(args, mode = 'scope') {
       const value = words[++i]
       if (value === undefined) fail(usage)
       opts[word] = value
+    }
+    if (sub === 'approve' && opts['--by'] === 'agent') {
+      const { '--approver': approver, '--reason': why, '--steer': steer } = opts
+      if (opts['--quote'] !== undefined || opts['--at'] !== undefined || !approver || !why || !String(why).trim() || !steer) fail(usage)
+      const data = await request(`/api/scope/${encodeURIComponent(slug)}/pm-approve`, { by: 'agent', approver, reason: why, steer: resolvePath(steer), ...(process.env.HERDR_PANE_ID ? { pane: process.env.HERDR_PANE_ID } : {}) })
+      return output(data, `agent-approved ${slug} r${data.revision} by ${approver} (${data.approval.at_et}, ${data.approval.open} open)`)
     }
     if (sub === 'approve') {
       const quote = opts['--quote']
