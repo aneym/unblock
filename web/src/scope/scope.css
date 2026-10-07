@@ -668,6 +668,7 @@ body.one-screen .overview-build .build-strip { white-space: nowrap; flex: 0 0 au
   body.has-contents .layout { max-width: 1428px; grid-template-columns: 200px minmax(0, 720px) var(--side); gap: 32px; }
   body.has-contents #page > .pc-head { max-width: 1428px; padding-left: 256px; column-gap: 32px; }
   .scope-toc { position: sticky; top: 76px; align-self: start; margin-top: 44px; max-height: calc(100dvh - 100px); overflow-y: auto; }
+  body.in-frame .scope-toc { top: 24px; max-height: calc(100dvh - 48px); }
   .toc-label { display: block; }
   .scope-toc summary { display: none; }
   .scope-toc details > .toc-list { display: grid; padding-top: 0; }
