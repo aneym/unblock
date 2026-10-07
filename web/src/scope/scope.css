@@ -599,3 +599,43 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
   .build-col ol { gap: 10px; }
   .build-after { display: block; }
 }
+
+/* An overview is a bounded workspace; legacy scopes keep the document layout. */
+body.one-screen #page > .pc-bar, body.one-screen #talk, body.one-screen .open-chip { display: none; }
+body.one-screen #page > .pc-head { max-width: none; height: 64px; padding: 6px 20px; display: block; overflow: hidden; }
+body.one-screen .pc-head-row { display: flex; align-items: center; gap: 16px; }
+body.one-screen .pc-title { flex: 1; font-size: 21px; line-height: 26px; margin: 0; }
+body.one-screen .pc-description { margin: 3px 0 0; font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.one-screen .layout { max-width: none; height: calc(100dvh - 64px); padding: 0 20px; display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; grid-template-rows: 40px minmax(0, 1fr) 84px; gap: 0 20px; }
+body.one-screen .overview-chapters { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; overflow: auto; border-block: 1px solid var(--hairline); }
+.overview-chapters button { background: transparent; color: var(--muted); border: 0; border-radius: var(--radius-small); padding: 6px 10px; white-space: nowrap; }
+.overview-chapters button[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent-soft); }
+body.one-screen .doc { display: contents; }
+body.one-screen .doc > section[hidden] { display: none; }
+body.one-screen #context { grid-column: 1; grid-row: 2; overflow: auto; padding: 18px 0; display: block; }
+body.one-screen #context h2 { font-size: 16px; margin-bottom: 14px; }
+body.one-screen #context .body { font-size: 14px; line-height: 1.5; }
+body.one-screen .overview-centre { grid-column: 2; grid-row: 2; overflow: auto; display: block; padding: 18px 0; min-height: 0; }
+body.one-screen .overview-centre > h2 { font-size: 18px; margin-bottom: 14px; }
+body.one-screen #picture .body > :not(figure):not(.scope-tabs) { display: none; }
+body.one-screen #picture .body > figure ~ figure { display: none; }
+body.one-screen #picture figure { margin: 0; }
+body.one-screen #picture svg, body.one-screen #picture img { width: auto; height: auto; max-width: none; max-height: none; object-fit: contain; }
+body.one-screen .side { grid-column: 3; grid-row: 2; min-height: 0; padding: 0 0 12px; overflow: auto; }
+body.one-screen .side-head { position: sticky; top: 0; background: var(--ground); }
+body.one-screen .cards { display: flex; flex-direction: column; gap: 10px; }
+body.one-screen .cards > .card { position: relative; top: auto; width: 100%; }
+body.one-screen .overview-build { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: center; overflow: auto; border-top: 1px solid var(--hairline); }
+body.one-screen .overview-build .build-strip { margin: 0; }
+@media (min-width: 900px) { body.one-screen { height: 100dvh; overflow: hidden; } }
+@media (max-width: 899px) {
+  body.one-screen #page > .pc-head { height: auto; min-height: 74px; padding: 12px 16px; }
+  body.one-screen .pc-head-row { flex-wrap: wrap; }
+  body.one-screen .pc-title { flex-basis: 100%; }
+  body.one-screen .layout { height: auto; padding: 0 16px; display: flex; flex-direction: column; }
+  body.one-screen .overview-chapters { min-height: 44px; }
+  body.one-screen #context, body.one-screen .overview-centre { overflow: visible; }
+  body.one-screen .side { display: block; overflow: visible; }
+  body.one-screen .overview-build { min-height: 84px; }
+  body.one-screen #picture svg, body.one-screen #picture img { max-width: 100%; max-height: none; }
+}

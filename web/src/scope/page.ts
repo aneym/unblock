@@ -1,4 +1,5 @@
 import './scope.css'
+import { oneScreen, renderOverview, showChapter, fitPicture } from './overview'
 import { placeCards } from './card-layout'
 import { demoSizes, payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
 import { startTelemetry } from './telemetry'
@@ -47,7 +48,7 @@ function chromeSpec() {
   if (boot.comment !== 'host') actions.push({ id: 'comment', label: flags.margin, kind: 'screen-only', placement: 'title', run: () => { openGeneralComment(); return { ok: true, speech: flags.margin === 'Ask' ? 'Ask about the whole doc.' : 'Comment on the whole doc.' } } })
   if (flags.approve && (boot.approve !== 'host' || !hostDrawsApprove()) && !isApproved() && !(queuedApproval && !queuedApproval.failed)) actions.push({ id: 'approve-scope', label: 'Approve scope', kind: 'move', placement: 'title', run: () => { openApproveDialog(); return { ok: true, speech: 'Approve scope is open.' } } })
   if (boot.voice !== false || typeof boot.voiceUrl === 'string' && /^https?:\/\//i.test(boot.voiceUrl)) actions.push({ id: 'voice', label: embed ? 'Talk' : 'Talk it through by voice', kind: 'screen-only', placement: embed ? 'title' : 'menu', run: () => { if (boot.voice !== false) $('#talk').click(); else window.open(boot.voiceUrl, '_blank', 'noopener'); return { ok: true, speech: 'Voice is open.' } } })
-  return { title: [...(scope!.title || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: flags.margin === 'Ask' ? `Explainer · revision ${scope!.revision}` : `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: flags.label, route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const, forwardKeys: true }
+  return { title: [...((oneScreen(scope) ? scope!.doc.sections.find(s => s.id === 'title')?.heading : scope!.title) || scope!.doc.sections.find(s => s.id === 'title')?.heading || slug)].slice(0, 80).join(''), description: flags.margin === 'Ask' ? `Explainer · revision ${scope!.revision}` : `${APP_NAME[appOf(scope!)]} · revision ${scope!.revision}`, back: boot.back && typeof boot.back.label === 'string' && typeof boot.back.route === 'string' ? boot.back : { label: flags.label, route: '/s/' }, actions, primary: actions.some(a => a.id === 'approve-scope') ? 'approve-scope' : undefined, chat: { onToggle: openGeneralComment }, initialize: false as const, forwardKeys: true }
 }
 function syncChrome() {
   if (!scope) return
@@ -635,7 +636,8 @@ function render() {
   sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
-  document.title = scope.title; syncChrome(); highlight()
+  document.title = scope.title; syncChrome(); renderOverview(scope, layout); highlight()
+  if (oneScreen(scope)) { const description = document.querySelector('.pc-description'); const recommendation = doc.querySelector('#overview .body p'); if (description) { description.replaceChildren(...(recommendation ? [...recommendation.cloneNode(true).childNodes] : []), document.createTextNode(` · revision ${scope.revision}`)) } }
   if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null && !composing) detachedPin = { id: pin.id, top: pinnedLayoutTop }
   syncFigureFocus(); renderCards(); renderFeed()
   const restoreReference = () => {
@@ -668,7 +670,7 @@ function renderCards() {
   if (focused && document.visibilityState === 'visible' && document.querySelector(`.card.on[data-t="${focused}"]`)) markSeen(focused)
   syncThreadClasses()
   const byId = new Map(scope?.threads.map(t => [t.id, t]))
-  const docOrder = scope ? orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
+  const docOrder = scope ? oneScreen(scope) ? orderThreads(scope) : orderThreads({ ...scope, threads: scope.threads.map(t => ({ ...t, status: 'open' })) }) : []
   const visible = docOrder.map(t => byId.get(t.id)!).filter(t => !docFlags().resolve || t.status === 'open' || showResolved || t.id === focused || sending.has(t.id))
   const focusedNode = focusedCard()
   // While a new comment is being written the composer leads; a detached focused card goes to the Detached list as on main.
@@ -758,6 +760,7 @@ document.addEventListener('scope-tab-change', () => layout())
 function layout() {
   layoutShots()
   if (phone()) return
+  if (oneScreen(scope)) { fitPicture(); cards.style.height = ''; cards.querySelectorAll<HTMLElement>(':scope > .card').forEach(node => { node.style.top = ''; node.style.transitionProperty = '' }); showSelection(); return }
   const base = cards.getBoundingClientRect().top
   const nodes = [...cards.querySelectorAll<HTMLElement>(':scope > .card')]
   for (const node of nodes) node.style.transitionProperty = node.dataset.t === focused ? 'background, border-color, box-shadow' : ''
@@ -823,6 +826,7 @@ function threadOnScreen(id: string) {
 function focus(id: string | null, scroll = false, openSheet = true) {
   if (id) document.dispatchEvent(new CustomEvent('scope-thread-focus', { detail: id }))
   const thread = scope?.threads.find(t => t.id === id)
+  if (thread && oneScreen(scope)) showChapter(thread.anchor.section)
   if (id !== focused) readingReply = thread && unread(thread) ? `${thread.id}:${thread.messages.at(-1)!.at}` : null
   postedClient = null; focused = id
   if (id) markSeen(id)
@@ -934,7 +938,7 @@ document.addEventListener('touchstart', e => { const touch = e.touches[0]; if (t
 document.addEventListener('touchmove', e => { const touch = e.touches[0]; if (touch) moveHold(touch.clientX, touch.clientY) }, { passive: true })
 function focusHash() {
   const id = location.hash.match(/^#thread=(T\d+)$/)?.[1], thread = scope?.threads.find(t => t.id === id)
-  if (!thread) return
+  if (!thread) { if (oneScreen(scope)) showChapter(decodeURIComponent(location.hash.slice(1))); return }
   if (thread.status !== 'open') { showResolved = true; storage.set('scope:showResolved', 'true') }
   focus(thread.id, true)
 }
