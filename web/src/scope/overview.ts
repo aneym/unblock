@@ -1,5 +1,7 @@
 import type { ScopeV2 } from '../../../src/scope-doc.js'
 import { buildStrip } from './build'
+import { buildFences, parseBuild, formatRange } from '../../../src/scope-build.js'
+import { esc } from './markdown'
 
 const fixed = new Set(['title', 'overview', 'context', 'picture'])
 let chapter = 'picture'
@@ -25,7 +27,7 @@ export function fitPicture() {
   }
   const caption = figure!.querySelector('figcaption')?.getBoundingClientRect().height || 0
   const heading = centre.querySelector('h2')?.getBoundingClientRect().height || 0
-  const scale = Math.max(1 / 1.5, Math.min(1, centre.clientWidth / size.width, (centre.clientHeight - caption - heading - 64) / size.height))
+  const scale = Math.max(1 / 1.5, Math.min(2, centre.clientWidth / size.width, (centre.clientHeight - caption - heading - 64) / size.height))
   media.style.width = `${size.width * scale}px`; media.style.height = `${size.height * scale}px`
 }
 
@@ -39,7 +41,7 @@ export function showChapter(id: string) {
     node.hidden = node.id !== 'context' && node.id !== chapter
     node.classList.toggle('overview-centre', node.id === chapter)
   })
-  document.querySelectorAll<HTMLButtonElement>('.overview-chapters button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.chapter === chapter)))
+  document.querySelectorAll<HTMLButtonElement>('.overview-chapters button').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.chapter === chapter)); if (button.dataset.chapter === 'picture') button.textContent = chapter === 'picture' ? 'Picture' : 'Back to the picture' })
   redraw()
 }
 
@@ -76,9 +78,32 @@ export function renderOverview(scope: ScopeV2, onChange: () => void) {
   }))
   let strip = layout.querySelector<HTMLElement>('.overview-build')
   if (!strip) { strip = document.createElement('footer'); strip.className = 'overview-build'; layout.append(strip) }
-  strip.innerHTML = buildStrip(scope.doc.sections)
+  strip.innerHTML = buildPieces(scope) + buildStrip(scope.doc.sections)
   const picture = document.getElementById('picture')
   if (picture) observer.observe(picture)
   showChapter(chapter)
   fitPicture()
+}
+
+function buildPieces(scope: ScopeV2) {
+  const section = scope.doc.sections.find(s => s.id === 'build')
+  const rows = section ? [...document.getElementById(section.id)!.querySelectorAll('tbody tr')].map(row => {
+    const cells = [...row.querySelectorAll('td')]
+    return { label: cells[0]?.textContent?.trim() || '', estimate: cells.slice(1).map(cell => cell.textContent?.trim()).find(text => /\d.*(?:min|hour|m\b|h\b)/i.test(text || '')) || '' }
+  }).filter(piece => piece.label) : []
+  if (!rows.length && section) {
+    for (const match of section.body_md.matchAll(/\b[\w.-]+\[\s*["']?([^\]"']+)["']?\s*\]/g)) {
+      if (!rows.some(row => row.label === match[1])) rows.push({ label: match[1], estimate: '' })
+    }
+  }
+  for (const doc of scope.doc.sections) for (const source of buildFences(doc.body_md)) {
+    const { pieces, errors } = parseBuild(source)
+    if (errors.length) continue
+    if (!rows.length) rows.push(...pieces.map(piece => ({ label: piece.label, estimate: formatRange(piece.p50_min, piece.p90_min) })))
+    else for (const row of rows) {
+      const piece = pieces.find(piece => row.label === piece.label || row.label === piece.id)
+      if (piece && !row.estimate) row.estimate = formatRange(piece.p50_min, piece.p90_min)
+    }
+  }
+  return `<div class="overview-pieces">${rows.map(piece => `<span class="overview-piece">${esc(piece.label)}${piece.estimate ? `<small>${esc(piece.estimate)}</small>` : ''}</span>`).join('')}</div>`
 }

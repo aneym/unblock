@@ -637,7 +637,7 @@ function render() {
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
   document.title = scope.title; syncChrome(); renderOverview(scope, layout); highlight()
-  if (oneScreen(scope)) { const description = document.querySelector('.pc-description'); const recommendation = doc.querySelector('#overview .body p'); if (description) { description.replaceChildren(...(recommendation ? [...recommendation.cloneNode(true).childNodes] : []), document.createTextNode(` · revision ${scope.revision}`)) } }
+  if (oneScreen(scope)) { const description = document.querySelector('.pc-description'); const recommendation = doc.querySelector('#overview .body p'); if (description) { description.replaceChildren(...(recommendation ? [...recommendation.cloneNode(true).childNodes] : []), Object.assign(document.createElement('small'), { className: 'overview-revision', textContent: ` · revision ${scope.revision}` })) } }
   if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null && !composing) detachedPin = { id: pin.id, top: pinnedLayoutTop }
   syncFigureFocus(); renderCards(); renderFeed()
   const restoreReference = () => {

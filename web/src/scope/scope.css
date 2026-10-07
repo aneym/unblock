@@ -605,7 +605,8 @@ body.one-screen #page > .pc-bar, body.one-screen #talk, body.one-screen .open-ch
 body.one-screen #page > .pc-head { max-width: none; height: 64px; padding: 6px 20px; display: block; overflow: hidden; }
 body.one-screen .pc-head-row { display: flex; align-items: center; gap: 16px; }
 body.one-screen .pc-title { flex: 1; font-size: 21px; line-height: 26px; margin: 0; }
-body.one-screen .pc-description { margin: 3px 0 0; font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.one-screen .pc-description { margin: 3px 0 0; font-size: 16px; line-height: 22px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.one-screen .overview-revision { font-size: 12px; color: var(--muted); }
 body.one-screen .layout { max-width: none; height: calc(100dvh - 64px); padding: 0 20px; display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; grid-template-rows: 40px minmax(0, 1fr) 84px; gap: 0 20px; }
 body.one-screen .overview-chapters { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; overflow: auto; border-block: 1px solid var(--hairline); }
 .overview-chapters button { background: transparent; color: var(--muted); border: 0; border-radius: var(--radius-small); padding: 6px 10px; white-space: nowrap; }
@@ -625,7 +626,7 @@ body.one-screen .side { grid-column: 3; grid-row: 2; min-height: 0; padding: 0 0
 body.one-screen .side-head { position: sticky; top: 0; background: var(--ground); }
 body.one-screen .cards { display: flex; flex-direction: column; gap: 10px; }
 body.one-screen .cards > .card { position: relative; top: auto; width: 100%; }
-body.one-screen .overview-build { grid-column: 1 / -1; grid-row: 3; display: flex; align-items: center; overflow: auto; border-top: 1px solid var(--hairline); }
+body.one-screen .overview-build { grid-column: 1 / -1; grid-row: 3; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; overflow-x: auto; border-top: 1px solid var(--hairline); }
 body.one-screen .overview-build .build-strip { margin: 0; }
 @media (min-width: 900px) { body.one-screen { height: 100dvh; overflow: hidden; } }
 @media (max-width: 899px) {
@@ -638,4 +639,13 @@ body.one-screen .overview-build .build-strip { margin: 0; }
   body.one-screen .side { display: block; overflow: visible; }
   body.one-screen .overview-build { min-height: 84px; }
   body.one-screen #picture svg, body.one-screen #picture img { max-width: 100%; max-height: none; }
+}
+
+.overview-pieces { display: flex; gap: 8px; flex: 0 0 auto; }
+.overview-piece { display: inline-flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: var(--radius-small); background: var(--fill-1); white-space: nowrap; font-size: 13px; }
+.overview-piece small { color: var(--muted); }
+body.one-screen .overview-build .build-strip { white-space: nowrap; flex: 0 0 auto; }
+@media (max-width: 899px) {
+  body.one-screen .overview-chapters { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+  body.one-screen .side-head, body.one-screen .side-head .pc-comments { border: 0; box-shadow: none; }
 }

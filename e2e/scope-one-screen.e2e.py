@@ -33,9 +33,9 @@ fixture = {
     'title': {'heading': 'A scope you can decide in one screen', 'body_md': 'Ship a bounded overview.'},
     'overview': {'heading': 'Recommendation', 'body_md': 'Keep the outcome, picture and questions together.'},
     'context': {'heading': 'Context', 'body_md': 'The problem: long scopes hide the decision.\n\nExample: a plan takes three screens.\n\nNot in scope: changing the approval API.\n\nTerms: a chapter is supporting detail.'},
-    'picture': {'heading': 'The picture', 'body_md': '```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" viewBox="0 0 600 300"><rect x="20" y="60" width="240" height="180" rx="16" fill="#e8f2fe"/><text x="48" y="152" fill="#0066cc" font-size="24">Scope</text><path d="M280 150H340" stroke="#0071e3" stroke-width="3"/><rect x="360" y="60" width="220" height="180" rx="16" fill="#e8f2fe"/><text x="385" y="152" fill="#0066cc" font-size="24">Build</text></svg>\n```\nFigure: Decide once, then build.'},
+    'picture': {'heading': 'The picture', 'body_md': '```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" viewBox="0 0 600 300"><rect x="20" y="60" width="240" height="180" rx="16" class="core"/><text x="48" y="152" class="hd">Scope</text><path d="M280 150H340" class="wire ac"/><rect x="360" y="60" width="220" height="180" rx="16" class="core"/><text x="385" y="152" class="hd">Build</text></svg>\n```\nFigure: Decide once, then build.'},
     'details': {'heading': 'Implementation', 'body_md': 'This sentence stays anchored after reload.\n\n' + '\n\n'.join('Supporting detail paragraph %d.' % i for i in range(35))},
-    'delivery': {'heading': 'Delivery', 'body_md': 'The build runs after approval.\n\n```build\n' + json.dumps({'pieces': [{'id': 'overview', 'label': 'Overview', 'deps': [], 'p50_min': 5, 'p90_min': 10, 'runs_on': 'Studio'}]}) + '\n```'},
+    'build': {'heading': 'Build', 'body_md': '| Piece | Estimate |\n| --- | --- |\n| Overview | 5–10 min |\n\n```build\n' + json.dumps({'pieces': [{'id': 'overview', 'label': 'Overview', 'deps': [], 'p50_min': 5, 'p90_min': 10, 'runs_on': 'Studio'}]}) + '\n```'},
 }
 for section in fixture.values():
     section['updated_at'] = at
@@ -74,6 +74,13 @@ def run():
                         check(theme + ': viewport ' + selector, page.locator(selector).evaluate('(e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= innerHeight }'))
                     check(theme + ': figure readable scale', page.locator('#picture svg').evaluate('(e) => { const r = e.getBoundingClientRect(); return r.width >= 600 / 1.5 && r.height >= 300 / 1.5 }'))
                     check(theme + ': approval available', page.get_by_role('button', name='Approve scope', exact=True).is_visible())
+                    check(theme + ': picture tab label', page.locator('[data-chapter="picture"]').inner_text() == 'Picture')
+                    check(theme + ': build pieces', page.locator('.overview-piece').evaluate('(e) => e.textContent') == 'Overview5–10 min')
+                    check(theme + ': figure contrast', page.locator('#picture svg').evaluate("""(svg) => {
+                      const luminance = color => { const rgb = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4 }); return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 };
+                      const rects = [...svg.querySelectorAll('rect')];
+                      return [...svg.querySelectorAll('text')].every((text, i) => { const a = luminance(getComputedStyle(text).fill), b = luminance(getComputedStyle(rects[i]).fill); return (Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5 });
+                    }"""))
                     page.screenshot(path=str(OUT / f'scope-one-screen-{theme}.png'))
                     page.locator('[data-chapter="details"]').click()
                     check(theme + ': chapter anchored thread', page.locator('#details mark[data-t="T1"]').is_visible())
