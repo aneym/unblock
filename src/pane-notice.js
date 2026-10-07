@@ -116,5 +116,7 @@ export function remoteScopeHost(host) {
 export function scopePostCommand(bin, args, host) {
   if (!remoteScopeHost(host)) return { bin, args }
   const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'"
-  return { bin: 'ssh', args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', host, '"$HOME/.local/bin/lane-post" ' + args.map(quote).join(' ')] }
+  const bulletinHome = process.env.UNBLOCK_REMOTE_BULLETIN_HOME
+  const prefix = bulletinHome ? `env LANE_BULLETIN_HOME=${quote(bulletinHome)} ` : ''
+  return { bin: 'ssh', args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', host, prefix + '"$HOME/.local/bin/lane-post" ' + args.map(quote).join(' ')] }
 }
