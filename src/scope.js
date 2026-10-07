@@ -60,9 +60,14 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     return [...current.values()]
   }
 
-  function stampThread(slug, threadId, stamps) {
+  function currentNoteId(slug, threadId) {
+    return currentNewNotes(slug, [threadId]).find(note => note.stamps)?.id ?? null
+  }
+
+  // With a noteId the stamps are for that incarnation of the thread; if its id has since been reused they are dropped.
+  function stampThread(slug, threadId, stamps, noteId) {
     const note = currentNewNotes(slug, [threadId]).find(note => note.stamps)
-    if (note) {
+    if (note && (noteId === undefined || note.id === noteId)) {
       const stamped = store.mergeScopeNoteStamps(note.id, stamps)
       if (stamped) emit(slug, 'note', stamped)
     }
@@ -1483,7 +1488,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { scanningReads = false }
   }
 
-  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer, liveItems, stampThread })
+  answerer = createAnswerer({ readScope: (slug) => readScope(slug)?.scope ?? null, writeAnswer, liveItems, stampThread, noteOf: currentNoteId })
 
   readTimer = setInterval(() => { void scanBulletinReads() }, delay(process.env.UNBLOCK_SCOPE_POLL_MS, 1000))
   readTimer.unref()

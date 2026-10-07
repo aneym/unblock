@@ -118,7 +118,7 @@ function killGroup(child) {
   child.once('exit', () => clearTimeout(timer))
 }
 
-export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread = () => {}, log = console.error }) {
+export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread = () => {}, noteOf = () => undefined, log = console.error }) {
   const queue = []
   const running = new Set()
   const children = new Set()
@@ -243,7 +243,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread 
 
   // One model call: resolves with the parsed outcome when it settles; `gone` resolves when the child has exited.
   function ask(job, scope, thread, model, item) {
-    const firstText = () => { if (!job.texted) { job.texted = true; stampThread(job.slug, job.threadId, { answer_first_text_at: new Date().toISOString() }) } }
+    const firstText = () => { if (!job.texted) { job.texted = true; stampThread(job.slug, job.threadId, { answer_first_text_at: new Date().toISOString() }, job.noteId) } }
     const sources = Array.isArray(scope?.sources) ? scope.sources.filter((dir) => typeof dir === 'string') : []
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
     let closed
@@ -364,7 +364,9 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread 
   }
 
   function run(job) {
-    stampThread(job.slug, job.threadId, { answer_started_at: new Date().toISOString() })
+    // The thread's id can be reused after a delete: this run's stamps belong to the note it started on.
+    job.noteId = noteOf(job.slug, job.threadId)
+    stampThread(job.slug, job.threadId, { answer_started_at: new Date().toISOString() }, job.noteId)
     let scope = readScope(job.slug)
     let thread = scope?.threads?.find((item) => item.id === job.threadId)
     const pane = typeof scope?.pane === 'string' ? scope.pane : ''
