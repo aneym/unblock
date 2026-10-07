@@ -15,7 +15,8 @@
     "test": "node --test test/*.test.js",
     "web:dev": "vite web",
     "web:build": "vite build web",
-    "build:scope-bundle": "vite build web --mode scope-bundle"
+    "build:scope-bundle": "vite build web --mode scope-bundle",
+    "vendor:scope-bundle": "sh scripts/vendor-scope-bundle.sh"
   },
   "license": "MIT",
   "files": [
