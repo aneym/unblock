@@ -81,3 +81,23 @@ test('saved word terms survive edits; exemptions are section-counted and doc-onl
     assert.equal(stored().keep.length, 50)
   } finally { await h.close() }
 })
+
+test('removing a keep term from a legacy scope preserves its original bytes and initial revision', async () => {
+  const legacy = { slug: 'paper-kite', title: 'Paper kite', pane: '', updated_at: '2026-01-01T00:00:00Z',
+    lede: 'Fold the paper.', plan_md: 'Tie a string.', keep: ['paper'], questions: [], decisions: [], thread: [] }
+  const h = await startScopeHarness(legacy)
+  const dir = join(process.env.UNBLOCK_SCOPING_DIR, legacy.slug)
+  const original = readFileSync(join(dir, 'scope.json'), 'utf8')
+  try {
+    const result = await cli(h, 'keep', legacy.slug, '--remove', 'paper')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(readFileSync(join(dir, 'scope.v1.json'), 'utf8'), original)
+    const disk = JSON.parse(readFileSync(join(dir, 'scope.json'), 'utf8'))
+    assert.equal(disk.version, 2)
+    assert.deepEqual(disk.keep, [])
+    const revision = JSON.parse(readFileSync(join(dir, 'revisions', '1.json'), 'utf8'))
+    assert.equal(revision.revision, 1)
+    assert.equal(revision.at, legacy.updated_at)
+    assert.deepEqual(revision.sections, disk.doc.sections)
+  } finally { await h.close() }
+})

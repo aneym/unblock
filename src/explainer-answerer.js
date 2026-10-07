@@ -106,7 +106,10 @@ function postLine(scope, thread, outcome) {
   }
   let line = `${head()}${answer}${edited}${suffix}`
   if (line.length > 700) line = `${line.slice(0, 699)}…`
-  if (outcome.edit_stderr) line += `\nEdit stderr:\n${outcome.edit_stderr}`
+  if (outcome.edit_stderr) {
+    const stderr = String(outcome.edit_stderr)
+    line += `\nEdit stderr:\n${stderr.slice(0, 2000)}${stderr.length > 2000 ? '\n[stderr truncated]' : ''}`
+  }
   return { line, task }
 }
 
@@ -240,7 +243,7 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread 
         const reason = finding ? finding[1] === 'path' ? 'The edit used a file path the page rules refuse.' : `The edit used text the page rules refuse: ${finding[2]}.`
           : /unknown asset/.test(detail) ? 'The edit refers to an asset the page cannot find.'
           : /ERR_MODULE_NOT_FOUND/.test(detail) ? 'The edit tool is missing an installed module.'
-          : `The edit failed: ${why || 'the edit tool returned an error'}.`
+          : 'The edit tool failed; the lane has the details.'
         log(`unblock: scope responder edit failed slug=${slug} section=${edit.id} ${why}`)
         // The model's text already says the change was made, so the reply is replaced, not appended to; the lane gets the comment as a NEEDS_OWNER hand-off.
         resolve({ ...rest, text: reason, needs_owner: true, why: `section edit failed on §${edit.id}`, edit_stderr: detail })

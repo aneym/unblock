@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage a complete headless install, prove its CLI imports, then replace the
+# Stage a complete headless install, prove its entry points import, then replace the
 # supervised copy. A failed build or import leaves the old install untouched.
 set -euo pipefail
 
@@ -23,10 +23,18 @@ mkdir -p "$STAGE/src" "$STAGE/web"
 rsync -a "$SRC/src/" "$STAGE/src/"
 install -m 644 "$SRC/headless/secrets.js" "$STAGE/src/secrets.js"
 rsync -a "$SRC/plugin/" "$STAGE/plugin/"
+rsync -a "$SRC/hooks/" "$STAGE/hooks/"
 rsync -a "$SRC/bin/" "$STAGE/bin/"
 cp "$SRC/package.json" "$STAGE/package.json"
 (cd "$SRC" && npm run --silent web:build -- --outDir "$STAGE/web/dist" >/dev/null)
 node "$STAGE/bin/unblock.js" scope --help >/dev/null
+node --input-type=module - "$STAGE" <<'JS'
+import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
+for (const entry of ['src/daemon.js', 'src/scope.js', 'hooks/lib.js']) {
+  await import(pathToFileURL(join(process.argv[2], entry)).href)
+}
+JS
 if [ -e "$DEST" ]; then
   OLD="$(mktemp -d "$PARENT/.unblock-old.XXXXXX")"
   rmdir "$OLD"

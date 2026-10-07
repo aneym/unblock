@@ -1006,6 +1006,19 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
+  function persistScope(dir, scope, disk, raw) {
+    if (disk.version !== 2) {
+      let backup = join(dir, 'scope.v1.json'), n = 2
+      while (existsSync(backup)) backup = join(dir, `scope.v1-${n++}.json`)
+      writeFileSync(backup, raw)
+      mkdirSync(join(dir, 'revisions'), { recursive: true })
+      const original = migrateV1(disk, disk.updated_at)
+      writeFileSync(join(dir, 'revisions', '1.json'), JSON.stringify({ revision: 1, at: original.updated_at, sections: original.doc.sections }))
+    }
+    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+  }
+
   function changeScope(slug, { body, human, stamps, keepWrite, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }) {
     const dir = join(root, slug)
     let raw, disk
@@ -1016,8 +1029,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (keepWrite) {
       scope.keep = savedKeep.filter((term) => term.toLowerCase() !== body.remove.trim().toLowerCase())
       scope.updated_at = new Date().toISOString()
-      writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
-      renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+      persistScope(dir, scope, disk, raw)
       emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
       return { keep: scope.keep }
     }
@@ -1345,14 +1357,6 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     if (body.keep !== undefined) scope.keep = mergeKeep(scope.keep ?? [], body.keep)
     scope.updated_at = at
-    if (disk.version !== 2) {
-      let backup = join(dir, 'scope.v1.json'), n = 2
-      while (existsSync(backup)) backup = join(dir, `scope.v1-${n++}.json`)
-      writeFileSync(backup, raw)
-      mkdirSync(join(dir, 'revisions'), { recursive: true })
-      const original = migrateV1(disk, disk.updated_at)
-      writeFileSync(join(dir, 'revisions', '1.json'), JSON.stringify({ revision: 1, at: original.updated_at, sections: original.doc.sections }))
-    }
     if (docWrite) {
       mkdirSync(join(dir, 'revisions'), { recursive: true })
       writeFileSync(join(dir, 'revisions', `${scope.revision}.json`), JSON.stringify({ revision: scope.revision, at, sections: scope.doc.sections }))
@@ -1362,8 +1366,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         return !section || (t.anchor.embed ? !hasEmbedFence(section, t.anchor.embed.src) : !locateAnchor(sectionPlain(section), t.anchor))
       }).map((t) => t.id)
     }
-    writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
-    renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+    persistScope(dir, scope, disk, raw)
     if (!human && verb === 'reply') {
       stampThread(slug, thread.id, { answered_at: at })
       const to = [...thread.messages].reverse().find(message => message.from === 'alex')?.at
