@@ -1,4 +1,5 @@
 import './scope.css'
+import { renderContents } from './toc'
 import { oneScreen, renderOverview, showChapter, fitPicture } from './overview'
 import { placeCards } from './card-layout'
 import { demoSizes, payloadKey, pollWhileVisible, sizeGate } from './loop-guards'
@@ -636,7 +637,7 @@ function render() {
   sectionSignatures.clear(); for (const [id, value] of signatures) sectionSignatures.set(id, value)
   sectionContents.clear(); for (const s of scope.doc.sections) sectionContents.set(s.id, contentSignature(s))
   doc.querySelectorAll('mark.hl').forEach(mark => { const parent = mark.parentNode!; mark.replaceWith(...mark.childNodes); parent.normalize() })
-  document.title = scope.title; syncChrome(); renderOverview(scope, layout); highlight()
+  document.title = scope.title; syncChrome(); renderOverview(scope, layout); renderContents(scope, doc, oneScreen(scope)); highlight()
   if (oneScreen(scope)) { const description = document.querySelector('.pc-description'); const recommendation = doc.querySelector('#one-screen .body p'); if (description) { description.replaceChildren(...(recommendation ? [...recommendation.cloneNode(true).childNodes] : []), Object.assign(document.createElement('small'), { className: 'overview-revision', textContent: ` · revision ${scope.revision}` })) } }
   if (pin && pin.id && missing.has(pin.id) && pinnedLayoutTop != null && !composing) detachedPin = { id: pin.id, top: pinnedLayoutTop }
   syncFigureFocus(); renderCards(); renderFeed()

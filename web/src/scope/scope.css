@@ -650,3 +650,25 @@ body.one-screen .overview-build .build-strip { white-space: nowrap; flex: 0 0 au
   body.one-screen .overview-chapters { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
   body.one-screen .side-head, body.one-screen .side-head .pc-comments { border: 0; box-shadow: none; }
 }
+
+/* Scrollable scopes: one contents list, a disclosure on smaller surfaces. */
+.scope-toc { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--muted); }
+.toc-label { display: none; margin-bottom: 14px; }
+.scope-toc summary { cursor: pointer; padding: 20px 0 0; }
+.toc-list { padding-top: 14px; display: grid; gap: 6px; }
+.toc-list a { color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
+.toc-list a:hover, .toc-list a[aria-current] { color: var(--fg, var(--ink)); }
+.toc-list a[aria-current] { font-weight: 600; }
+.toc-dot { display: inline-block; width: 5px; height: 5px; margin-left: 7px; vertical-align: middle; border-radius: 50%; background: var(--accent); }
+@media (max-width: 1199px) {
+  .scope-toc { grid-column: 1 / -1; }
+  body.has-contents .layout { row-gap: 0; }
+}
+@media (min-width: 1200px) {
+  body.has-contents .layout { max-width: 1428px; grid-template-columns: 200px minmax(0, 720px) var(--side); gap: 32px; }
+  body.has-contents #page > .pc-head { max-width: 1428px; padding-left: 256px; column-gap: 32px; }
+  .scope-toc { position: sticky; top: 76px; align-self: start; margin-top: 44px; max-height: calc(100dvh - 100px); overflow-y: auto; }
+  .toc-label { display: block; }
+  .scope-toc summary { display: none; }
+  .scope-toc details > .toc-list { display: grid; padding-top: 0; }
+}
