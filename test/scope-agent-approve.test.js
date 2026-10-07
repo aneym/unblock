@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { validateScope } from '../src/scope-doc.js'
@@ -20,6 +20,23 @@ const sections = [
   { id: 'plan', heading: 'The plan', body_md: 'We build the page first.' },
 ]
 const scopeWith = (slug) => ({ version: 2, slug, title: 'Demo scope', pane: 'w5H:pT1', revision: 7, updated_at: at, doc: { sections }, threads: [] })
+
+// herdr and herdr-lane stubs: the scope's pane sits in a [scoping] tab; herdr-lane logs its arguments.
+function stubs() {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-approve-stubs-'))
+  const laneLog = join(dir, 'lane.log'), herdr = join(dir, 'herdr'), lane = join(dir, 'herdr-lane')
+  writeFileSync(herdr, `#!/bin/sh
+case "$1 $2" in
+  "pane get") echo '{"result":{"pane":{"pane_id":"w5H:pT1","tab_id":"w5H:tAB","agent_status":"idle"}}}' ;;
+  "tab get") echo '{"result":{"tab":{"tab_id":"w5H:tAB","label":"[scoping] demo scope"}}}' ;;
+esac
+`)
+  writeFileSync(lane, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${laneLog}'\n`)
+  chmodSync(herdr, 0o700); chmodSync(lane, 0o700)
+  process.env.HERDR_BIN_PATH = herdr
+  process.env.UNBLOCK_HERDR_LANE = lane
+  return { laneLines: () => { try { return readFileSync(laneLog, 'utf8') } catch { return '' } } }
+}
 
 function cliFor(h) {
   return (...args) => new Promise((resolve, reject) => {
@@ -33,6 +50,7 @@ function cliFor(h) {
 
 test('an agent records its own approval under a steer; readers count it, it never claims Alex', async () => {
   const h = await startScopeHarness(scopeWith('agentdemo'))
+  const s = stubs()
   const cli = cliFor(h)
   const get = async () => (await h.request('/api/scope/agentdemo', { headers: human })).json.scope
   const steer = join(mkdtempSync(join(tmpdir(), 'agent-approve-steer-')), 'speed-order.md')
@@ -66,6 +84,10 @@ test('an agent records its own approval under a steer; readers count it, it neve
     assert.match(md, /agent decision/)
     assert.ok(md.includes(steer) && md.includes(REASON) && md.includes('w5H:pT9'))
 
+    // The tab leaves SCOPING, and the lane history credits the agent pane, not Alex.
+    await h.until(() => s.laneLines().includes('section w5H:tAB inflight --by agent:w5H:pT9 --note scope approved r7'), 'the move credits the agent')
+    assert.doesNotMatch(s.laneLines(), /--by alex/)
+
     // 3. The banner says an agent decided, which pane, and the steer.
     const { approvalBannerHtml } = await import('../web/src/scope/approval-banner.js')
     const text = approvalBannerHtml(a).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
@@ -92,6 +114,6 @@ test('the schema never lets an agent record pass as Alex or skip its steer', () 
     { ...agent, approver: 'alex' },
     { ...agent, via: 'admin' },
     { ...agent, quote: 'ok' },
-    { ...agent, by: 'nate' },
+    { ...agent, by: 'other-user' },
   ]) assert.ok(validateScope({ ...scope, approval: broken }).includes('invalid approval'), JSON.stringify(broken))
 })

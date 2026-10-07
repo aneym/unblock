@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 import { promptPane, remoteScopeHost, scopePostCommand } from './pane-notice.js'
-import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
+import { appendApprovalIndex, approvedBy, moveTabToInflight } from './scope-approvals.js'
 import { lintDoc, lintText, mergeKeep, newFindings } from './scope-lint.js'
 import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
@@ -587,7 +587,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       writes.set(slug, pending)
       try {
         const result = await pending
-        if (action === 'pm-approve') res.once('finish', () => { void moveApprovedTab(slug, result.revision, true) })
+        if (action === 'pm-approve') res.once('finish', () => { void moveApprovedTab(slug, result.revision, true, approvedBy(result.approval)) })
         return sendJson(res, 200, result)
       } finally { if (writes.get(slug) === pending) writes.delete(slug) }
     }
@@ -713,7 +713,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     try {
       const result = await pending
       if (wait.length) await waitNotes(slug, wait)
-      if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision) })
+      if (approvalWrite && !result.duplicate && approved(result.approval)) res.once('finish', () => { void moveApprovedTab(slug, result.revision, false, approvedBy(result.approval)) })
       return sendJson(res, result.error === 'unslop' ? 422 : ((newThread || batchThread) && !result.duplicate) ? 201 : 200, result)
     } catch (error) {
       if (error.code === 'SECTION_CHANGED') return sendJson(res, 409, { error: error.message, code: error.code })
@@ -721,8 +721,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     } finally { if (writes.get(slug) === pending) writes.delete(slug) }
   }
 
-  async function moveApprovedTab(slug, revision, onlyFromScoping = false) {
-    await moveTabToInflight({ pane: readScope(slug)?.scope?.pane, revision, onlyFromScoping })
+  async function moveApprovedTab(slug, revision, onlyFromScoping = false, by = 'alex') {
+    await moveTabToInflight({ pane: readScope(slug)?.scope?.pane, revision, by, onlyFromScoping })
   }
 
   function approveScope(slug, scope, body, human) {
