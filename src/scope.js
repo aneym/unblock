@@ -48,8 +48,20 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
   let bulletinTail = Buffer.alloc(0)
   const bulletinReads = new Map()
 
+  // A deleted thread frees its id and the next comment can take it, so the note for an id is the newest 'new' one,
+  // and none once a delete follows it.
+  function currentNewNotes(slug, threadIds) {
+    const current = new Map()
+    for (const note of store.scopeNotes(slug)) {
+      if (!threadIds.includes(note.thread)) continue
+      if (note.event === 'new') current.set(note.thread, note)
+      else if (note.event === 'delete') current.delete(note.thread)
+    }
+    return [...current.values()]
+  }
+
   function stampThread(slug, threadId, stamps) {
-    const note = store.scopeNotes(slug).find(note => note.thread === threadId && note.event === 'new' && note.stamps)
+    const note = currentNewNotes(slug, [threadId]).find(note => note.stamps)
     if (note) {
       const stamped = store.mergeScopeNoteStamps(note.id, stamps)
       if (stamped) emit(slug, 'note', stamped)
@@ -463,8 +475,8 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       if (typeof body?.pushed_at !== 'string' || !Number.isFinite(Date.parse(body.pushed_at))) return sendJson(res, 400, { error: 'invalid pushed_at' })
       if (!Array.isArray(body.threads) || !body.threads.every(id => typeof id === 'string' && THREAD_ID.test(id))) return sendJson(res, 400, { error: 'invalid threads' })
       let stamped = 0
-      for (const note of store.scopeNotes(slug)) {
-        if (note.event !== 'new' || !body.threads.includes(note.thread) || !note.stamps?.answered_at || note.stamps.pushed_at) continue
+      for (const note of currentNewNotes(slug, body.threads)) {
+        if (!note.stamps?.answered_at || note.stamps.pushed_at) continue
         emit(slug, 'note', store.mergeScopeNoteStamps(note.id, { pushed_at: body.pushed_at }))
         stamped++
       }
