@@ -80,7 +80,7 @@ export function docFromMarkdown(md) {
   let fenced = false
   for (const line of String(md).split('\n')) {
     if (/^\s*```/.test(line)) fenced = !fenced
-    const title = !fenced && line.match(/^# (.+)$/)
+    const title = !fenced && line.match(/^# (.+?)(?:\s+\{#([^}]+)\})?\s*$/)
     const heading = !fenced && line.match(/^## (.+?)(?:\s+\{#([^}]+)\})?\s*$/)
     if (!sections.length) {
       if (heading) throw new Error('the doc needs a "# Title" first line')

@@ -30,7 +30,7 @@ def check(name, ok, detail=''):
 
 at = '2026-10-07T12:00:00.000Z'
 fixture = {
-    'title': {'heading': 'A scope you can decide in one screen', 'body_md': 'Ship a bounded overview.'},
+    'title': {'heading': 'A scope you can decide in one screen {#title}', 'body_md': 'Ship a bounded overview.'},
     'overview': {'heading': 'Recommendation', 'body_md': 'Keep the outcome, picture and questions together.'},
     'context': {'heading': 'Context', 'body_md': 'The problem: long scopes hide the decision.\n\nExample: a plan takes three screens.\n\nNot in scope: changing the approval API.\n\nTerms: a chapter is supporting detail.'},
     'picture': {'heading': 'The picture', 'body_md': '```svg\n<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" viewBox="0 0 600 300"><rect x="20" y="60" width="240" height="180" rx="16" class="core"/><text x="48" y="152" class="hd">Scope</text><path d="M280 150H340" class="wire ac"/><rect x="360" y="60" width="220" height="180" rx="16" class="core"/><text x="385" y="152" class="hd">Build</text></svg>\n```\nFigure: Decide once, then build.'},
@@ -85,6 +85,7 @@ def run():
                     page = browser.new_page(viewport={'width': 1280, 'height': 700}, color_scheme=theme)
                     page.goto(f'http://127.0.0.1:{PORT}/scope/demo')
                     page.wait_for_selector('.overview-chapters')
+                    check(theme + ': title hides legacy ID marker', page.locator('.pc-title').inner_text() == 'A scope you can decide in one screen')
                     check(theme + ': no page scroll', page.evaluate('document.scrollingElement.scrollHeight <= innerHeight'))
                     for selector in ('.pc-head', '#context', '#picture', '.side', '.overview-build'):
                         check(theme + ': viewport ' + selector, page.locator(selector).evaluate('(e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= innerHeight }'))
