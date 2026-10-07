@@ -3,7 +3,7 @@ import { buildStrip } from './build'
 import { buildFences, parseBuild, formatRange } from '../../../src/scope-build.js'
 import { esc } from './markdown'
 
-const fixed = new Set(['title', 'overview', 'context', 'picture'])
+const fixed = new Set(['title', 'one-screen', 'context', 'picture'])
 let chapter = 'picture'
 let current: ScopeV2 | null = null
 let redraw = () => {}
@@ -33,7 +33,8 @@ export function fitPicture() {
   media.style.width = `${size.width * scale}px`; media.style.height = `${size.height * scale}px`
 }
 
-export const oneScreen = (scope: ScopeV2 | null) => !!scope?.doc.sections.some(s => s.id === 'overview')
+// One-screen is opt-in only: a doc must name a section {#one-screen}. Scrollable with contents is the default (Alex, 2026-10-07).
+export const oneScreen = (scope: ScopeV2 | null) => !!scope?.doc.sections.some(s => s.id === 'one-screen')
 
 export function showChapter(id: string) {
   if (!oneScreen(current) || fixed.has(id) && id !== 'picture') return
