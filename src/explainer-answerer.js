@@ -235,7 +235,8 @@ export function createAnswerer({ readScope, writeAnswer, liveItems, stampThread 
         if (error.code === 6) return resolve({ ...rest, conflict: edit.id })
         const why = String(stderr || error.message).replace(/\s+/g, ' ').trim().slice(0, 160)
         log(`unblock: scope responder edit failed slug=${slug} section=${edit.id} ${why}`)
-        resolve({ ...rest, text: `${rest.text}\n\n(Couldn't edit §${edit.id}: ${why})`, needs_owner: true, why: rest.why || 'section edit failed' })
+        // The model's text already says the change was made, so the reply is replaced, not appended to; the lane gets the comment as a NEEDS_OWNER hand-off.
+        resolve({ ...rest, text: "I couldn't make this edit, so I've handed it to the lane.", needs_owner: true, why: rest.why || `section edit failed on §${edit.id}` })
       })
     })
   }
