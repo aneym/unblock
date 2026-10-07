@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync
 import { latencySince, scopeLatency } from '../src/scope-latency.js'
 import { IMAGE_LINE } from '../src/scope-assets.js'
 import { filerPid, laneIdentity } from '../src/origin-process.js'
-import { lintDoc } from '../src/scope-lint.js'
+import { lintDoc, mergeKeep, newFindings } from '../src/scope-lint.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
@@ -522,6 +522,7 @@ unblock scope kpi <slug> set --from <file.json>
 unblock scope kpi <slug> list [--json]
 unblock scope doc <slug> [--from <file.md|file.json>] [--keep "term" ...]
 unblock scope patch <slug> <id> --from <section.md> [--if-section-hash <h>] [--keep "term" ...]
+unblock scope keep <slug> --remove <term>
 unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
 unblock explain [list|url|notes|comments|doc|patch|lint|ask|reply|edit|resolve|reopen]
 unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off] [--answerer-model <alias>]
@@ -595,6 +596,12 @@ async function scope(args, mode = 'scope') {
   }
   if (args[0] === 'threads') fail(usage)
   if (args[0] === 'new') return scopeNew(args, usage, mode)
+  if (args[0] === 'keep') {
+    const { rest, opts } = flags(args, { '--remove': true })
+    if (rest.length !== 2 || !opts['--remove']) fail(usage)
+    const data = await request(`/api/scope/${encodeURIComponent(rest[1])}/keep`, { remove: opts['--remove'] }, { method: 'PUT' })
+    return output(data, `kept terms: ${data.keep.join(', ') || 'none'}`)
+  }
   if (args[0] === 'latency') {
     const { rest, opts } = flags(args, { '--since': true })
     const [, name, ...extra] = rest
@@ -857,6 +864,7 @@ async function scope(args, mode = 'scope') {
     } catch (error) { fail(error.message) }
     if (verb === 'lint') {
       let sections = Array.isArray(doc) ? doc : doc.sections
+      let stored = [], keep = opts['--keep'] ?? []
       try {
         const base = await daemon({ start: false }), token = authToken()
         const response = await fetch(`${base}/api/scope/${encodeURIComponent(name)}`, {
@@ -865,7 +873,8 @@ async function scope(args, mode = 'scope') {
         if (response.status !== 404) {
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           const { scope } = await response.json()
-          const stored = scope.doc.sections
+          stored = scope.doc.sections
+          keep = mergeKeep(scope.keep ?? [], keep)
           // Publishing turns local image refs into asset: refs, and image lines are never linted.
           const text = (md) => String(md).split('\n').filter((line) => !IMAGE_LINE.test(line)).join('\n')
           sections = sections.filter((section) => {
@@ -883,7 +892,8 @@ async function scope(args, mode = 'scope') {
         console.error('Factory word hints unavailable. Warning only; lint continues.')
       }
       // Word hints never change the existing lint result or approval behavior.
-      const result = lintDoc(sections, { keep: opts['--keep'] })
+      const result = lintDoc(sections, { keep })
+      result.findings = newFindings(result.findings, stored)
       lintOutput(result)
       return output(result, 'No unslop findings.')
     }

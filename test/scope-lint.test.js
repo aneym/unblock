@@ -61,6 +61,16 @@ test('lane writes are unslopped before they land; Alex is never checked', async 
       body: { sections: [v2.doc.sections[0], { id: 'plan', heading: 'The crucial plan', body_md: 'Words.' }] } })
     assert.equal(head.status, 422)
 
+    const work = mkdtempSync(join(tmpdir(), 'scope-lint-'))
+    const cli = (...args) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [join(import.meta.dirname, '..', 'bin', 'unblock.js'), ...args], { cwd: work, env: { ...process.env, UNBLOCK_PORT: String(h.port) } })
+      let stdout = '', stderr = ''
+      child.stdout.on('data', (c) => { stdout += c }); child.stderr.on('data', (c) => { stderr += c })
+      child.on('error', reject); child.on('close', (status) => resolve({ status, stdout, stderr }))
+    })
+    writeFileSync(join(work, 'doc.md'), '# Demo scope\n\nA small page.\n\n## The plan {#plan}\n\nWe ship the page first. Vector leads.\n')
+    assert.equal((await cli('scope', 'lint', 'demo', '--from', join(work, 'doc.md'))).status, 2, 'vector is jargon unless kept')
+
     // 3. keep lets a lane keep a named term it needs (a product name), only that term.
     const kept = await put('Vector is the name of the product.', { keep: ['Vector'] })
     assert.equal(kept.status, 200, kept.text)
@@ -96,13 +106,6 @@ test('lane writes are unslopped before they land; Alex is never checked', async 
 
     // 7. The CLI shows the findings before publishing, exits 2, and says to run /unslop; --keep passes a term;
     //    `scope lint` checks a file without publishing.
-    const work = mkdtempSync(join(tmpdir(), 'scope-lint-'))
-    const cli = (...args) => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [join(import.meta.dirname, '..', 'bin', 'unblock.js'), ...args], { cwd: work, env: { ...process.env, UNBLOCK_PORT: String(h.port) } })
-      let stdout = '', stderr = ''
-      child.stdout.on('data', (c) => { stdout += c }); child.stderr.on('data', (c) => { stderr += c })
-      child.on('error', reject); child.on('close', (status) => resolve({ status, stdout, stderr }))
-    })
     writeFileSync(join(work, 'doc.md'), '# Demo scope\n\nA small page.\n\n## The plan {#plan}\n\nWe ship the page first. Vector leads — it is pivotal.\n')
     const before = (await request('/api/scope/demo', { headers: human })).json.scope.revision
     const refused = await cli('scope', 'doc', 'demo', '--from', join(work, 'doc.md'))
@@ -117,9 +120,17 @@ test('lane writes are unslopped before they land; Alex is never checked', async 
     assert.match(lint.stderr + lint.stdout, /pivotal/)
     assert.equal((await request('/api/scope/demo', { headers: human })).json.scope.revision, before, 'lint never publishes')
     writeFileSync(join(work, 'doc.md'), '# Demo scope\n\nA small page.\n\n## The plan {#plan}\n\nWe ship the page first. Vector leads.\n')
-    assert.equal((await cli('scope', 'lint', 'demo', '--from', join(work, 'doc.md'))).status, 2, 'vector is jargon unless kept')
+    assert.equal((await cli('scope', 'lint', 'demo', '--from', join(work, 'doc.md'))).status, 0, 'saved Vector is kept without another flag')
     const pass = await cli('scope', 'doc', 'demo', '--from', join(work, 'doc.md'), '--keep', 'Vector')
     assert.equal(pass.status, 0, pass.stderr)
+    writeFileSync(join(work, 'doc.md'), '# Demo scope\n\nA small page.\n\n## The plan {#plan}\n\nWe ship the page first. Vector leads the next step.\n')
+    const saved = await cli('scope', 'doc', 'demo', '--from', join(work, 'doc.md'))
+    assert.equal(saved.status, 0, saved.stderr)
+    assert.equal((await cli('scope', 'lint', 'demo', '--from', join(work, 'doc.md'))).status, 0)
+    writeFileSync(join(work, 'doc.md'), '# Demo scope\n\nA small page.\n\n## The plan {#plan}\n\nWe ship the page first. Vector leads the paradigm.\n')
+    const newJargon = await cli('scope', 'doc', 'demo', '--from', join(work, 'doc.md'))
+    assert.equal(newJargon.status, 2)
+    assert.match(newJargon.stderr, /jargon: "paradigm"/)
     const bash = await cli('scope', 'ask', 'demo', '--section', 'plan', '--quote', 'We ship the page first', '--rec', 'Page first', 'Should we leverage it?')
     assert.equal(bash.status, 2)
     assert.match(bash.stderr, /leverage/)

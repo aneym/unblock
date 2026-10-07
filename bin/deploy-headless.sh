@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Install this checkout into the directory the supervised daemon runs from,
-# then restart it through the CLI and prove the new process answers.
-#
-# launchd cannot read /Volumes, so on Studio the daemon runs from a copy under
-# $HOME: the `root` in ~/.config/unblock/config.json. Under launchd there are no
-# keychain calls, so that copy's src/secrets.js is the file-backed
-# headless/secrets.js from this checkout, not src/secrets.js.
+# Stage a complete headless install, prove its CLI imports, then replace the
+# supervised copy. A failed build or import leaves the old install untouched.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,15 +10,29 @@ if [ -z "$DEST" ] || [ "$DEST" = "$SRC" ]; then
   exit 1
 fi
 
-(cd "$SRC" && npm run --silent web:build >/dev/null)
-# The store goes in first and is swapped in whole, so src/ is never without one.
-mkdir -p "${DEST:?}/src"
-install -m 644 "$SRC/headless/secrets.js" "${DEST:?}/src/.secrets.js.new"
-mv -f "${DEST:?}/src/.secrets.js.new" "${DEST:?}/src/secrets.js"
-rsync -a --delete --exclude secrets.js "$SRC/src/" "${DEST:?}/src/"
-rsync -a --delete "$SRC/web/dist/" "${DEST:?}/web/dist/"
-rsync -a "$SRC/bin/" "${DEST:?}/bin/"
-cp "$SRC/package.json" "${DEST:?}/package.json"
+PARENT="$(dirname "$DEST")"
+mkdir -p "$PARENT"
+STAGE="$(mktemp -d "$PARENT/.unblock-stage.XXXXXX")"
+OLD=""
+cleanup() {
+  if [ -n "$OLD" ] && [ -d "$OLD" ] && [ ! -e "$DEST" ]; then mv "$OLD" "$DEST"; fi
+  if [ -d "$STAGE" ]; then rm -rf "${STAGE:?}"; fi
+}
+trap cleanup EXIT
+mkdir -p "$STAGE/src" "$STAGE/web"
+rsync -a "$SRC/src/" "$STAGE/src/"
+install -m 644 "$SRC/headless/secrets.js" "$STAGE/src/secrets.js"
+rsync -a "$SRC/plugin/" "$STAGE/plugin/"
+rsync -a "$SRC/bin/" "$STAGE/bin/"
+cp "$SRC/package.json" "$STAGE/package.json"
+(cd "$SRC" && npm run --silent web:build -- --outDir "$STAGE/web/dist" >/dev/null)
+node "$STAGE/bin/unblock.js" scope --help >/dev/null
+if [ -e "$DEST" ]; then
+  OLD="$(mktemp -d "$PARENT/.unblock-old.XXXXXX")"
+  rmdir "$OLD"
+  mv "$DEST" "$OLD"
+fi
+mv "$STAGE" "$DEST"
+if [ -n "$OLD" ]; then rm -rf "${OLD:?}"; OLD=""; fi
 echo "installed $SRC -> $DEST"
-
 node "$SRC/bin/unblock.js" daemon restart

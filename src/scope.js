@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { promptPane, remoteScopeHost, scopePostCommand } from './pane-notice.js'
 import { appendApprovalIndex, moveTabToInflight } from './scope-approvals.js'
-import { lintDoc, lintText } from './scope-lint.js'
+import { lintDoc, lintText, mergeKeep, newFindings } from './scope-lint.js'
 import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
 import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
@@ -628,6 +628,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const appWrite = req.method === 'PUT' && parts.length === 2 && action === 'app'
     const answererWrite = req.method === 'PUT' && parts.length === 2 && action === 'answerer'
+    const keepWrite = req.method === 'PUT' && parts.length === 2 && action === 'keep'
     const kpiWrite = req.method === 'PUT' && parts.length === 2 && action === 'kpis'
     const approvalWrite = req.method === 'POST' && parts.length === 2 && action === 'approve'
     const publishWrite = req.method === 'POST' && parts.length === 2 && action === 'publish'
@@ -638,7 +639,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const newThread = req.method === 'POST' && parts.length === 2 && action === 'threads'
     const batchThread = req.method === 'POST' && parts.length === 3 && action === 'threads' && threadId === 'batch'
     const threadWrite = req.method === 'POST' && parts.length === 4 && action === 'threads' && THREAD_ID.test(threadId) && ['reply', 'resolve', 'reject', 'park', 'edit', 'react', 'reopen', 'unsay', 'delete'].includes(verb)
-    if (!appWrite && !answererWrite && !kpiWrite && !approvalWrite && !publishWrite && !destinationWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
+    if (!keepWrite && !appWrite && !answererWrite && !kpiWrite && !approvalWrite && !publishWrite && !destinationWrite && !shipWrite && !docWrite && !newThread && !batchThread && !threadWrite) return sendJson(res, 404, { error: 'not found' })
     const relay = relayIdentity(req)
     const human = proxyIdentity(req) || relay
     if (batchThread && human) return sendJson(res, 403, { error: 'lanes ask through the CLI' })
@@ -671,6 +672,10 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     if (['reject', 'park'].includes(verb) && !relay) requireHumanPath(req)
     if (appWrite && !APPS.includes(body?.app)) return sendJson(res, 400, { error: 'invalid app' })
     if (answererWrite && (!body || typeof body !== 'object' || Object.keys(body).some((key) => key !== 'model') || (body.model !== null && (typeof body.model !== 'string' || !MODEL_ALIAS.test(body.model))))) return sendJson(res, 400, { error: 'invalid answerer model' })
+    if (body && typeof body === 'object') {
+      if (keepWrite && (Object.keys(body).some((key) => key !== 'remove') || typeof body.remove !== 'string' || !/\p{L}/u.test(body.remove))) return sendJson(res, 400, { error: 'invalid keep removal' })
+      if (Array.isArray(body.keep) && body.keep.some((term) => typeof term !== 'string' || !/\p{L}/u.test(term))) return sendJson(res, 400, { error: 'keep terms must contain a letter' })
+    }
     if (kpiWrite) {
       const normalized = normalizeKpis(body?.kpis)
       if (normalized.error) return sendJson(res, 400, { error: normalized.error })
@@ -697,7 +702,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     }
     const previous = writes.get(slug) ?? Promise.resolve()
     const wait = []
-    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }))
+    const pending = previous.catch(() => {}).then(() => changeScope(slug, { body, human, stamps, keepWrite, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }))
     writes.set(slug, pending)
     try {
       const result = await pending
@@ -1001,11 +1006,21 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
 
   function bad(message, status = 400) { const error = new Error(message); error.status = status; throw error }
 
-  function changeScope(slug, { body, human, stamps, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }) {
+  function changeScope(slug, { body, human, stamps, keepWrite, appWrite, answererWrite, kpiWrite, approvalWrite, publishWrite, destinationWrite, shipWrite, docWrite, sectionWrite, newThread, batchThread, threadId, verb, wait }) {
     const dir = join(root, slug)
     let raw, disk
     try { raw = readFileSync(join(dir, 'scope.json')); disk = JSON.parse(raw) } catch { bad('scope.json is being rewritten') }
     const scope = disk.version === 2 ? disk : migrateV1(disk, disk.updated_at)
+    const savedKeep = mergeKeep(scope.keep ?? [], body.keep ?? [])
+    if (savedKeep.length > 50) bad('keep is limited to 50 terms per scope')
+    if (keepWrite) {
+      scope.keep = savedKeep.filter((term) => term.toLowerCase() !== body.remove.trim().toLowerCase())
+      scope.updated_at = new Date().toISOString()
+      writeFileSync(join(dir, 'scope.json.tmp'), JSON.stringify(scope, null, 2))
+      renameSync(join(dir, 'scope.json.tmp'), join(dir, 'scope.json'))
+      emit(slug, 'scope', { ...readScope(slug), notes: scopeNotes(slug) })
+      return { keep: scope.keep }
+    }
     if (appWrite) {
       scope.app = body.app
       const problems = validateScope(scope)
@@ -1308,7 +1323,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const problems = validateScope(scope)
     if (problems.length) bad(problems[0])
     if (!human && !['react', 'unsay'].includes(verb)) {
-      const { keep = [] } = body
+      const keep = mergeKeep(scope.keep ?? [], body.keep ?? [])
       const changed = docWrite ? body.sections.filter((section) => {
         const stored = storedSections.find((old) => old.id === section.id)
         return !stored || stored.heading !== section.heading || stored.body_md !== section.body_md
@@ -1324,9 +1339,11 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
       }
       if (batchThread) body.questions.forEach((question, index) => lintSource(question, `questions[${index}]`))
       else if (!docWrite) lintSource(body, '')
+      if (docWrite) lint.findings = newFindings(lint.findings, storedSections)
       if (lint.findings.length) return { error: 'unslop', findings: lint.findings }
       if (docWrite) result.warnings = lint.warnings
     }
+    if (body.keep !== undefined) scope.keep = mergeKeep(scope.keep ?? [], body.keep)
     scope.updated_at = at
     if (disk.version !== 2) {
       let backup = join(dir, 'scope.v1.json'), n = 2

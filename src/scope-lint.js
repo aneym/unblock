@@ -73,3 +73,29 @@ export function lintDoc(sections, { keep = [] } = {}) {
   }
   return { findings, warnings }
 }
+
+// Keep the first spelling while treating repeated terms as the same name.
+export function mergeKeep(...lists) {
+  const terms = new Map()
+  for (const term of lists.flat()) {
+    const text = term.trim()
+    if (text && !terms.has(text.toLowerCase())) terms.set(text.toLowerCase(), text)
+  }
+  return [...terms.values()]
+}
+
+// Retain only the stored number of each match in its own section.
+export function newFindings(findings, sections) {
+  const key = (finding) => JSON.stringify([finding.section, finding.rule, finding.match.replace(/\s+/g, ' ').toLowerCase()])
+  const counts = new Map()
+  for (const finding of lintDoc(sections).findings) {
+    const id = key(finding)
+    counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  return findings.filter((finding) => {
+    const id = key(finding), remaining = counts.get(id) ?? 0
+    if (!remaining) return true
+    counts.set(id, remaining - 1)
+    return false
+  })
+}
