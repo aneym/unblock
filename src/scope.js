@@ -187,7 +187,45 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const laneNotes = notes.filter(note => note.event === 'lane_note')
         const approvalNotes = notes.filter((note) => APPROVAL_MODES.includes(note.event))
         const shipNotes = notes.filter(note => note.event === 'ship' || note.event === 'publish')
-        const comments = notes.filter(note => !['lane_note', 'ship', 'publish'].includes(note.event) && !APPROVAL_MODES.includes(note.event))
+        let comments = notes.filter(note => !['lane_note', 'ship', 'publish'].includes(note.event) && !APPROVAL_MODES.includes(note.event))
+        // Reconcile durable posts before building the remaining batch. A transport
+        // error must retry, never post blind into a remote pane.
+        let postedRows = []
+        try {
+          if (remoteScopeHost(scope?.host)) {
+            const since = notes.reduce((oldest, note) => note.at < oldest ? note.at : oldest, new Date().toISOString())
+            const command = scopePostCommand('lane-post', ['list', '--to', pane, '--since', since, '--json'], scope.host)
+            postedRows = await new Promise((resolve, reject) => {
+              execFile(command.bin, command.args, { timeout: 20_000, encoding: 'utf8' }, (error, stdout) => {
+                if (error) return reject(error)
+                try {
+                  const rows = JSON.parse(stdout)
+                  if (!Array.isArray(rows)) throw new Error('invalid bulletin list')
+                  resolve(rows)
+                } catch (error) { reject(error) }
+              })
+            })
+          } else if (process.env.UNBLOCK_LANE_POST_BIN || process.env.UNBLOCK_SUPERVISED === '1') {
+            const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin.jsonl')
+            let text = ''
+            try { text = readFileSync(file, 'utf8') } catch (error) { if (error.code !== 'ENOENT') throw error }
+            postedRows = text.split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+          }
+          postedRows = postedRows.filter(row => typeof row.id === 'string' && (row.to === pane || (Array.isArray(row.to) && row.to.includes(pane))))
+          const prefix = `scope:${slug}:notes:`
+          comments = comments.filter(note => {
+            const posted = postedRows.find(row => typeof row.ref === 'string' && row.ref.startsWith(prefix) && row.ref.slice(prefix.length).split(',').includes(String(note.id)))
+            if (!posted) return true
+            emitNotes(store.markScopeNotes([note.id], 'delivered', new Date().toISOString(), { bulletin: posted.id, pane }))
+            return false
+          })
+        } catch {
+          emitNotes(store.markScopeNotes(notes.map(note => note.id), 'retrying'))
+          await new Promise(resolve => { job.wake = resolve; job.timer = setTimeout(resolve, delay(process.env.UNBLOCK_SCOPE_RETRY_MS, 5000)) })
+          job.wake = null
+          job.timer = null
+          continue
+        }
         const imagePaths = note => (note.images ?? []).map(path => ` [image: ${path}]`).join('')
         const parts = comments.map((note) => {
           const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
@@ -236,7 +274,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           try {
             if (useLanePost) {
               if (ref) {
-                const posted = remote ? null : bulletinWithRef(ref, targetPane)
+                const posted = postedRows.find(row => row.ref === ref && (row.to === targetPane || (Array.isArray(row.to) && row.to.includes(targetPane))))
                 if (posted) {
                   console.error(`unblock: lane-post skipped slug=${slug} pane=${targetPane} ref=${ref} bulletin=${posted.id} (already posted)`)
                   mark('delivered', { bulletin: posted.id, pane: targetPane })
@@ -245,13 +283,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
                   return
                 }
               }
-              const args = ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', kind, '--topic', `scope-${slug}`, '--wake', wake]
+              const args = ['post', '--to', targetPane, '--from', `scope:${slug}`, '--kind', kind, '--topic', options.topic ?? `scope-${slug}`, '--wake', wake]
               if (ref) args.push('--ref', ref)
               args.push('--text', text)
               const bulletin = await new Promise((resolve, reject) => {
                 const command = scopePostCommand(lanePost || 'lane-post', args, scope?.host)
                 execFile(command.bin, command.args, { timeout: 20_000, encoding: 'utf8' }, (error, stdout, stderr) => {
-                  const id = String(stdout ?? '').match(/\bb-\d{14}-[0-9a-f]{4}\b/)?.[0] ?? null
+                  const id = String(stdout ?? '').match(/\bb-\d{14}-[0-9a-f]{4,32}\b/)?.[0] ?? null
                   const exit = error ? typeof error.code === 'number' ? error.code : error.killed ? 'timeout' : 'error' : 0
                   const errText = String(stderr ?? '').replace(/\r\n|\r|\n/g, ' ').trim().slice(0, 80)
                   const noteText = String(text ?? '').replace(/\r\n|\r|\n/g, ' ').slice(0, 80)
@@ -283,13 +321,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           // A note already held is not re-marked on every pause tick, so the page isn't redrawn each time.
           const ids = comments.filter((note) => status !== 'held' || note.delivery !== 'held').map((note) => note.id)
           emitNotes(store.markScopeNotes(ids, status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
-        }, quiet ? { kind: 'info', wake: 'never' } : {})
+        }, { ...(quiet ? { kind: 'info', wake: 'never' } : {}), ref: `scope:${slug}:notes:${comments.map(note => note.id).join(',')}`, topic: `scope-${slug}-n${comments[0].id}` })
         for (const note of laneNotes) {
           let line = `[scoping ${slug}] Note from Alex's voice call (not a comment): ${compact(note.text)}`
           if (line.length > 700) line = `${cutUnits(line, 699)}…`
           await send(`lane:${note.id}`, pane, line, (status, extra) => {
             if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
-          })
+          }, { ref: `scope:${slug}:lane:n${note.id}`, topic: `scope-${slug}-n${note.id}` })
         }
         // Approval prompts remain separate, even when other feedback is waiting on the pane.
         if (!held && !retry) for (const note of approvalNotes) {
@@ -312,7 +350,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           const ref = note.event === 'not_yet' ? `scope:${slug}:not_yet:n${note.id}` : `scope:${slug}:${note.event}:r${approval.revision}`
           await send(`approval:${note.id}`, pane, line, (status, extra) => {
             if (status !== 'held' || note.delivery !== 'held') emitNotes(store.markScopeNotes([note.id], status, status === 'delivered' ? new Date().toISOString() : null, status === 'delivered' ? extra ?? {} : {}))
-          }, { kind: late ? 'info' : 'task', wake: late ? 'never' : 'auto', ref })
+          }, { kind: late ? 'info' : 'task', wake: late ? 'never' : 'auto', ref, topic: `scope-${slug}-n${note.id}` })
           if (held || retry) break
         }
         if (!held && !retry) for (const note of shipNotes) {
@@ -1432,21 +1470,6 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
     const text = data.subarray(0, end).toString('utf8')
     bulletinTail = data.subarray(end + 1)
     for (const line of text.split('\n')) takeBulletinLine(line)
-  }
-
-  function bulletinWithRef(ref, pane) {
-    const file = join(process.env.LANE_BULLETIN_HOME || join(homedir(), '.agent-rails', 'lanes'), 'bulletin.jsonl')
-    let text
-    try { text = readFileSync(file, 'utf8') } catch { return null }
-    for (const line of text.split('\n')) {
-      if (!line) continue
-      let row
-      try { row = JSON.parse(line) } catch { continue }
-      if (!row || row.ref !== ref || typeof row.id !== 'string') continue
-      const to = row.to
-      if (to === pane || (Array.isArray(to) && to.includes(pane))) return row
-    }
-    return null
   }
 
   async function scanBulletinReads() {
