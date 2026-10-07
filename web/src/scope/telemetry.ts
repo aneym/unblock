@@ -25,7 +25,10 @@ export function resourceKind(entry: { name?: unknown; initiatorType?: unknown })
     origin = url.origin === location.origin ? 'self' : 'cross'
     const path = url.pathname, ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase()
     if (origin === 'self' && (path.startsWith('/w/api/') || path.startsWith('/api/'))) kind = 'api'
-    else kind = INITIATOR_KINDS[String(entry.initiatorType)] || (ext && EXT_KINDS[ext]) || 'other'
+    else {
+      const init = String(entry.initiatorType)
+      kind = (Object.hasOwn(INITIATOR_KINDS, init) && INITIATOR_KINDS[init]) || (ext && Object.hasOwn(EXT_KINDS, ext) && EXT_KINDS[ext]) || 'other'
+    }
   } catch {}
   return { kind, origin }
 }
@@ -73,6 +76,7 @@ export function startTelemetry(opts: { url: string; mode: Mode }): { docRendered
       if (document.visibilityState === 'visible') { if (visibleSince === null) visibleSince = t }
       else if (visibleSince !== null) { visibleTotal += t - visibleSince; visibleSince = null }
       lastTick = t // time spent hidden is never a freeze, in either direction
+      lastVisible = document.visibilityState === 'visible'
     } catch {}
   })
 
@@ -98,7 +102,8 @@ export function startTelemetry(opts: { url: string; mode: Mode }): { docRendered
     if (entry.duration <= 200) return
     const a = entry.attribution?.[0]
     // entry.name says whose task it was (self, same-origin-descendant, cross-origin-ancestor, ...).
-    const attr = [entry.name, a?.containerType, a?.containerName, a?.name].filter(Boolean).join('/').slice(0, 80)
+    // containerName is a frame's own name attribute (any text), so it never leaves the page.
+    const attr = [entry.name, a?.containerType, a?.name].filter(Boolean).join('/').slice(0, 80)
     longtasks.add({ at: ms(entry.startTime), dur: ms(entry.duration), attr })
   })
   observe('resource', {}, entry => {

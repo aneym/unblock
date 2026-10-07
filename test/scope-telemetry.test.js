@@ -103,6 +103,22 @@ test('a self long task and a cross-origin-ancestor long task are told apart', ()
   assert.notEqual(first.attr, second.attr)
 }))
 
+test('a frame name in long-task attribution never reaches the report', () => withTelemetry(null, async b => {
+  b.entries('longtask', [
+    { name: 'same-origin-descendant', startTime: 100, duration: 500, attribution: [{ containerType: 'iframe', containerName: '/patients/Alice-Smith/private-scope', name: 'unknown' }] },
+  ])
+  const raw = JSON.stringify(await b.report())
+  assert.ok(!raw.includes('Alice') && !raw.includes('patients'), raw)
+}))
+
+test('a URL ending in an Object property name still gets a kind from the fixed set', () => withTelemetry(null, async b => {
+  b.entries('resource', [
+    { name: 'https://scope.example/x/y.constructor', initiatorType: 'toString', startTime: 10, duration: 5000, encodedBodySize: 1 },
+  ])
+  const [first] = (await b.report()).slow_fetches.top
+  assert.equal(first.kind, 'other')
+}))
+
 test('time spent hidden is not a freeze, but a long stall while visible still is', () => withTelemetry(null, async b => {
   b.now = 1250; b.tick()
   b.now = 1500; b.hide(true)
