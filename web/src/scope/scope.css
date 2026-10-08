@@ -472,16 +472,16 @@ dialog.lightbox { border: 0; padding: 24px; background: var(--raised); color: va
 
 /* Document tables and semantic blocks (2026-10-02, Alex: "these tables in general ... are a bit hard to read").
    Type and hairlines only: no outer box, no vertical rules, no stripes. */
-.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap { min-width: 0; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .doc table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 14px; line-height: 1.5; }
-.doc th, .doc td { padding: 9px 14px 9px 0; text-align: left; vertical-align: top; border: 0; border-bottom: 1px solid var(--line); overflow-wrap: normal; word-break: normal; }
+.doc th, .doc td { padding: 9px 14px 9px 0; text-align: left; vertical-align: top; border: 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; word-break: normal; white-space: normal; }
 .doc th:last-child, .doc td:last-child { padding-right: 0; }
-.doc thead th { padding-top: 0; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--tx2); white-space: nowrap; }
-.doc tbody td:first-child { font-weight: 500; white-space: nowrap; }
+.doc thead th { padding-top: 0; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--tx2); }
+.doc tbody td:first-child { font-weight: 500; }
 .doc tbody tr:last-child td { border-bottom: 0; }
 .doc td { font-variant-numeric: tabular-nums; }
 .doc td code, .doc dd code, .doc .detail code { font-size: 12.5px; background: none; padding: 0; color: var(--tx); overflow-wrap: break-word; }
-@media (max-width: 599px) { .doc table { width: auto; min-width: 100%; } .doc td { min-width: 11rem; } .doc tbody td:first-child { min-width: 0; } }
+.doc th code, .doc td code { overflow-wrap: anywhere; }
 
 .sr-sep { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .lbl { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--tx2); }
