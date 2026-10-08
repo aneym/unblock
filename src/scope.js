@@ -8,9 +8,9 @@ import { appendApprovalIndex, approvedBy, moveTabToInflight } from './scope-appr
 import { lintDoc, lintText, mergeKeep, newFindings } from './scope-lint.js'
 import { buildDocError, buildFences } from './scope-build.js'
 import { ASSET_ID, readAsset, readAssetBody, assetLimit, storeAsset, serveAsset, docAssets } from './scope-assets.js'
-import { normalizeAnchor, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
+import { normalizeAnchor, rectLabel, quoteSnippet, locateAnchor, hasEmbedFence } from './scope-anchor.js'
 import { kindOf as registeredKindOf, kindSpec as registeredKindSpec } from './doc-kinds.js'
-import { migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, sectionHash, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
+import { slidesOf, migrateV1, validateScope, normalizeKpis, sectionPlain, anchorInSection, headingOf, sectionHash, nextThreadId, THREAD_ID, SECTION_ID, APPS, appOf, DOC_WHERES, MODEL_ALIAS } from './scope-doc.js'
 import { createAnswerer } from './explainer-answerer.js'
 import { createLiveItems, MAX_TEXT } from './live-items.js'
 import { handleScopeTelemetry } from './scope-telemetry.js'
@@ -226,12 +226,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
           job.timer = null
           continue
         }
-        const imagePaths = note => (note.images ?? []).map(path => ` [image: ${path}]`).join('')
+        const imagePaths = note => (note.images ?? []).map(path => ` [image: ${path}]`).join('') + (note.anchor?.crop ? ` [crop: ${join(root, slug, 'assets', note.anchor.crop)}]` : '')
         const parts = comments.map((note) => {
           const alex = note.via === 'voice' ? 'Alex (by voice)' : note.via === 'admin' ? 'Alex (in Admin)' : 'Alex'
           const heading = headingFor(note.anchor?.section ?? 'title')
           const quote = quoteSnippet(note.anchor?.quote ?? '')
           const text = compact(note.text)
+          if (note.event === 'new' && note.anchor?.rect) return `${alex} on slide §${heading} [region ${rectLabel(note.anchor.rect)}]: ${text} (new ${note.thread})`
           if (note.event === 'new') return note.anchor.section === 'title'
             ? `${alex} (general): ${text} (new ${note.thread})`
             : `${alex} on §${heading} "${quote}": ${text} (new ${note.thread})`
@@ -1242,6 +1243,13 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         const anchor = normalizeAnchor(body.anchor)
         if (!anchor || !SECTION_ID.test(anchor.section)) bad('invalid anchor')
         const section = scope.doc.sections.find((s) => s.id === anchor.section)
+        if (anchor.rect) {
+          if (!slidesOf(scope).some(s => s.id === anchor.section)) bad('region comments need a slide')
+          anchor.quote = section.heading
+          anchor.prefix = ''
+          anchor.suffix = ''
+          if (anchor.crop && readAsset(join(dir, 'assets'), anchor.crop)?.metadata.type !== 'image') bad('invalid crop')
+        }
         // A stored embed always names a demo fence in its section; with the fence gone the quote stays on the section.
         if (anchor.embed && !(section && hasEmbedFence(section, anchor.embed.src))) delete anchor.embed
         if (body.recommendation !== undefined || body.why !== undefined) bad('invalid kind')
@@ -1273,6 +1281,7 @@ export function createScopeRoutes({ store, webRoot, sendJson, sendText, readJson
         if (body.emoji === null) delete thread.reaction
         else thread.reaction = { emoji: '👀', by: 'agent', at }
       } else if (verb === 'edit') {
+        if (thread.anchor.rect && (body.section !== undefined || body.quote !== undefined)) bad('a region comment stays on its slide')
         if (body.section === undefined && body.quote === undefined && body.options === undefined && body.text === undefined) bad('edit needs section and quote, options or text')
         if (body.text !== undefined) {
           if (thread.messages[0].from === 'alex') bad("only the lane's own question can be reworded")

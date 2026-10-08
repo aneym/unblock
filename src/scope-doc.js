@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
-import { KIND_IDS } from './doc-kinds.js'
+import { KIND_IDS, kindOf } from './doc-kinds.js'
 import { locateAnchor, makeAnchor, normalizeAnchor, plainText, hasEmbedFence } from './scope-anchor.js'
 
 /** Scope hosts are SSH aliases, never options, user names or shell fragments. */
@@ -56,10 +56,19 @@ export function anchorInSection(section, quote) {
 export function sectionHash(section) { return createHash('sha256').update(JSON.stringify([section.heading ?? '', section.body_md ?? ''])).digest('hex').slice(0, 16) }
 export function headingOf(scope, id) { return scope.doc.sections.find((s) => s.id === id)?.heading ?? id }
 export function nextThreadId(scope) { return `T${Math.max(0, ...scope.threads.map((t) => Number(t.id.slice(1)))) + 1}` }
+/** Image-only sections in visual docs, in document order. */
+export function slidesOf(scope) {
+  if (kindOf(scope) !== 'visual') return []
+  return scope.doc.sections.filter(s => s.id !== 'title').flatMap(s => {
+    const match = s.body_md.trim().match(/^!\[[^\]\n]*\]\(asset:([0-9a-f]{16}\.(?:png|jpg|webp|gif))\)$/)
+    return match ? [{ id: s.id, title: s.heading, image: match[1] }] : []
+  })
+}
 export function orderThreads(scope) {
   const position = (thread) => {
     if (thread.anchor.general) return [-1, -1]
     const index = scope.doc.sections.findIndex((s) => s.id === thread.anchor.section)
+    if (thread.anchor.rect) return [index, Math.round(thread.anchor.rect.y * 1000) * 1000 + Math.round(thread.anchor.rect.x * 1000)]
     if (thread.anchor.embed) return index >= 0 && hasEmbedFence(scope.doc.sections[index], thread.anchor.embed.src) ? [index, scope.doc.sections[index].body_md.indexOf(thread.anchor.embed.src)] : [Infinity, Infinity]
     const found = index < 0 ? null : locateAnchor(sectionPlain(scope.doc.sections[index]), thread.anchor)
     return found ? [index, found.start] : [Infinity, Infinity]
@@ -261,7 +270,7 @@ export function validateScope(scope) {
     if (!object(thread)) { problems.push('invalid comment'); continue }
     check(typeof thread.id === 'string' && THREAD_ID.test(thread.id) && !ids.has(thread.id), 'invalid or duplicate comment id')
     ids.add(thread.id)
-    check(typeof thread.anchor?.section === 'string' && SECTION_ID.test(thread.anchor.section) && !!normalizeAnchor(thread.anchor), 'invalid comment anchor')
+    check(typeof thread.anchor?.section === 'string' && SECTION_ID.test(thread.anchor.section) && !!normalizeAnchor(thread.anchor) && (thread.anchor?.rect === undefined || kindOf(scope) === 'visual'), 'invalid comment anchor')
     check(['question', 'comment'].includes(thread.kind), 'invalid comment kind')
     check(['open', 'resolved', 'parked'].includes(thread.status), 'invalid comment status')
     check(['alex', 'agent'].includes(thread.author), 'invalid comment author')

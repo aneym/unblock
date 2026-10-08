@@ -12,6 +12,8 @@
 export type AnchorSection = string
 
 export interface Anchor {
+  rect?: { x: number; y: number; w: number; h: number }
+  crop?: string
   section: AnchorSection
   /** The quoted text, whitespace collapsed to single spaces, trimmed, 1..300 chars. */
   quote: string
@@ -78,3 +80,5 @@ export function hasEmbedFence(section: { body_md: string }, src: string): boolea
 
 /** Exact embed quote with at least one retained context edge when supplied. */
 export function locateEmbed(text: string, anchor: { quote: string; prefix?: string; suffix?: string }): { start: number; end: number; exact: boolean } | null
+
+export function rectLabel(rect: { x: number; y: number; w: number; h: number }): string

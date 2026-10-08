@@ -16,6 +16,7 @@ export const DOC_KINDS = Object.freeze({
   explainer: { label: 'Explainers', margin: 'Ask',     approve: false, resolve: false, qa: true,  answerer: true  },
   review:    { label: 'Reviews',    margin: 'Comment', approve: false, resolve: true,  qa: false, answerer: false },
   draft:     { label: 'Drafts',     margin: 'Comment', approve: false, resolve: true,  qa: false, answerer: false },
+  visual: { label: 'Visual review', margin: 'Comment', approve: false, resolve: true, qa: false, answerer: false },
   report:    { label: 'Reports',    margin: 'Comment', approve: false, resolve: true,  qa: false, answerer: false },
 })
 

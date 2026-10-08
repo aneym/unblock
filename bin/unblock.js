@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { dirname, extname, join, resolve, resolve as resolvePath } from 'node:path'
+import { basename, dirname, extname, join, resolve, resolve as resolvePath } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
+import { readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, unlinkSync, existsSync, renameSync, statSync } from 'node:fs'
 import { latencySince, scopeLatency } from '../src/scope-latency.js'
 import { IMAGE_LINE } from '../src/scope-assets.js'
 import { filerPid, laneIdentity } from '../src/origin-process.js'
@@ -14,9 +14,9 @@ import { lintDoc, mergeKeep, newFindings } from '../src/scope-lint.js'
 
 import { daemon, authToken, stateDir } from '../plugin/paths.js'
 import { SecretStore } from '../src/secrets.js'
-import { quoteSnippet } from '../src/scope-anchor.js'
+import { rectLabel, quoteSnippet } from '../src/scope-anchor.js'
 import { kindOf } from '../src/doc-kinds.js'
-import { docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES, MODEL_ALIAS } from '../src/scope-doc.js'
+import { SECTION_ID, slidesOf, docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES, MODEL_ALIAS } from '../src/scope-doc.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -500,9 +500,10 @@ async function scopeLinks(health, slug) {
   return { url, studio_url }
 }
 
-const SCOPE_USAGE = `unblock scope [list|url|notes|comments]           scoping docs and anchored comments
+const SCOPE_USAGE = `unblock scope slides <slug> --from <dir|slides.json> [--keep "term" ...]
+unblock scope [list|url|notes|comments]           scoping docs and anchored comments
 unblock scope latency <slug> [--since <ISO|30m|2h|1d>] [--json]
-unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|writing|report] [--parent <slug>] [--sources <dir>...] [--answerer on|off]
+unblock scope new <slug> --pane <pane> [--app recruiter|closer|rails-admin] [--title "text"] [--kind scope|explainer|review|draft|writing|report|visual] [--parent <slug>] [--sources <dir>...] [--answerer on|off]
 unblock scope ask <slug> --section <id> --quote "text" [--rec "text"] [--why "text"] [--option "text" ...] <question...>
 unblock scope ask <slug> --from <questions.json> [--keep "term" ...]
 unblock scope reply <slug> [T#] [--rec "text"] [--why "text"] [--option "text" ...] <text...>
@@ -528,6 +529,9 @@ unblock scope lint <slug> --from <file.md|file.json> [--keep "term" ...]
 unblock explain [list|url|notes|comments|doc|patch|lint|ask|reply|edit|resolve|reopen]
 unblock explain new <slug> --pane <pane> [--title "text"] --sources <dir> [<dir>...] [--answerer on|off] [--answerer-model <alias>]
 unblock explain answerer <slug> --model <alias> | --clear    the margin answerer's model, a family alias resolved by \`route resolve\` per answer`
+
+const scopingRoot = () => process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
+const cropPath = (slug, id) => join(scopingRoot(), slug, 'assets', id)
 
 function scopeNew(args, usage, mode = 'scope') {
   const slugRe = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -571,7 +575,7 @@ function scopeNew(args, usage, mode = 'scope') {
   })
   if (resolved.length > 8) fail(usage)
   if (kind === 'explainer' && !resolved.length) fail(usage)
-  const root = process.env.UNBLOCK_SCOPING_DIR || join(homedir(), '.agent-rails', 'scoping')
+  const root = scopingRoot()
   const dir = join(root, slug)
   const path = join(dir, 'scope.json')
   if (existsSync(path)) fail(`${path} exists`, 4)
@@ -855,7 +859,47 @@ async function scope(args, mode = 'scope') {
     const links = await scopeLinks(health, name)
     return output(links, links.url)
   }
-  if (opts['--keep'] && !['doc', 'lint'].includes(verb)) fail(usage)
+  if (opts['--keep'] && !['doc', 'lint', 'slides'].includes(verb)) fail(usage)
+  if (verb === 'slides') {
+    if (!opts['--from'] || opts['--since'] || opts['--open']) fail(usage)
+    const { scope: stored } = await request(`/api/scope/${encodeURIComponent(name)}`)
+    if (kindOf(stored) !== 'visual') fail('scope slides needs a visual doc: unblock scope new <slug> --kind visual')
+    const from = resolve(opts['--from'])
+    let slides
+    try {
+      if (statSync(from).isDirectory()) {
+        const files = readdirSync(from).filter(f => /\.(png|jpe?g|webp|gif)$/i.test(f) && statSync(join(from, f)).isFile()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+        if (!files.length) fail(`no images in ${from}`)
+        slides = files.map((file, i) => {
+          const stem = basename(file, extname(file)).replace(/^\d+[\s._-]*/, '').replace(/[_-]+/g, ' ').trim()
+          return { id: `slide-${i + 1}`, title: stem ? stem[0].toUpperCase() + stem.slice(1) : `Slide ${i + 1}`, image: join(from, file) }
+        })
+      } else {
+        const raw = JSON.parse(readFileSync(from, 'utf8'))
+        slides = Array.isArray(raw) ? raw : raw.slides
+        if (Array.isArray(slides)) slides = slides.map((slide, i) => ({ ...slide, id: slide.id ?? `slide-${i + 1}`, image: typeof slide.image === 'string' && !slide.image.startsWith('asset:') ? resolve(dirname(from), slide.image) : slide.image }))
+      }
+      if (!Array.isArray(slides) || slides.length < 1 || slides.length > 200) fail('expected 1..200 slides')
+      const ids = new Set()
+      for (const slide of slides) {
+        if (typeof slide.id !== 'string' || !SECTION_ID.test(slide.id) || slide.id === 'title' || ids.has(slide.id)) fail('invalid or duplicate slide id')
+        ids.add(slide.id)
+        if (typeof slide.title !== 'string' || !slide.title.trim() || slide.title.length > 200 || typeof slide.image !== 'string' || !slide.image) fail('invalid slide')
+        if (slide.image.startsWith('asset:') && (!/^asset:[0-9a-f]{16}\.(png|jpg|webp|gif)$/.test(slide.image) || !stored.doc.assets?.[slide.image.slice(6)])) fail('invalid slide asset')
+      }
+      const sections = []
+      for (const slide of slides) {
+        const id = slide.image.startsWith('asset:') ? slide.image.slice(6) : (await uploadScopeAsset(name, readFileSync(slide.image), assetMime(slide.image))).id
+        sections.push({ id: slide.id, heading: slide.title, body_md: `![${slide.title.replace(/[\[\]\r\n]/g, ' ')}](asset:${id})` })
+      }
+      const oldSlides = new Set(slidesOf(stored).map(s => s.id))
+      const extras = stored.doc.sections.filter(s => s.id !== 'title' && !oldSlides.has(s.id))
+      if (extras.some(s => ids.has(s.id))) fail('slide id conflicts with a non-slide section')
+      const data = await request(`/api/scope/${encodeURIComponent(name)}/doc`, { sections: [stored.doc.sections.find(s => s.id === 'title'), ...sections, ...extras], ...(opts['--keep'] ? { keep: opts['--keep'] } : {}) }, { method: 'PUT' })
+      lintOutput(data)
+      return output({ revision: data.revision, slides: slides.length, detached: data.detached }, `revision ${data.revision}, ${slides.length} slides${data.detached.length ? `\ndetached: ${data.detached.join(', ')}` : ''}`)
+    } catch (error) { fail(error.message, 1) }
+  }
   if (verb === 'doc' || verb === 'lint') {
     if (opts['--since'] || opts['--open']) fail(usage)
     if (verb === 'lint' && !opts['--from']) fail(usage)
@@ -912,8 +956,8 @@ async function scope(args, mode = 'scope') {
   if (verb === 'comments') {
     if (opts['--from'] || opts['--since']) fail(usage)
     const { scope } = await request(`/api/scope/${encodeURIComponent(name)}`)
-    const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open')
-    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} "${quoteSnippet(t.anchor.quote)}": ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && t.resolution.how === 'own' && t.resolution.alex_words?.includes('?') ? ` (his answer is a question: unblock scope reopen ${name} ${t.id}, then answer)` : t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
+    const threads = orderThreads(scope).filter((t) => !opts['--open'] || t.status === 'open').map(t => t.anchor.crop ? { ...t, crop_path: cropPath(name, t.anchor.crop) } : t)
+    return output({ threads }, threads.map((t) => `${t.id} ${t.status} ${t.kind} §${headingOf(scope, t.anchor.section)} ${t.anchor.rect ? `${t.anchor.section} [region ${rectLabel(t.anchor.rect)}]${t.crop_path ? ` [crop: ${t.crop_path}]` : ''}` : `"${quoteSnippet(t.anchor.quote)}"`}: ${t.messages[0].text}${t.recommendation ? ` [rec: ${t.recommendation}]` : ''}${t.options ? ` [options: ${t.options.join(' | ')}]` : ''}${t.status === 'resolved' ? ` → ${t.resolution.decision}${t.resolution.by === 'alex' && t.resolution.how === 'own' && t.resolution.alex_words?.includes('?') ? ` (his answer is a question: unblock scope reopen ${name} ${t.id}, then answer)` : t.resolution.by === 'alex' && !t.resolution.confirmed_at ? ' (unconfirmed)' : ''}` : ''}`).join('\n'))
   }
   if (verb === 'notes') {
     if (opts['--open']) fail(usage)
@@ -923,7 +967,7 @@ async function scope(args, mode = 'scope') {
     if (opts['--since'] !== undefined) query.set('since', opts['--since'])
     if (opts['--from']) query.set('from', opts['--from'])
     const data = await request(`/api/scope/${encodeURIComponent(name)}/notes?${query}`)
-    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''} ${note.thread ?? ''} ${note.event ?? ''} ${note.text}${(note.images ?? []).map(path => `\n  ${path}`).join('')}`).join('\n'))
+    return output(data, data.notes.map((note) => `#${note.id} ${note.at} ${note.from}${note.via === 'voice' ? ' (voice)' : ''} ${note.thread ?? ''} ${note.event ?? ''} ${note.text}${(note.images ?? []).map(path => `\n  ${path}`).join('')}${note.anchor?.crop ? `\n  crop: ${cropPath(name, note.anchor.crop)}` : ''}`).join('\n'))
   }
   fail(usage)
 }

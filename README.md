@@ -396,3 +396,5 @@ Alex’s scoping comments can carry pictures; the lane gets a local path per ima
 
 `reopen` lets Alex or the Admin relay reopen a resolved or parked comment without changing the doc revision.
 `delete` lets Alex or the Admin relay delete a note Alex started and notifies the lane.
+
+Visual review docs (`unblock scope new <slug> --pane <pane> --kind visual`) show full slide images with area comments and the existing comment sidebar. Import a numbered image directory or a JSON slide manifest with `unblock scope slides <slug> --from <dir|slides.json>`; drag over a slide to mark an area (on touch screens, tap “Mark an area” first). Region comments preserve their slide coordinates and, when available, a cropped image for the lane to inspect.

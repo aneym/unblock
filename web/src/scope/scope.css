@@ -673,3 +673,23 @@ body.one-screen .overview-build .build-strip { white-space: nowrap; flex: 0 0 au
   .scope-toc summary { display: none; }
   .scope-toc details > .toc-list { display: grid; padding-top: 0; }
 }
+
+/* Visual review: full slides and quiet, spatial comment highlights. */
+body.visual .layout { max-width: 1600px; grid-template-columns: minmax(0, 1fr) var(--side); }
+body.visual .doc { max-width: none; }
+.slide h2 { font: 600 15px/1.3 var(--font-system); color: var(--tx2); }
+.slide-n { color: var(--tx); margin-right: 6px; }
+.slide-stage { position: relative; line-height: 0; border-radius: var(--radius-small); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-1); cursor: crosshair; user-select: none; }
+.slide-stage img { width: 100%; height: auto; display: block; pointer-events: none; }
+mark.hl.region { position: absolute; padding: 0; border-radius: 4px; background: var(--hl-c); outline: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); cursor: pointer; }
+mark.hl.region.on { background: var(--hl-c-on); outline: 2px solid var(--accent); }
+mark.hl.region::after { content: attr(data-t); position: absolute; left: -1.5px; top: 0; transform: translateY(-100%); font: 600 11px/1.6 var(--font-system); padding: 0 6px; border-radius: 6px 6px 0 0; background: var(--raised); color: var(--tx); box-shadow: var(--shadow-1); }
+.region-draft { position: absolute; border-radius: 4px; outline: 2px dashed var(--accent); background: var(--hl-c); pointer-events: none; }
+.card.flash { animation: card-flash .9s ease-out; }
+@keyframes card-flash { 0%, 30% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); } }
+.region-thumb img { height: 64px; width: auto; }
+mark.hl.region.resolved { display: none; }
+body.show-resolved mark.hl.region.resolved, mark.hl.region.resolved.unread { display: block; }
+.thumbs .region-thumb { width: auto; height: 64px; aspect-ratio: auto; }
+.thumbs .region-thumb img { width: auto; height: 64px; object-fit: contain; }
+@media (max-width: 899px) { body.visual .layout { grid-template-columns: minmax(0, 1fr); } }

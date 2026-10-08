@@ -1,3 +1,4 @@
+export const assetUrl = (id: string, base: string) => esc(`${base}/${encodeURIComponent(id)}`)
 import DOMPurify from 'dompurify'
 import { parseMediaFence } from '../../../src/scope-media.js'
 import './tabs.ts'
@@ -91,7 +92,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
   const fence = () => { const lang = lines[i++].slice(3).trim(); const body: string[] = []; while (i < lines.length && !/^```/.test(lines[i])) body.push(lines[i++]); i++; return { lang, source: body.join('\n') } }
   const caption = () => /^Figure:\s*/.test(lines[i] || '') ? `<figcaption>${inline(lines[i++].replace(/^Figure:\s*/, ''))}</figcaption>` : ''
   const imageLine = (line: string) => line?.match(/^\s*!\[[^\]\n]*\]\([^\n]*\)\s*$/)
-  const assetUrl = (id: string) => esc(`${assetBase}/${encodeURIComponent(id)}`)
+  const url = (id: string) => assetUrl(id, assetBase)
   const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
   while (i < lines.length) {
     const line = lines[i]
@@ -108,7 +109,7 @@ export function markdown(source: string, assets: Record<string, DocAsset> = {}, 
         const frame = asset.type === 'mock' ? asset.frame === 'phone' ? 'phone' : 'desktop' : title === 'phone' ? 'phone' : 'image'
         const src = asset.type === 'mock' ? asset.light : id
         count++
-        shots.push(`<button type="button" class="shot" data-asset="${esc(id)}" data-frame="${frame}" aria-label="Zoom: ${esc(alt)}"><picture>${asset.type === 'mock' && asset.dark ? `<source media="(prefers-color-scheme: dark)" srcset="${assetUrl(asset.dark)}">` : ''}<img src="${assetUrl(src)}"${asset.width && asset.height ? ` width="${asset.width}" height="${asset.height}"` : ''} alt="${esc(alt)}" loading="lazy" decoding="async"></picture><span class="shot-n">${count}</span></button>`)
+        shots.push(`<button type="button" class="shot" data-asset="${esc(id)}" data-frame="${frame}" aria-label="Zoom: ${esc(alt)}"><picture>${asset.type === 'mock' && asset.dark ? `<source media="(prefers-color-scheme: dark)" srcset="${url(asset.dark)}">` : ''}<img src="${url(src)}"${asset.width && asset.height ? ` width="${asset.width}" height="${asset.height}"` : ''} alt="${esc(alt)}" loading="lazy" decoding="async"></picture><span class="shot-n">${count}</span></button>`)
       }
       const cap = caption()
       const row = shots.map(shot => count > 1 ? shot : shot.replace(/<span class="shot-n">\d+<\/span>/, '')).join('')

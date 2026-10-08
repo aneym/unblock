@@ -53,7 +53,7 @@ export function rootFor(anchor: Anchor): HTMLElement | null {
   return anchor.section.startsWith('q:') ? document.querySelector(`#q-${CSS.escape(anchor.section.slice(2))} .q-body`) : document.getElementById(anchor.section)
 }
 export function rangeFromAnchor(anchor: Anchor): { range: Range; exact: boolean } | null {
-  if (anchor.embed) return null
+  if (anchor.embed || anchor.rect) return null
   const root = rootFor(anchor)
   if (!root) return null
   const { text, map } = sectionText(root), found = locateAnchor(text, anchor)

@@ -113,7 +113,7 @@ export interface ScopeApproval {
   client_id?: string
 }
 
-export type DocKind = 'scope' | 'explainer' | 'review' | 'draft' | 'writing' | 'report'
+export type DocKind = 'scope' | 'explainer' | 'review' | 'draft' | 'writing' | 'report' | 'visual'
 export type DocWhere = 'published' | 'sent' | 'posted' | 'submitted'
 
 export interface DocVersion {
@@ -128,7 +128,7 @@ export interface DocVersion {
   client_id?: string
 }
 
-export const DOC_KINDS: ['scope', 'explainer', 'review', 'draft', 'report', 'writing']
+export const DOC_KINDS: ['scope', 'explainer', 'review', 'draft', 'report', 'visual', 'writing']
 export const DOC_WHERES: ['published', 'sent', 'posted', 'submitted']
 
 export interface ScopeV2 {
@@ -212,3 +212,6 @@ export function docFromMarkdown(md: string): { sections: DocSection[] }
 
 /** Export the current document as markdown, retaining stable section ids. */
 export function docToMarkdown(doc: { sections: DocSection[] }): string
+
+export interface Slide { id: string; title: string; image: string }
+export function slidesOf(scope: ScopeV2): Slide[]

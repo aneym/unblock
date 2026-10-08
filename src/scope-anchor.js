@@ -41,7 +41,21 @@ export function normalizeAnchor(input) {
     const region = cleanRegion(input.region)
     if (region) anchor.region = region
   }
+  if (input.rect !== undefined) {
+    const rect = cleanRegion(input.rect)
+    if (!rect) return null
+    anchor.rect = rect
+  }
+  if (input.crop !== undefined) {
+    if (!anchor.rect || typeof input.crop !== 'string' || !/^[0-9a-f]{16}\.png$/.test(input.crop)) return null
+    anchor.crop = input.crop
+  }
+  if (anchor.rect && anchor.embed) return null
   return anchor
+}
+
+export function rectLabel(rect) {
+  return ['x', 'y', 'w', 'h'].map(key => `${key}=${Math.round(rect[key] * 100)}%`).join(' ')
 }
 
 export function makeAnchor(section, text, start, end) {

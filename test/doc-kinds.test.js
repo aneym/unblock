@@ -23,7 +23,8 @@ const sections = [
 const doc = (slug, extra = {}) => ({ version: 2, slug, title: 'A doc', pane: 'w5H:pQA', revision: 1, updated_at: at, doc: { sections }, threads: [], ...extra })
 
 test('the registry names the five kinds, and an unknown or missing kind reads as scope', () => {
-  assert.deepEqual([...KIND_IDS].sort(), ['draft', 'explainer', 'report', 'review', 'scope'])
+  // Alex (2026-10-08): visual review is a sixth kind.
+  assert.deepEqual([...KIND_IDS].sort(), ['draft', 'explainer', 'report', 'review', 'scope', 'visual'])
   assert.equal(kindOf({ kind: 'review' }), 'review')
   assert.equal(kindOf({}), 'scope')
   assert.equal(kindOf({ kind: 'memo' }), 'scope')
