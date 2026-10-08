@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs'
 import { entries, eligible, fileFirst, UNKNOWN_PURPOSE, log, origin, plainify, project, readEntry, redact, register, remove, request, watcher, cut } from './lib.js'
-import { ALLOW, bypassAllows } from './bypass-allow.js'
+import { ALLOW, bypassAllows, uncheckedNestedRm } from './bypass-allow.js'
+
+const RM_IN_SHELL = /\b(?:shell|sh|bash)\s+-c\s+script\s+runs\s+rm\s+and\s+could\s+not\s+be\s+checked\b/i
+const RULE_12 = 'Rule 12: delete by absolute path in its own command (rm -rf "${T:?}" with T absolute, or python shutil.rmtree); write probes to a script file and run bash <file>; never put rm inside a multi-line sh -c.'
 
 const timer = setTimeout(() => process.exit(0), 3800)
 try {
   const input = JSON.parse(readFileSync(0, 'utf8'))
-  if (bypassAllows(input)) {
+  const reasons = [input.reason, input.permissionDecisionReason, input.classifier?.reason]
+  if (input.tool_name === 'Bash' && (reasons.some((reason) => typeof reason === 'string' && RM_IN_SHELL.test(reason)) || uncheckedNestedRm(input))) {
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: RULE_12 } } }) + '\n')
+  } else if (bypassAllows(input)) {
     process.stdout.write(ALLOW + '\n')
     log(`bypass allow ${process.env.HERDR_PANE_ID || '-'} ${input.agent_id ? 'subagent ' : ''}${cut(redact(String(input.tool_input.command)), 80)}`)
   } else if (eligible(input) && input.tool_name) {

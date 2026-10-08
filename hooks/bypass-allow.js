@@ -317,6 +317,26 @@ function writes(segs) {
   return found
 }
 
+// The same unplaced-delete rejection as allows(), narrowed to rm in a shell -c script.
+export function uncheckedNestedRm(input) {
+  if (input?.tool_name !== 'Bash') return false
+  const command = String(input?.tool_input?.command ?? '')
+  const segs = parse(command)
+  if (!segs) return false
+  return segs.some((seg) => {
+    const words = seg.filter((w) => !w.redirect)
+    let k = 0
+    while (k < words.length && (/^[A-Za-z_]\w*=/.test(words[k].raw) || PREFIXES.has(strip(words[k].raw)))) k++
+    if (!['shell', 'sh', 'bash'].includes(strip(words[k]?.raw ?? '').split('/').at(-1))) return false
+    const option = words.findIndex((w, i) => i > k && /^-[a-z]*c[a-z]*$/.test(strip(w.raw)))
+    if (option < 0) return false
+    const script = strip(words[option + 1]?.raw ?? '')
+    const nestedRm = /(?:^|[\s\/;&|()`'"$=])rm(?=$|[\s;&|()`'"])/.test(script)
+    const lexical = (strip(command).match(DELETE) ?? []).length
+    return nestedRm && lexical > deletes(segs).filter((d) => !d.dynamic).length
+  })
+}
+
 /** True when this PermissionRequest should be answered "allow" without a human. */
 export function bypassAllows(input) {
   if (input?.permission_mode !== 'bypassPermissions' || input?.tool_name !== 'Bash') return false

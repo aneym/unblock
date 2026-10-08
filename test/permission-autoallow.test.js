@@ -16,13 +16,15 @@ const env = { ...process.env, UNBLOCK_STATE_DIR: state, UNBLOCK_CONFIG_DIR: join
 delete env.HERDR_PANE_ID
 const UNBLOCK = '/Volumes/StudioExt/repos/personal/unblock'
 const EXPECTED = '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+const RULE_12 = 'Rule 12: delete by absolute path in its own command (rm -rf "${T:?}" with T absolute, or python shutil.rmtree); write probes to a script file and run bash <file>; never put rm inside a multi-line sh -c.'
+const DENIED = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: RULE_12 } } })
 
 // The real hook boundary: stdin JSON in, exactly the decision JSON (or nothing) out.
 function allowed(command, extra = {}) {
   const input = { permission_mode: 'bypassPermissions', tool_name: 'Bash', tool_input: { command }, cwd: state, ...extra }
   const out = spawnSync(process.execPath, ['hooks/claude-permission.js'], { input: JSON.stringify(input), env, encoding: 'utf8' })
   assert.equal(out.status, 0)
-  assert.ok(out.stdout === '' || out.stdout === EXPECTED + '\n', `unexpected stdout: ${out.stdout}`)
+  assert.ok(out.stdout === '' || out.stdout === EXPECTED + '\n' || out.stdout === DENIED + '\n', `unexpected stdout: ${out.stdout}`)
   return out.stdout === EXPECTED + '\n'
 }
 
@@ -95,6 +97,26 @@ test('bindings set earlier in the line are substituted, and brace expansions ask
     'R=$(git rev-parse --show-toplevel); ls $R/x', 'R=$(git rev-parse --show-toplevel); cat $R/README.md']) {
     assert.equal(allowed(c), true, c)
   }
+})
+
+test('unchecked shell-script deletes deny before bypass and subagent eligibility', () => {
+  const run = (extra) => {
+    const input = { permission_mode: 'bypassPermissions', tool_name: 'Bash', tool_input: { command: 'echo safe' }, cwd: state, ...extra }
+    const out = spawnSync(process.execPath, ['hooks/claude-permission.js'], { input: JSON.stringify(input), env, encoding: 'utf8' })
+    assert.equal(out.status, 0)
+    return out.stdout
+  }
+  for (const agent of [{}, { agent_id: 'test-agent' }]) {
+    for (const reason of [
+      { reason: 'shell -c script runs rm and could not be checked' },
+      { permissionDecisionReason: 'SH  -c\t script runs\nrm and could not be checked' },
+      { classifier: { reason: 'BASH -c script runs rm and could not be checked' } },
+    ]) assert.equal(run({ ...agent, ...reason }), DENIED + '\n')
+    assert.equal(run({ ...agent, tool_input: { command: `bash -c 'rm -f "$T"/probe'` } }), DENIED + '\n')
+    assert.equal(run({ ...agent, reason: 'bash -c script runs rm and could be checked' }), EXPECTED + '\n')
+    assert.equal(run({ ...agent, tool_input: { command: `bash -c 'echo safe'` } }), EXPECTED + '\n')
+  }
+  assert.equal(run({ agent_id: 'test-agent', permission_mode: 'default' }), '')
 })
 
 test('other modes and tools are unchanged', () => {
