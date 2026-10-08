@@ -676,6 +676,9 @@ body.one-screen .overview-build .build-strip { white-space: nowrap; flex: 0 0 au
 
 /* Visual review: full slides and quiet, spatial comment highlights. */
 body.visual .layout { max-width: 1600px; grid-template-columns: minmax(0, 1fr) var(--side); }
+@media (min-width: 1200px) {
+  body.visual.has-contents .layout { grid-template-columns: 200px minmax(0, 1fr) var(--side); }
+}
 body.visual .doc { max-width: none; }
 .slide h2 { font: 600 15px/1.3 var(--font-system); color: var(--tx2); }
 .slide-n { color: var(--tx); margin-right: 6px; }
