@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -26,6 +26,22 @@ async function run(args, input) {
     child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
     child.stdin.end(input)
   })
+}
+
+async function runDetached(args, input) {
+  const child = spawn(process.execPath, [cli, ...args], {
+    env: { ...process.env, UNBLOCK_STATE_DIR: state }, stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8').on('data', (data) => { stdout += data })
+  child.stderr.setEncoding('utf8').on('data', (data) => { stderr += data })
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (status) => resolve({ status, stdout, stderr }))
+  })
+  child.stdin.end(input)
+  return { child, done }
 }
 
 const common = {
@@ -71,11 +87,54 @@ test('CLI files, lists, answers and closes asks through a real daemon', async ()
     assert.match(answered.stdout, /answered/)
     assert.equal(JSON.parse((await run(['show', decisionTicket, '--json'])).stdout).status, 'answered')
 
+    const oldAgent = process.env.UNBLOCK_AGENT
+    const oldSession = process.env.CLAUDE_SESSION_ID
+    process.env.UNBLOCK_AGENT = 'claude'
+    process.env.CLAUDE_SESSION_ID = 'cli-decision'
+    const checked = await run(['check', '--json'])
+    assert.equal(checked.status, 0, checked.stderr)
+    assert.equal(JSON.parse(checked.stdout).asks[0].ticket, decisionTicket)
+    assert.equal(JSON.parse((await run(['show', decisionTicket, '--json'])).stdout).status, 'collected')
+    if (oldAgent === undefined) delete process.env.UNBLOCK_AGENT
+    else process.env.UNBLOCK_AGENT = oldAgent
+    if (oldSession === undefined) delete process.env.CLAUDE_SESSION_ID
+    else process.env.CLAUDE_SESSION_ID = oldSession
+
+    const collectAsk = await run(['file', '--json'], JSON.stringify({
+      ...common, title: 'Collect one answer', fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true }],
+    }))
+    const collectTicket = JSON.parse(collectAsk.stdout).ticket
+    assert.equal((await run(['answer', collectTicket, 'collected value'])).status, 0)
+    const collected = await run(['collect', collectTicket, '--json'])
+    assert.equal(collected.status, 0, collected.stderr)
+    assert.equal(JSON.parse(collected.stdout).ask.status, 'collected')
+    assert.match(collected.stdout, /collected value/)
+
+    const parked = await runDetached(['park', '--json'], JSON.stringify({
+      ...common, title: 'Wait for an answer', fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true }],
+      origin: { agent: 'cli', session_id: 'cli-park' },
+    }))
+    let parkTicket
+    for (let attempt = 0; attempt < 20 && !parkTicket; attempt++) {
+      const auth = JSON.parse(readFileSync(join(state, 'daemon.json'), 'utf8')).auth
+      const response = await fetch(`http://127.0.0.1:${process.env.UNBLOCK_PORT}/api/asks?profile=*`, { headers: { authorization: `Bearer ${auth}` } })
+      const asks = (await response.json()).asks ?? []
+      parkTicket = asks.find((ask) => ask.title === 'Wait for an answer')?.ticket
+      if (!parkTicket) await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    assert.ok(parkTicket, 'park creates an ask before blocking')
+    assert.equal((await run(['answer', parkTicket, 'parked value'])).status, 0)
+    const parkedResult = await parked.done
+    assert.equal(parkedResult.status, 0, parkedResult.stderr)
+    assert.match(parkedResult.stdout, /parked value/)
+    assert.equal(JSON.parse(parkedResult.stdout).ask.status, 'collected')
+
     const refused = await run(['answer', blockerTicket, 'one value'])
     assert.equal(refused.status, 2)
     assert.match(refused.stderr, /account.*enabled/)
     const closed = await run(['close', blockerTicket, 'No longer needed'])
     assert.equal(closed.status, 0, closed.stderr)
+    assert.equal((await run(['show', blockerTicket, '--json'])).status, 0)
     assert.equal(JSON.parse((await run(['show', blockerTicket, '--json'])).stdout).status, 'cancelled')
     assert.equal((await run(['close', blockerTicket, 'Again'])).status, 5)
     assert.equal((await run(['show', 'ub_nope00'])).status, 3)
