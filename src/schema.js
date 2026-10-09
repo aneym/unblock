@@ -342,6 +342,143 @@ function triedFromString(text) {
  * (without ids or timestamps — the store adds those).
  */
 export function validateAsk(raw) {
+  if (!isPlainObject(raw)) throw new ValidationError('allowed: ask object')
+  const errors = []
+  let firstPath
+  const check = (fn) => {
+    try { return fn() } catch (error) {
+      if (!(error instanceof ValidationError)) throw error
+      if (!errors.length) firstPath = error.path
+      if (!errors.includes(error.message)) errors.push(error.message)
+    }
+  }
+  const fail = (path, allowed) => check(() => { throw new ValidationError(`allowed: ${allowed}`, path) })
+  const enumValue = (path, value, allowed) => {
+    if (!allowed.includes(value)) fail(path, allowed.join(', '))
+  }
+  const string = (path, value, max = 2000, min = 1) => {
+    if (typeof value !== 'string' || scrub(value).trim().length < min || scrub(value).trim().length > max) {
+      fail(path, `string of ${min} to ${max} characters`)
+    } else check(() => str(value, path, { min, max }))
+  }
+  const purpose = raw.purpose ?? 'blocker'
+  enumValue('kind', raw.kind ?? 'file', ASK_KINDS)
+  enumValue('purpose', purpose, ASK_PURPOSES)
+  if (raw.level !== undefined) enumValue('level', raw.level, LEVELS)
+  string('title', raw.title, MAX_TITLE)
+  if (typeof raw.title === 'string') check(() => plainWords(raw.title, 'title'))
+  string('why', raw.why, 1200)
+  const optionalGate = ['question', 'permission'].includes(purpose)
+  const tried = typeof raw.tried === 'string' ? triedFromString(raw.tried) : raw.tried
+  if (!optionalGate || tried !== undefined) {
+    if (!Array.isArray(tried) || tried.length < (optionalGate ? 0 : 1) || tried.length > 8) {
+      fail('tried', `${optionalGate ? 0 : 1} to 8 strings, each 20 to 400 characters`)
+    }
+    if (Array.isArray(tried)) {
+      tried.forEach((value, i) => string(`tried[${i}]`, value, 400, 20))
+      const strings = tried.filter(value => typeof value === 'string').map(value => scrub(value).trim().toLowerCase())
+      if (new Set(strings).size !== strings.length) fail('tried', 'distinct attempts (no duplicates)')
+    }
+  }
+  if (!optionalGate || raw.only_you != null) enumValue('only_you', raw.only_you, ONLY_YOU_REASONS)
+  const expected = { consent: 'their_account', spend: 'spend', message: 'message' }[purpose]
+  if (expected && raw.only_you !== expected) fail('only_you', expected)
+  if (purpose === 'decision' && !['judgment', 'spend', 'message'].includes(raw.only_you)) fail('only_you', 'judgment, spend, message')
+  if (purpose === 'blocker' && raw.only_you === 'judgment') fail('only_you', 'credential, their_account, spend, message')
+  if (raw.consent_blocked_by !== undefined) enumValue('consent_blocked_by', raw.consent_blocked_by, CONSENT_BLOCKERS)
+  if (purpose === 'blocker' && raw.only_you === 'their_account' && !raw.consent_blocked_by) fail('consent_blocked_by', CONSENT_BLOCKERS.join(', '))
+  const approvalPurpose = APPROVAL_PURPOSES.includes(purpose) ? purpose : raw.message !== undefined ? 'message' : undefined
+  if (approvalPurpose) {
+    if (raw.fields !== undefined) fail('fields', 'omitted; approval fields are generated automatically')
+    const key = approvalPurpose === 'consent' ? 'plan' : approvalPurpose
+    const data = raw[key]
+    if (!isPlainObject(data)) fail(key, 'object')
+    else if (approvalPurpose === 'message') {
+      string('message.to', data.to)
+      enumValue('message.via', data.via, ['email', 'slack', 'linkedin', 'sms', 'other'])
+      string('message.text', data.text, 4000)
+      if (data.subject != null && data.subject !== '') string('message.subject', data.subject)
+    } else {
+      // Probe independent properties against a valid shape, so a bad first
+      // property does not conceal repairs for later properties.
+      const fixtures = {
+        permission: { tool: 'fixture', summary: 'Local permission fixture' },
+        consent: { site: 'example.invalid', start_url: 'https://example.invalid/settings/access', steps: ['Read the fixture settings'], changes: 'Read fixture', untouched: 'Everything else' },
+        spend: { item: 'Fixture', vendor: 'Fixture', vendor_url: 'https://example.invalid/item', amount_cents: 1, cap_cents: 1, currency: 'usd', why: 'Local fixture' },
+      }
+      const required = {
+        permission: ['tool', 'summary'], consent: ['site', 'start_url', 'steps', 'changes', 'untouched'],
+        spend: ['item', 'vendor', 'vendor_url', 'amount_cents', 'cap_cents', 'currency', 'why'],
+      }[approvalPurpose]
+      for (const property of new Set([...required, ...Object.keys(data)])) {
+        const probe = { ...fixtures[approvalPurpose], [property]: data[property] }
+        if (approvalPurpose === 'spend' && property === 'amount_cents' && Number.isSafeInteger(data.amount_cents)) probe.cap_cents = Math.max(1, data.amount_cents)
+        if (approvalPurpose === 'consent' && property === 'site' && typeof data.site === 'string') probe.start_url = `https://${data.site}/settings/access`
+        if (approvalPurpose === 'consent' && property === 'start_url') {
+          try { probe.site = new URL(data.start_url).hostname } catch { /* validator reports the URL */ }
+        }
+        check(() => approvalData({ ...raw, fields: undefined, [key]: probe }, approvalPurpose))
+      }
+      check(() => approvalData({ ...raw, fields: undefined }, approvalPurpose))
+    }
+  } else {
+    if (!Array.isArray(raw.fields) || !raw.fields.length || raw.fields.length > MAX_FIELDS) fail('fields', `1 to ${MAX_FIELDS} field objects`)
+    if (Array.isArray(raw.fields)) {
+      const seen = new Set()
+      raw.fields.forEach((field, i) => check(() => validateField(field, i, seen, purpose)))
+      if (purpose === 'blocker' && raw.fields.length && raw.fields.every(field => field?.type === 'choice')) fail('fields', 'at least one text, secret, confirm or paste field; use decision for choices only')
+    }
+  }
+  for (const [key, max] of [['project', 64], ['summary', 140], ['after', 140]]) {
+    if (raw[key] != null && raw[key] !== '') string(key, raw[key], max)
+  }
+  const steps = raw.steps ?? []
+  if (!Array.isArray(steps) || steps.length > 12) fail('steps', '0 to 12 strings, each 1 to 600 characters')
+  if (Array.isArray(steps)) steps.forEach((step, i) => string(`steps[${i}]`, step, 600))
+  if (Array.isArray(raw.fields)) raw.fields.forEach((field, i) => {
+    if (field?.step !== undefined && (!Number.isInteger(field.step) || field.step < 1 || !Array.isArray(steps) || field.step > steps.length)) fail(`fields[${i}].step`, 'existing 1-based step number')
+  })
+  const links = raw.links ?? []
+  if (!Array.isArray(links)) fail('links', 'array of {url, label} objects')
+  if (Array.isArray(links)) links.forEach((link, i) => {
+    if (!isPlainObject(link)) return fail(`links[${i}]`, '{url, label} object')
+    string(`links[${i}].url`, link.url)
+    if (!isActionUrl(link.url)) fail(`links[${i}].url`, 'http(s), codex or system preferences URL')
+    string(`links[${i}].label`, link.label ?? link.url, 160)
+  })
+  if (purpose === 'blocker' && ['credential', 'their_account'].includes(raw.only_you) &&
+      ![...(Array.isArray(links) ? links.map(link => link?.url) : []), ...(Array.isArray(raw.fields) ? raw.fields.map(field => field?.url) : [])].some(url => url && isDeepLink(url))) {
+    fail('links', 'deep link to the exact manual-action screen, not a home page')
+  }
+  if (raw.minutes !== undefined && (!Number.isSafeInteger(raw.minutes) || raw.minutes < 1 || raw.minutes > 240)) fail('minutes', 'integer from 1 to 240')
+  if (raw.blocks !== undefined) {
+    if (Array.isArray(raw.blocks)) {
+      if (raw.blocks.length > 5) fail('blocks', 'at most 5 strings')
+      raw.blocks.forEach((block, i) => {
+        string(`blocks[${i}]`, block, 60)
+        if (typeof block === 'string') check(() => plainWords(block, `blocks[${i}]`))
+      })
+    } else {
+      string('blocks', raw.blocks, 200)
+      if (typeof raw.blocks === 'string') check(() => plainWords(raw.blocks, 'blocks'))
+    }
+  }
+  if (raw.closes_on !== undefined && (!Array.isArray(raw.closes_on) || raw.closes_on.length > 5 || raw.closes_on.some(ref =>
+    typeof ref !== 'string' || !(/^(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(pull|issues)\/\d+|scope:[a-z0-9][a-z0-9-]{0,63}#T\d{1,4})$/.test(ref))))) {
+    fail('closes_on', 'at most 5 https://github.com/<owner>/<repo>/pull/<number>, issues/<number>, or scope:<slug>#T<number> references')
+  }
+  check(() => normalizeTtl(raw.ttl_seconds))
+  // Retain the full normalizer as the final authority, including cross-field rules.
+  const normalized = check(() => validateAskFirst(raw))
+  if (errors.length) {
+    const error = new ValidationError(errors.join('\n'))
+    error.path = firstPath
+    throw error
+  }
+  return normalized
+}
+
+function validateAskFirst(raw) {
   if (!isPlainObject(raw)) throw new ValidationError('ask must be an object')
 
   const kind = str(raw.kind ?? 'file', 'kind')
