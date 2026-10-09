@@ -868,6 +868,17 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       emitAsk(ask, ask.status); emitQueue()
       return sendJson(res, 200, { ask })
     }
+    // Hold an open ask out of today's queue (Alex, 2026-10-09: "i dont need to see unblocks for
+    // things we didnt say were our focus that day"); keep brings it back.
+    ticket = routeTicket(pathname, '/aside')
+    if (ticket && req.method === 'POST') {
+      const body = await readJson(req)
+      const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim().slice(0, 200) : 'set_aside'
+      const ask = await withTicket(ticket, async () => (store.get(ticket) ? store.setAside(ticket, reason) : null))
+      if (!ask) return sendJson(res, 404, { error: 'not found' })
+      emitAsk(ask, ask.status); emitQueue()
+      return sendJson(res, 200, { ask })
+    }
     ticket = routeTicket(pathname, '/pay-claim')
     if (ticket && req.method === 'POST') return sendJson(res, 200, await withTicket(ticket, () => store.payClaim(ticket)))
 

@@ -320,6 +320,13 @@ async function keep(args) {
   const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/keep`, { pid: filerPid() ?? null })
   output({ ask: safe(result.ask) }, `kept ${rest[0]}`)
 }
+async function aside(args) {
+  const { rest } = flags(args, {})
+  const [ticket, ...reason] = rest
+  if (!ticket || !reason.join(' ').trim()) fail('usage: unblock aside <ticket> <reason...>')
+  const result = await request(`/api/asks/${encodeURIComponent(ticket)}/aside`, { reason: reason.join(' ') })
+  output({ ask: safe(result.ask) }, `set aside ${ticket}`)
+}
 async function close(args) {
   const { rest } = flags(args, {})
   const [ticket, ...reason] = rest
@@ -1236,6 +1243,7 @@ unblock answer <ticket> name=value ...           answer by question name
 unblock receipt <ticket> [--before a.png] [--after b.png] [--url U]
 unblock pay <ticket> [--payment-method <id>]
 unblock keep <ticket>                            keep an ask in today’s queue
+unblock aside <ticket> <reason...>               hold an open ask out of today’s queue (keep brings it back)
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
 unblock file [path|-] [--origin lane]            file an ask from JSON (same shape as the MCP tool)
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
@@ -1264,6 +1272,7 @@ try {
   else if (command === 'receipt') await receipt(input)
   else if (command === 'pay') await pay(input)
   else if (command === 'keep') await keep(input)
+  else if (command === 'aside') await aside(input)
   else if (command === 'close') await close(input)
   else if (command === 'file') await file(input)
   else if (command === 'update') await update(input)

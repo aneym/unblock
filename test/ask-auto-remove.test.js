@@ -469,6 +469,16 @@ test('recheck at the threshold asks keep or close; no reply or an unreachable or
     const back = await json(base, `/api/asks/${silent.ticket}/keep`, { method: 'POST', body: '{}' })
     assert.equal(back.response.status, 200)
     assert.equal(back.body.ask.set_aside_at, undefined, 'keep brings a set-aside ask back to today')
+
+    // 2026-10-09: an ask outside today's focus is held aside on request and kept back when its work is chosen.
+    const held = await json(base, `/api/asks/${answering.ticket}/aside`, { method: 'POST', body: JSON.stringify({ reason: 'not_focus:raise' }) })
+    assert.equal(held.response.status, 200, JSON.stringify(held.body))
+    assert.equal(held.body.ask.set_aside_reason, 'not_focus:raise')
+    assert.ok(!tickets(await cliList()).includes(answering.ticket), 'a held ask leaves `unblock list`')
+    assert.ok(tickets(await cliList('--aside')).includes(answering.ticket))
+    assert.equal((await json(base, '/api/asks/ub_zzzzzz/aside', { method: 'POST', body: '{}' })).response.status, 404)
+    const surfaced = await json(base, `/api/asks/${answering.ticket}/keep`, { method: 'POST', body: '{}' })
+    assert.equal(surfaced.body.ask.set_aside_at, undefined)
   } finally {
     await daemon.close()
   }
