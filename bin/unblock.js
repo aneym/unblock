@@ -17,6 +17,7 @@ import { SecretStore } from '../src/secrets.js'
 import { rectLabel, quoteSnippet } from '../src/scope-anchor.js'
 import { kindOf } from '../src/doc-kinds.js'
 import { SECTION_ID, slidesOf, docFromMarkdown, docToMarkdown, orderThreads, headingOf, THREAD_ID, APPS, validateScope, DOC_KINDS, DOC_WHERES, MODEL_ALIAS } from '../src/scope-doc.js'
+import { clearPassphrase, configurePassphrase, isConfigured, promptHidden, verifyPassphrase } from '../src/auth.js'
 import { connect as railsConnect, railsAccessToken, railsResource, railsSecretIn } from '../src/rails-auth.js'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -1039,6 +1040,32 @@ async function mirror(args) {
 function pidInfo() {
   try { return JSON.parse(readFileSync(join(stateDir(), 'daemon.json'), 'utf8')) } catch { return {} }
 }
+async function authCmd(args) {
+  const { rest } = flags(args, {})
+  const [sub = 'status'] = rest
+  if (rest.length !== 1 || !['status', 'setup', 'passwd', 'clear'].includes(sub)) fail('usage: unblock auth status|setup|passwd|clear')
+  if (sub === 'status') {
+    const configured = isConfigured()
+    return output({ configured }, configured ? 'passphrase configured' : 'no passphrase configured — run `unblock auth setup`')
+  }
+  if (sub === 'clear') {
+    clearPassphrase()
+    return output({ configured: false }, 'passphrase cleared — run `unblock auth setup` before the next sign-in')
+  }
+  if (sub === 'setup' && isConfigured()) fail('a passphrase is already set — change it with `unblock auth passwd`', 4)
+  if (sub === 'passwd' && !isConfigured()) fail('no passphrase is set — run `unblock auth setup`', 4)
+  if (sub === 'passwd') {
+    const current = await promptHidden('current passphrase: ')
+    if (!verifyPassphrase(current)) fail('wrong passphrase', 4)
+  }
+  // TTY-only, hidden, confirmed: the credential that separates people from
+  // agents must never travel through argv, a pipe or an environment variable.
+  const first = await promptHidden(`${sub === 'setup' ? '' : 'new '}passphrase (min 8 characters): `)
+  const again = await promptHidden('repeat passphrase: ')
+  if (first !== again) fail('passphrases did not match', 2)
+  try { configurePassphrase(first) } catch (error) { fail(error.message, 2) }
+  output({ configured: true }, 'passphrase set — sign in at the queue page')
+}
 async function daemonCmd(args) {
   const { rest } = flags(args, {})
   const [sub = 'status'] = rest
@@ -1256,6 +1283,7 @@ ${SCOPE_USAGE}
   --from uploads local image lines and renders HTML mocks ("phone" = 390px).
 unblock ui                                       interactive queue in the terminal
 unblock daemon start|stop|restart|status
+unblock auth status|setup|passwd|clear           local sign-in passphrase for the queue page
 unblock rails connect                            approve once on rails.so
 unblock rails connect --tailnet [--timeout-hours N]   approve from another device via Studio's tailnet callback
 unblock rails status                             hosted Unblock connection and open asks
@@ -1272,6 +1300,7 @@ try {
   else if (command === 'receipt') await receipt(input)
   else if (command === 'pay') await pay(input)
   else if (command === 'keep') await keep(input)
+  else if (command === 'auth') await authCmd(input)
   else if (command === 'aside') await aside(input)
   else if (command === 'close') await close(input)
   else if (command === 'file') await file(input)

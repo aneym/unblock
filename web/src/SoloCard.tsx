@@ -579,7 +579,7 @@ export function SoloCard({ ask, onFinished, onReload, queueSend, recovery, voice
         return
       }
       if (error instanceof ApiError && error.code === 'HUMAN_ONLY') {
-        setSafetyNotice('Approvals only count from your own signed-in page. Open this ask from the tailnet link.')
+        setSafetyNotice('Approvals only count from your signed-in queue, or a link minted while you were signed in.')
         setState('idle'); setStatus('')
         return
       }
@@ -606,7 +606,7 @@ export function SoloCard({ ask, onFinished, onReload, queueSend, recovery, voice
         return
       }
       if (error instanceof ApiError && error.code === 'HUMAN_ONLY') {
-        setSafetyNotice('Approvals only count from your own signed-in page. Open this ask from the tailnet link.')
+        setSafetyNotice('Approvals only count from your signed-in queue, or a link minted while you were signed in.')
         setState('idle'); setStatus('')
         return
       }

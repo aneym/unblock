@@ -3,6 +3,13 @@ export interface Viewer {
   name: string
 }
 
+/** Where a visitor stands at the login wall. */
+export interface SessionInfo {
+  configured: boolean
+  authenticated: boolean
+  viewer: Viewer | null
+}
+
 declare global {
   interface Window {
     __UNBLOCK_TOKEN__?: string
@@ -102,6 +109,7 @@ export async function api<T>(path: string, body?: unknown, { retry = true } = {}
     headers: body ? { 'content-type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store',
+    credentials: 'same-origin',
   })
   flushReports()
   if (response.status === 410) throw new FinishedError('finished')
@@ -113,4 +121,18 @@ export async function api<T>(path: string, body?: unknown, { retry = true } = {}
     throw new ApiError(payload.error || `HTTP ${response.status}`, payload.code, payload.added_at)
   }
   return response.json() as Promise<T>
+}
+
+/** The wall: configured, signed in, and who is signed in. */
+export async function getSession(): Promise<SessionInfo> {
+  return api<SessionInfo>('/api/session')
+}
+
+/** Exchange the local passphrase for the session cookie. */
+export async function login(passphrase: string): Promise<SessionInfo> {
+  return api<SessionInfo>('/api/session', { passphrase })
+}
+
+export async function logout(): Promise<void> {
+  await send('/api/session', 0, { method: 'DELETE', cache: 'no-store', credentials: 'same-origin' })
 }
