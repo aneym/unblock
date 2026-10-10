@@ -1,4 +1,4 @@
-// Owner test for spec AP (r42): handled asks remove themselves.
+// Owner test for spec AP (r42): handled asks remove themselves; filed asks for Alex outlive their filer (2026-10-10).
 // Alex (2026-09-30 ~15:27 ET): "if i answered unblocks that were handled, we
 // need to make sure that they're actually automatically removed btw."
 // Case: ub_kskh5s stayed in his queue after the Codex seat that filed it had
@@ -6,6 +6,7 @@
 // Thresholds and the sweep interval are env seams so this runs in seconds.
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
+import http from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -157,7 +158,9 @@ function queueEvents(base) {
   return { counts, stop: async () => { controller.abort(); await done } }
 }
 
-test('done scenario: an ask filed from a short-lived process closes on the next sweep after it exits and leaves list and queue', async () => {
+test('done scenario: a decision filed from a short-lived process outlives its filer and is still answerable; a new process reads the answer', async () => {
+  // 2026-10-10: seven outbound approval cards closed unanswered (origin_finished) when their seats
+  // exited or their tabs hibernated. Only asks that die with the process close on filer exit now.
   const { daemon, base } = await daemonWith({ UNBLOCK_SWEEP_MS: '200' })
   const events = queueEvents(base)
   // The filer runs `unblock file` through a shell, the way an agent's Bash tool does,
@@ -188,32 +191,108 @@ test('done scenario: an ask filed from a short-lived process closes on the next 
 
     const filed = await get(base, ticket)
     assert.equal(filed.origin.pid, filer.pid, 'the filer is the nearest non-shell ancestor of the CLI, not the shell it ran in')
-    assert.equal(typeof filed.origin.pid_start, 'string', 'the daemon records the filer\'s start time at file time')
-    assert.ok(filed.origin.pid_start.length > 0)
+    assert.equal(filed.origin.pid_verified, true, 'the filer is a verified lifecycle owner, so only the purpose rule keeps the ask')
     assert.equal(filed.origin.pane_id, 'w5H:p6', 'the pane id is still recorded, as the owner to route to')
-
-    // While the filer lives, the ask stays through several interval sweeps.
-    await wait(700)
-    assert.equal((await get(base, ticket)).status, 'open', 'a live origin keeps its ask')
-    assert.ok(tickets(await webQueue(base)).includes(ticket))
 
     filer.stdin.end()
     await exited
-    const closed = await until(async () => (await get(base, ticket)).status !== 'open', 3000)
-    assert.ok(closed, 'the ask closes on the interval sweep after its filer exits (UNBLOCK_SWEEP_MS)')
-    const ask = await get(base, ticket)
-    assert.equal(ask.status, 'cancelled')
-    assert.equal(ask.close_reason, 'origin_finished')
-    assert.ok(ask.closed_at)
-    assert.ok(!tickets(await webQueue(base)).includes(ticket), 'gone from the web queue API')
-    assert.ok(!tickets(qm.todayAsks(await webQueue(base))).includes(ticket))
-    assert.ok(!tickets(await cliList()).includes(ticket), 'gone from `unblock list`')
-    assert.ok(await until(() => events.counts.at(-1) === 0, 1000), `the queue stream drops it at once: ${JSON.stringify(events.counts)}`)
-    assert.ok(events.counts.includes(1), 'the stream counted it while it was open')
-    assert.equal(postsTo('w5H:p6').length, 0, 'closing a finished origin\'s ask tells nobody')
+    // Several interval sweeps after the filer is gone.
+    await wait(1000)
+    const kept = await get(base, ticket)
+    assert.equal(kept.status, 'open', 'a filed decision stays open after its filer exits')
+    assert.equal(kept.close_reason, undefined)
+    assert.ok(tickets(await webQueue(base)).includes(ticket), 'still in the web queue')
+    assert.ok(tickets(qm.todayAsks(await webQueue(base))).includes(ticket), 'still in today')
+    assert.ok(tickets(await cliList()).includes(ticket), 'still in `unblock list`')
+    assert.equal(events.counts.at(-1) ?? 1, 1, `the queue stream never dropped it: ${JSON.stringify(events.counts)}`)
+
+    const answered = await json(base, `/api/asks/${ticket}/answer`, { method: 'POST', body: JSON.stringify({ values: { answer: 'green-4K' } }) })
+    assert.equal(answered.response.status, 200, JSON.stringify(answered.body))
+    // A revived filer in the same pane reattaches: unblock_check's pending read finds the answer.
+    const pending = await json(base, `/api/pending?agent=codex&pane_id=${encodeURIComponent('w5H:p6')}`)
+    assert.ok(await until(async () => {
+      const now = await json(base, `/api/pending?agent=codex&pane_id=${encodeURIComponent('w5H:p6')}`)
+      return now.body.asks.some((ask) => ask.ticket === ticket && ask.answers?.answer === 'green-4K' && ask.status === 'orphaned')
+    }, 3000), `a revived filer in the pane finds the routed answer: ${JSON.stringify(pending.body)}`)
+    const shown = await cliCommand(['show', ticket])
+    assert.equal(shown.answers.answer, 'green-4K', 'a new process reads the answer back by ticket')
+    assert.equal(postsTo('w5H:p6').length, 1, 'the pane gets the answer once by lane-post')
   } finally {
     if (filer.exitCode === null) { filer.stdin.end(); await exited }
     await events.stop()
+    await daemon.close()
+  }
+})
+
+const humanHeaders = { Host: 'studio.tailnet.test:8797', 'tailscale-user-login': 'alex@example.test' }
+function humanPost(base, path, body) {
+  const { port } = new URL(base)
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body)
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'POST', headers: { ...humanHeaders, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(chunks) || 'null') }))
+    })
+    req.on('error', reject)
+    req.end(payload)
+  })
+}
+
+test('an outbound message card outlives its filer, and Alex can still approve it', async () => {
+  const proxy = { UNBLOCK_PUBLIC_ORIGIN: 'https://studio.tailnet.test:8797', UNBLOCK_TRUSTED_PROXY: 'tailscale', UNBLOCK_ALLOWED_USERS: 'alex@example.test' }
+  const { daemon, base } = await daemonWith(proxy)
+  const seat = sleeper()
+  try {
+    paneMember('w5H:pMsg', seat.pid)
+    const ask = await file(base, {
+      kind: 'file', purpose: 'message', title: 'Approve the fixture email', why: 'The recipient needs this update.', only_you: 'message',
+      tried: ['Checked existing approvals; this exact message needs approval.'],
+      message: { to: 'person@example.test', via: 'email', subject: 'Update', text: 'The requested update is ready.' },
+    }, { agent: 'claude', pane_id: 'w5H:pMsg', pid: seat.pid })
+    assert.equal(ask.origin.pid, seat.pid)
+    assert.equal(ask.origin.pid_verified, true)
+    await seat.stop()
+    await daemon.sweep()
+    await daemon.sweep()
+    const kept = await get(base, ask.ticket)
+    assert.equal(kept.status, 'open', 'the approval card stays after its seat exits')
+    assert.ok(tickets(qm.todayAsks(await webQueue(base))).includes(ask.ticket))
+    const click = await humanPost(base, '/api/answer', { ticket: ask.ticket, revision: kept.revision, values: { verdict: 'approve' } })
+    assert.equal(click.status, 200, JSON.stringify(click.json))
+    const shown = await cliCommand(['show', ask.ticket])
+    assert.equal(shown.answers.verdict, 'approve', 'the filer, revived as a new process, reads the approval by ticket')
+  } finally {
+    await seat.stop()
+    await daemon.close()
+    for (const name of Object.keys(proxy)) delete process.env[name]
+  }
+})
+
+test('a question or a hook-detected ask still closes with origin_finished when its process exits', async () => {
+  const { daemon, base } = await daemonWith({})
+  const seat = sleeper()
+  try {
+    paneMember('w5H:pQ', seat.pid)
+    const origin = { agent: 'claude', pane_id: 'w5H:pQ', pid: seat.pid }
+    const question = await file(base, decision('Which fixture should the seat load', { purpose: 'question' }), origin)
+    const detected = await file(base, decision('Pick the detected prompt option'), { ...origin, detected: true })
+    const message = await file(base, decision('Choose the release note title'), origin)
+    for (const ask of [question, detected, message]) assert.equal(ask.origin.pid_verified, true)
+    await daemon.sweep()
+    for (const ask of [question, detected, message]) assert.equal((await get(base, ask.ticket)).status, 'open', 'a live filer keeps every ask')
+    await seat.stop()
+    await daemon.sweep()
+    for (const ask of [question, detected]) {
+      const now = await get(base, ask.ticket)
+      assert.equal(now.status, 'cancelled', `${ask.title} dies with its process`)
+      assert.equal(now.close_reason, 'origin_finished')
+      assert.ok(!tickets(await webQueue(base)).includes(ask.ticket))
+    }
+    assert.equal((await get(base, message.ticket)).status, 'open', 'the same filer\'s decision stays')
+    assert.equal(postsTo('w5H:pQ').length, 0, 'closing a finished origin\'s ask tells nobody')
+  } finally {
+    await seat.stop()
     await daemon.close()
   }
 })

@@ -989,9 +989,14 @@ export class Store {
     return this.get(ask.id)
   }
 
-  /** Everything this agent can be told right now: its answered asks, filed or parked. */
+  /**
+   * Everything this agent can be told right now: its answered asks, filed or parked, and an
+   * answer routed after its filer process exited (orphaned with an answer), so a revived tab
+   * in the same pane or session collects it with unblock_check.
+   */
   pending(origin) {
-    return this.list({ agentKey: agentKey(origin), status: ['answered', 'bounced'] })
+    return this.list({ agentKey: agentKey(origin), status: ['answered', 'bounced', 'orphaned'] })
+      .filter((ask) => ask.status !== 'orphaned' || ask.answered_at !== undefined)
   }
 
   /**

@@ -562,6 +562,15 @@ function scrubFieldBounce(raw) {
     return ask
   }
 
+  // Only an ask the process itself raised, which is moot once it exits, closes with its filer:
+  // a hook-detected prompt, a question or a permission. Anything else filed for Alex (a message,
+  // a decision, a credential) outlives a hibernated tab or a finished seat until he answers it or
+  // the filer cancels it; a revived filer reattaches by ticket or pane (2026-10-10: seven outbound
+  // approval cards closed unanswered when their seats exited).
+  function diesWithOrigin(ask) {
+    return ask.origin?.detected === true || ['question', 'permission'].includes(ask.purpose)
+  }
+
   async function deadReference(ask) {
     if (ask.purpose === 'permission' && ask.permission?.path && isAbsolute(ask.permission.path) && !existsSync(ask.permission.path)) return 'path_gone'
     for (const ref of ask.closes_on || []) {
@@ -1318,7 +1327,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
           const ask = store.get(candidate.ticket)
           if (ask?.status === 'answered') { await routeFinished(ask, starts); return }
           if (ask?.status !== 'open') return
-          const reason = starts !== null && hasVerifiedPid(ask.origin) && !sameProcess(ask.origin.pid, ask.origin.pid_start, starts) ? 'origin_finished' : await deadReference(ask)
+          const reason = diesWithOrigin(ask) && starts !== null && hasVerifiedPid(ask.origin) && !sameProcess(ask.origin.pid, ask.origin.pid_start, starts) ? 'origin_finished' : await deadReference(ask)
           if (reason) {
             const closed = store.autoClose(ask.ticket, reason)
             if (closed) { changed = true; emitAsk(closed, closed.status) }
