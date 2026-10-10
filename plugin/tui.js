@@ -3,6 +3,14 @@ import readline from 'node:readline'
 import { api } from './paths.js'
 import { activeProfile } from './herdr.js'
 import { applyKey, initialValues, missingFor, redactValue, sortAsks } from './queue-model.js'
+import { APPROVAL_PURPOSES } from '../src/schema.js'
+
+// Consent, spend, message and permission asks refuse every local write with
+// 403 HUMAN_ONLY — drafts included — because the TUI carries the same bearer
+// an agent does and the daemon cannot tell them apart. So never send those
+// writes: say it once instead of surfacing a raw 403 on every keystroke.
+const APPROVAL_NOTICE = 'answer this on the page — approvals never draft or submit from the TUI'
+const isApproval = (ask) => APPROVAL_PURPOSES.includes(ask?.purpose)
 
 const stdin = process.stdin
 const stdout = process.stdout
@@ -162,7 +170,7 @@ function safeDraft(ask) {
 }
 
 function scheduleDraft(ask, field) {
-  if (field.type === 'secret') return
+  if (field.type === 'secret' || isApproval(ask)) return
   clearTimeout(draftTimer)
   draftTimer = setTimeout(async () => {
     try { await api(`/api/asks/${encodeURIComponent(ask.ticket)}/draft`, { values: safeDraft(ask) }) }
@@ -173,6 +181,7 @@ function scheduleDraft(ask, field) {
 async function submit() {
   const ask = selectedAsk()
   if (!ask || expanded !== ask.ticket) return
+  if (isApproval(ask)) { footer = APPROVAL_NOTICE; return render() }
   const missing = missingFor(ask, valuesFor(ask))
   if (missing.length) { footer = `still needed: ${missing.join(', ')}`; return render() }
   busy = true
@@ -222,6 +231,7 @@ stdin.on('keypress', (_text, key) => {
     const previous = states.get(stateKey) || { value: undefined }
     const next = applyKey(previous, key, field)
     if (next !== previous) {
+      if (isApproval(ask)) { footer = APPROVAL_NOTICE; return render() }
       states.set(stateKey, next)
       finishEditingSoon()
       scheduleDraft(ask, field)
