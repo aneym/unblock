@@ -1,6 +1,6 @@
 ---
 name: unblock
-description: Ask the human for something only they can give: their sign-in or key, consent for a click in their own signed-in account, a payment, a message to a real person, or a product call. Use only after you have tried the CLI, the API, the browser and the docs yourself.
+description: "Ask the human for something only they can give: their sign-in or key, consent for a click in their own signed-in account, a payment, a message to a real person, or a product call. Use only after you have tried the CLI, the API, the browser and the docs yourself."
 ---
 
 # unblock

@@ -97,7 +97,7 @@ unblock link <ticket> [--share]        the stable queue link, or a 15-minute sha
 unblock daemon start|stop|restart|status
 ```
 
-`--json` works on every command except `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
+`--json` works on data commands except `help`, `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
 unreachable, 2 usage, 3 no such ask, 4 rejected by the queue, 5 ask is not open.
 
 ## Live asks

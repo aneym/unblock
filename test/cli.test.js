@@ -55,6 +55,13 @@ test('CLI files, lists, answers and closes asks through a real daemon', async ()
   const daemon = await startDaemon({ port: 0 })
   process.env.UNBLOCK_PORT = String(daemon.port)
   try {
+    const help = await run(['help'])
+    assert.equal(help.status, 0, help.stderr)
+    assert.match(help.stdout, /unblock park \[path\|\-\]/)
+    assert.match(help.stdout, /unblock check \[--json\]/)
+    assert.match(help.stdout, /unblock collect <ticket> \[--json\]/)
+    assert.match(help.stdout, /--json works on data commands except reveal, help, ui and mcp\./)
+
     const blocker = await run(['file', '-'], JSON.stringify({
       ask: { ...common, title: 'Enable access', fields: [
         { name: 'account', type: 'text', label: 'Account', required: true },
@@ -111,7 +118,7 @@ test('CLI files, lists, answers and closes asks through a real daemon', async ()
     assert.match(collected.stdout, /collected value/)
 
     const parked = await runDetached(['park', '--json'], JSON.stringify({
-      ...common, title: 'Wait for an answer', fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true }],
+      ask: { ...common, title: 'Wait for an answer', fields: [{ name: 'answer', type: 'text', label: 'Answer', required: true }] },
       origin: { agent: 'cli', session_id: 'cli-park' },
     }))
     let parkTicket
