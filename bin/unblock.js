@@ -320,6 +320,105 @@ async function keep(args) {
   const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/keep`, { pid: filerPid() ?? null })
   output({ ask: safe(result.ask) }, `kept ${rest[0]}`)
 }
+function cliOrigin() {
+  return {
+    agent: process.env.UNBLOCK_AGENT || 'cli',
+    pid: filerPid(),
+    session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
+    ...laneIdentity(),
+    tab_id: process.env.HERDR_TAB_ID,
+    workspace_id: process.env.HERDR_WORKSPACE_ID,
+    cwd: process.cwd(),
+    kind: process.env.UNBLOCK_ORIGIN_KIND,
+  }
+}
+function cliAskPayload(body, kind, lane) {
+  const payload = body && typeof body === 'object' && 'ask' in body ? body : { ask: body, origin: cliOrigin() }
+  payload.ask = { ...payload.ask, kind }
+  payload.origin = { ...laneIdentity(), ...cliOrigin(), ...payload.origin }
+  if (filerPid() === undefined) delete payload.origin.pid
+  if (lane) payload.origin = { ...payload.origin, lane_name: lane }
+  return payload
+}
+function answerText(ask) {
+  if (ask.status === 'bounced') return `${ask.ticket} was SENT BACK: ${ask.reply ?? '(no note)'}`
+  const lines = [`${ask.ticket}: ${ask.title}`]
+  for (const field of ask.fields ?? []) {
+    if (!Object.hasOwn(ask.answers ?? {}, field.name)) continue
+    const value = ask.answers[field.name]
+    if (ask.answer_is_ref?.[field.name]) {
+      lines.push(`${field.name}: ${value.store} reference ${value.ref}`)
+      if (value.resolve) lines.push(`  Resolve without printing: ${value.resolve}`)
+    } else if (value === null) lines.push(`${field.name}: (skipped — they chose not to answer)`)
+    else if (value && typeof value === 'object' && '$bounce' in value) lines.push(`${field.name}: SENT BACK${value.$bounce ? ` — ${value.$bounce}` : ''}`)
+    else lines.push(`${field.name}: ${JSON.stringify(value)}`)
+    if (ask.field_context?.[field.name]) lines.push(`  their context: ${ask.field_context[field.name]}`)
+  }
+  if (ask.reply) lines.push(`they also said: ${ask.reply}`)
+  return lines.join('\n')
+}
+function draftText(ask) {
+  const lines = [`${ask.ticket}: ${ask.title} — ${ask.status}`]
+  for (const field of ask.fields ?? []) {
+    const value = ask.draft?.[field.name]
+    const note = ask.field_context?.[field.name]
+    if (value === undefined && note === undefined) lines.push(`${field.name}: (nothing yet)`)
+    else {
+      if (value !== undefined) lines.push(`${field.name}: ${field.type === 'secret' ? 'stored secret' : JSON.stringify(value)} (draft, not submitted)`)
+      if (note !== undefined) lines.push(`  their context: ${note}`)
+    }
+  }
+  if (ask.draft_reply) lines.push(`they are writing: ${ask.draft_reply}`)
+  return lines.join('\n')
+}
+async function collect(args) {
+  const { rest } = flags(args, {})
+  if (rest.length !== 1) fail('usage: unblock collect <ticket>')
+  const result = await request(`/api/asks/${encodeURIComponent(rest[0])}/collect`, {})
+  output({ ask: safe(result.ask) }, answerText(result.ask))
+}
+async function check(args) {
+  const { rest } = flags(args, {})
+  if (rest.length) fail('usage: unblock check [--json]')
+  const identity = cliOrigin()
+  const query = new URLSearchParams(Object.entries(identity).filter(([, value]) => value != null))
+  const pending = await request(`/api/pending?${query}`)
+  const asks = []
+  for (const ask of pending.asks ?? []) {
+    const result = await request(`/api/asks/${encodeURIComponent(ask.ticket)}/collect`, {})
+    asks.push(result.ask)
+  }
+  const drafts = (pending.open ?? []).filter((ask) => ask.draft_updated_at)
+  const open = []
+  for (const ask of pending.open ?? []) {
+    const health = await request('/api/health')
+    open.push({ ticket: ask.ticket, title: ask.title, url: stable(health, ask.ticket), draft_updated_at: ask.draft_updated_at ?? null })
+  }
+  const data = { asks: asks.map(safe), drafts: drafts.map(safe), open: open.map((entry) => ({ ...entry })) }
+  if (json) return output(data, [asks.map(answerText).join('\n\n'), drafts.length ? ['Still open, and being filled in right now:', ...drafts.map(draftText)].join('\n') : '', open.length ? ['Open, answer links:', ...open.map((ask) => `- ${ask.ticket} "${ask.title}" → ${ask.url ?? '(no link)'}`)].join('\n') : ''].filter(Boolean).join('\n\n'))
+  output(data, data.asks.length || data.drafts.length || data.open.length
+    ? [data.asks.map(answerText).join('\n\n'), data.drafts.length ? ['Still open, and being filled in right now:', ...data.drafts.map(draftText)].join('\n') : '', data.open.length ? ['Open, answer links:', ...data.open.map((ask) => `- ${ask.ticket} "${ask.title}" → ${ask.url ?? '(no link)'}`)].join('\n') : ''].filter(Boolean).join('\n\n')
+    : 'No answered requests are waiting.')
+}
+async function park(args) {
+  const { rest, opts } = flags(args, { '--origin': true })
+  if (rest.length > 1) fail('usage: unblock park [path|-] [--origin lane]')
+  const body = await readBody(rest[0])
+  const ask = await request('/api/asks', cliAskPayload(body, 'park', opts['--origin']))
+  const link = stable(await request('/api/health'), ask.ticket)
+  if (link) console.error(`waiting for ${ask.ticket}: ${link}`)
+  const deadline = ask.expires_at || Date.now() + 24 * 60 * 60 * 1000
+  for (;;) {
+    const current = await request(`/api/asks/${encodeURIComponent(ask.ticket)}`)
+    if (current.status === 'answered' || current.status === 'bounced') {
+      const result = await request(`/api/asks/${encodeURIComponent(ask.ticket)}/collect`, {})
+      return output({ ask: safe(result.ask), link }, answerText(result.ask))
+    }
+    if (['cancelled', 'expired', 'orphaned'].includes(current.status)) fail(`ask ${current.ticket} is ${current.status}`, 5)
+    if (Date.now() >= deadline) fail(`timed out waiting for ${current.ticket}`, 1)
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+  }
+}
 async function aside(args) {
   const { rest } = flags(args, {})
   const [ticket, ...reason] = rest
@@ -348,26 +447,8 @@ async function readBody(path) {
 async function file(args) {
   const { rest, opts } = flags(args, { '--origin': true })
   if (rest.length > 1) fail('usage: unblock file [path|-] [--origin lane]')
-  // Same JSON the MCP tool takes. A body already shaped {ask, origin} passes through.
   const body = await readBody(rest[0])
-  const detectedPid = filerPid()
-  const payload = body && typeof body === 'object' && 'ask' in body ? body : {
-    ask: body,
-    origin: {
-      agent: process.env.UNBLOCK_AGENT || 'cli',
-      pid: detectedPid,
-      session_id: process.env.HERDR_SESSION_ID || process.env.CLAUDE_SESSION_ID,
-      ...laneIdentity(),
-      tab_id: process.env.HERDR_TAB_ID,
-      workspace_id: process.env.HERDR_WORKSPACE_ID,
-      cwd: process.cwd(),
-      kind: process.env.UNBLOCK_ORIGIN_KIND,
-    },
-  }
-  payload.origin = { ...laneIdentity(), ...payload.origin }
-  if (detectedPid === undefined) delete payload.origin.pid
-  if (opts['--origin']) payload.origin = { ...payload.origin, lane_name: opts['--origin'] }
-  const ask = await request('/api/asks', payload)
+  const ask = await request('/api/asks', cliAskPayload(body, 'file', opts['--origin']))
   const link = stable(await request('/api/health'), ask.ticket)
   output({ ...safe(ask), link }, [ask.ticket, link].filter(Boolean).join('\n'))
 }
@@ -1246,6 +1327,9 @@ unblock keep <ticket>                            keep an ask in today’s queue
 unblock aside <ticket> <reason...>               hold an open ask out of today’s queue (keep brings it back)
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
 unblock file [path|-] [--origin lane]            file an ask from JSON (same shape as the MCP tool)
+unblock park [path|-] [--origin lane]            file an ask and block until it is answered
+unblock check [--json]                           collect answers and show drafts/open links
+unblock collect <ticket> [--json]                collect one answered ask
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
 unblock link <ticket> [--share]                  the stable queue link; --share mints a 15-minute link
 unblock peek <ticket>                            what they have typed so far
@@ -1261,7 +1345,7 @@ unblock rails connect --tailnet [--timeout-hours N]   approve from another devic
 unblock rails status                             hosted Unblock connection and open asks
 unblock mcp                                      run the MCP server
 
---json works on every command except reveal, ui and mcp.
+--json works on data commands except reveal, help, ui and mcp.
 Exit codes: 0 ok · 1 daemon unreachable or unexpected error · 2 usage error · 3 no such ask · 4 rejected by the queue · 5 ask is not open · 6 section changed (scope patch --if-section-hash).`)
 }
 try {
@@ -1272,6 +1356,9 @@ try {
   else if (command === 'receipt') await receipt(input)
   else if (command === 'pay') await pay(input)
   else if (command === 'keep') await keep(input)
+  else if (command === 'park') await park(input)
+  else if (command === 'check') await check(input)
+  else if (command === 'collect') await collect(input)
   else if (command === 'aside') await aside(input)
   else if (command === 'close') await close(input)
   else if (command === 'file') await file(input)

@@ -157,8 +157,17 @@ A blocker made only of choices is a question in disguise and is rejected.
 | `unblock_park` | yes. Holds until answered | one per agent |
 
 If you need three things before you can move, that is one park with three
-fields. Call `unblock_check` when you resume. From a shell, `unblock file` takes
-the same JSON on stdin.
+fields. In a tool-enabled agent, call `unblock_check` when you resume. From a
+shell, `unblock park - < ask.json` files the same JSON and blocks until the
+human answers or sends it back. A park is one blocking point per agent; do not
+park three times in a row.
+
+For nonblocking work, `unblock file - < ask.json` files the ask and lets you
+continue. `unblock check` collects answered asks for the current CLI identity
+and reports open asks (including drafts and answer links). Set the same
+`UNBLOCK_AGENT` and session identity environment used when filing if you need
+to collect asks from a particular shell agent/session. Use
+`unblock collect <ticket>` to consume one specific answered ask.
 
 If `unblock_file` rejects the ask for missing `tried` or `only_you` and its
 schema does not list them, your session started before the gate existed. Pass
