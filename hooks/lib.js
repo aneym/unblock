@@ -36,8 +36,11 @@ export function cut(text, max) {
   return (word > max / 2 ? prefix.slice(0, word) : prefix).trimEnd() + '…'
 }
 
-export function eligible(input) {
-  return Boolean(process.env.HERDR_PANE_ID && !input?.agent_id && process.env.UNBLOCK_ALLOW_DIALOG !== '1')
+/** Whether a hook files an ask for this pane. A subagent's question stays in its parent; a subagent's permission
+ *  prompt waits on the same terminal, so the permission hook passes { subagent: true } (factory-operations 103,
+ *  2026-10-09: a non-allowable subagent prompt used to wait with no ask). */
+export function eligible(input, { subagent = false } = {}) {
+  return Boolean(process.env.HERDR_PANE_ID && (subagent || !input?.agent_id) && process.env.UNBLOCK_ALLOW_DIALOG !== '1')
 }
 
 export async function origin() {

@@ -15,7 +15,7 @@ try {
   } else if (bypassAllows(input)) {
     process.stdout.write(ALLOW + '\n')
     log(`bypass allow ${process.env.HERDR_PANE_ID || '-'} ${input.agent_id ? 'subagent ' : ''}${cut(redact(String(input.tool_input.command)), 80)}`)
-  } else if (eligible(input) && input.tool_name) {
+  } else if (eligible(input, { subagent: true }) && input.tool_name) {
     const source = await origin()
     const pane = source.pane_id
     const tool = input.tool_name || ''

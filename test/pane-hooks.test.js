@@ -126,6 +126,13 @@ test('Claude pane hooks file decisions and fail open outside their gate', async 
       assert.equal(now.asks.some((ask) => ask.status === 'open' && ask.permission?.command?.includes('touch adopted')), false)
       assert.equal(existsSync(join(stateDir, 'pane-asks', `${old}.json`)), false)
     }
+
+    // factory-operations 103 (2026-10-09): a subagent's permission prompt that bypass cannot allow is a normal ask,
+    // not a dialog left waiting on the terminal.
+    assert.deepEqual(await hook('claude-permission', { ...permission('touch subagent-step'), cwd: '/workspace/subagent-house', agent_id: 'sub-1' }), { code: 0, stdout: '' })
+    const sub = await json(base, '/api/asks?profile=*')
+    assert.ok(sub.asks.some((ask) => ask.status === 'open'
+      && (ASK_PURPOSES.includes('permission') ? ask.permission?.command : ask.why)?.includes('touch subagent-step')))
   } finally {
     await daemon.close()
     rmSync(stateDir, { recursive: true, force: true, maxRetries: 5 }) // detached watchers may still be writing
