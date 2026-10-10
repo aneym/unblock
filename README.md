@@ -92,10 +92,44 @@ unblock file [path|-]                  file an ask from JSON
 unblock update <ticket> [path|-]       revise an open ask
 unblock link <ticket> [--share]        the stable queue link, or a 15-minute share link
 unblock daemon start|stop|restart|status
+unblock auth status|setup|passwd|clear  the local passphrase the queue page signs in with
 ```
 
 `--json` works on every command except `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
 unreachable, 2 usage, 3 no such ask, 4 rejected by the queue, 5 ask is not open.
+
+## Signing in
+
+The queue page at `http://127.0.0.1:4488/` sits behind a local login wall — no
+Tailscale, no special link. One passphrase opens it:
+
+```bash
+unblock auth setup     # choose the passphrase (TTY-only, entered hidden)
+unblock auth passwd    # change it
+unblock auth status    # configured or not
+unblock auth clear     # remove it
+```
+
+Sessions are in-memory HttpOnly cookies that last 12 hours; a daemon restart
+signs everyone out, and five wrong passphrases in five minutes locks further
+attempts. The scrypt hash lives at
+`~/.local/state/unblock/passphrase.json` (0600).
+
+| caller | reaches | may approve? |
+| --- | --- | --- |
+| local session (the login wall) | the whole page | yes |
+| Tailscale identity (optional) | the page, from the tailnet | yes |
+| agent bearer | the agent API | **never** |
+| share link | its one scoped queue | only if a signed-in human minted it |
+
+Approvals (consent, spend, message, permission) still refuse the bearer — that
+invariant never moved. What changed is that a person on the machine can always
+prove themselves: the Herdr TUI prompts for the same passphrase, hidden, the
+first time you touch an approval.
+
+A same-OS-user process could rewrite the hash file, exactly as it could
+rewrite the bearer secret beside it. This separates agents from people, not a
+malicious local user from either.
 
 ## Live asks
 
@@ -164,6 +198,7 @@ subprocess echoes it — the only backend with that protection.
 ```bash
 npm install -g unblockd         # daemon, MCP server, CLI (binary: unblock)
 unblock daemon start
+unblock auth setup             # choose the local passphrase for the queue page
 ```
 
 Then point an agent at it. For Claude Code:
@@ -252,7 +287,8 @@ cloudflared tunnel --url http://127.0.0.1:4488  # no account
 ### One stable tailnet URL
 
 Behind `tailscale serve` the daemon can trust Tailscale's identity headers and
-serve the queue at one bookmarkable address, no token in the URL. Put the
+serve the queue at one bookmarkable address, no token in the URL. This is
+optional — without it, the local login wall above covers sign-in. Put the
 settings in `~/.config/unblock/config.json` so every spawner (the herdr startup
 hook, an MCP server's auto-start, the CLI, launchd) starts the same daemon:
 

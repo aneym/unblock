@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
-import { api } from './paths.js'
+import { api, hasSession, login } from './paths.js'
 import { activeProfile } from './herdr.js'
 import { applyKey, initialValues, missingFor, redactValue, sortAsks } from './queue-model.js'
+import { APPROVAL_PURPOSES } from '../src/schema.js'
+
+// Consent, spend, message and permission asks refuse every local write with
+// 403 HUMAN_ONLY — drafts included — because the TUI carries the same bearer
+// an agent does. A signed-in session is how a person crosses that line here:
+// prompt for the passphrase (hidden), keep the cookie for the rest of the run.
+const isApproval = (ask) => APPROVAL_PURPOSES.includes(ask?.purpose)
 
 const stdin = process.stdin
 const stdout = process.stdout
@@ -69,6 +76,13 @@ let footer = ''
 let draftTimer
 let isEditing = false
 let busy = false
+/** While set, keys type a hidden passphrase instead of moving the queue. */
+let passphrasePrompt = null
+
+const writeError = (error) => {
+  footer = hasSession() ? error.message : 'session expired or signed out — press the key again'
+  render()
+}
 
 const asks = () => sortAsks((data.asks || []).filter((ask) => ask.status === 'open'))
 const selectedAsk = () => asks()[selected]
@@ -166,13 +180,27 @@ function scheduleDraft(ask, field) {
   clearTimeout(draftTimer)
   draftTimer = setTimeout(async () => {
     try { await api(`/api/asks/${encodeURIComponent(ask.ticket)}/draft`, { values: safeDraft(ask) }) }
-    catch (error) { footer = error.message; render() }
+    catch (error) { writeError(error) }
   }, 700)
+}
+
+/**
+ * Gate an approval action on a human session: either we already have one, or
+ * pause here for a hidden passphrase prompt and resume `after` on success.
+ * Returns true when the action should proceed now.
+ */
+function needHuman(after) {
+  if (hasSession()) return true
+  passphrasePrompt = { buf: '', after }
+  footer = 'passphrase:  · enter signs in · esc cancels'
+  render()
+  return false
 }
 
 async function submit() {
   const ask = selectedAsk()
   if (!ask || expanded !== ask.ticket) return
+  if (isApproval(ask) && !needHuman(submit)) return
   const missing = missingFor(ask, valuesFor(ask))
   if (missing.length) { footer = `still needed: ${missing.join(', ')}`; return render() }
   busy = true
@@ -181,7 +209,7 @@ async function submit() {
     footer = result.complete && ask.gating ? `waking ${ask.origin?.agent || 'agent'}` : result.complete ? 'answered' : 'saved'
     expanded = null
     data.asks = data.asks.filter((item) => item.ticket !== ask.ticket || !result.complete)
-  } catch (error) { footer = error.message }
+  } catch (error) { writeError(error) }
   finally { busy = false; render() }
 }
 
@@ -203,9 +231,38 @@ readline.emitKeypressEvents(stdin)
 stdin.setRawMode(true)
 stdout.write('\x1b[?1049h\x1b[?25l')
 process.on('SIGWINCH', render)
-stdin.on('keypress', (_text, key) => {
+stdin.on('keypress', async (_text, key) => {
   if (busy) return
   if ((key.ctrl && key.name === 'c') || key.name === 'q') { restore(); process.exit(0) }
+  if (passphrasePrompt) {
+    if (key.name === 'return' || key.name === 'enter') {
+      const { buf, after } = passphrasePrompt
+      passphrasePrompt = null
+      busy = true
+      footer = 'signing in…'
+      render()
+      try {
+        await login(buf)
+      } catch (error) {
+        busy = false
+        footer = error.message
+        render()
+        return
+      }
+      busy = false
+      await after()
+      return
+    }
+    if (key.name === 'escape') {
+      passphrasePrompt = null
+      footer = 'cancelled'
+      return render()
+    }
+    if (key.name === 'backspace') passphrasePrompt.buf = passphrasePrompt.buf.slice(0, -1)
+    else if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) passphrasePrompt.buf += key.sequence
+    footer = `passphrase: ${'*'.repeat(passphrasePrompt.buf.length)} · enter signs in · esc cancels`
+    return render()
+  }
   if (key.ctrl && (key.name === 'return' || key.name === 'enter')) return void submit()
   const queue = asks()
   const ask = selectedAsk()
@@ -222,11 +279,17 @@ stdin.on('keypress', (_text, key) => {
     const previous = states.get(stateKey) || { value: undefined }
     const next = applyKey(previous, key, field)
     if (next !== previous) {
-      states.set(stateKey, next)
-      finishEditingSoon()
-      scheduleDraft(ask, field)
-      footer = ''
-      return render()
+      const apply = () => {
+        states.set(stateKey, next)
+        finishEditingSoon()
+        scheduleDraft(ask, field)
+        footer = ''
+        render()
+      }
+      // Editing an approval's verdict is an approval act: prove a person.
+      if (isApproval(ask) && !needHuman(apply)) return
+      apply()
+      return
     }
   }
 

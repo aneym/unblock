@@ -86,11 +86,49 @@ export async function api(path, body) {
   const headers = {}
   if (body) headers['content-type'] = 'application/json'
   if (token) headers.authorization = `Bearer ${token}`
+  if (sessionCookie) headers.cookie = sessionCookie
   const res = await fetch(base + path, {
     method: body ? 'POST' : 'GET',
     headers,
     body: body ? JSON.stringify(body) : undefined,
   })
-  if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`)
+  if (!res.ok) {
+    let message = `${path} -> HTTP ${res.status}`
+    try {
+      const payload = await res.json()
+      if (payload.error) message = payload.error
+    } catch { /* keep the status fallback */ }
+    // The daemon restarted, or the session timed out: drop it so the next
+    // approval asks for the passphrase again instead of repeating a 401.
+    if (res.status === 401) sessionCookie = null
+    throw new Error(message)
+  }
   return res.json()
+}
+
+let sessionCookie = null
+
+/** Whether this process has already proven a human is present. */
+export function hasSession() {
+  return Boolean(sessionCookie)
+}
+
+/** Exchange the local passphrase for the session cookie. TUI/CLI side. */
+export async function login(passphrase) {
+  const base = await daemon()
+  const response = await fetch(`${base}/api/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ passphrase }),
+    signal: AbortSignal.timeout(5000),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const error = new Error(body.error || `sign-in failed (HTTP ${response.status})`)
+    error.status = response.status
+    error.code = body.code
+    throw error
+  }
+  sessionCookie = (response.headers.get('set-cookie') || '').split(';')[0] || null
+  return body
 }

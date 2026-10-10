@@ -374,3 +374,55 @@ textarea.control { display: block; min-height: 80px; resize: vertical; }
 .outbox-notice span { flex: 1; min-width: 0; }
 .outbox-notice .text-button { flex-shrink: 0; }
 .outbox-notice.is-partial { background: var(--gray-bg); border-color: var(--border); }
+
+/* The local sign-in wall: the whole page until a session exists. */
+.login-wall {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--page);
+}
+.login-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 32px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+.login-card h1 { margin: 0; font-size: 20px; }
+.login-card p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.5; }
+.login-card label { font-size: 13px; color: var(--dim); }
+.login-card input[type=password] {
+  font-size: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--page);
+  color: var(--ink);
+}
+.login-card input[type=password]:focus { outline: 2px solid var(--ink); outline-offset: 1px; }
+.login-command {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--rail);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+.login-error {
+  padding: 8px 10px;
+  background: var(--red-bg);
+  border: 1px solid var(--red-text);
+  border-radius: 8px;
+  color: var(--red-text);
+  font-size: 13px;
+}
+.login-card .primary { align-self: flex-start; }
+.sign-out { font-size: 12px; }
