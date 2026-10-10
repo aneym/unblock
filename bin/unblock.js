@@ -1327,6 +1327,9 @@ unblock keep <ticket>                            keep an ask in today’s queue
 unblock aside <ticket> <reason...>               hold an open ask out of today’s queue (keep brings it back)
 unblock close <ticket> <reason...>               withdraw an open ask with a one-line reason
 unblock file [path|-] [--origin lane]            file an ask from JSON (same shape as the MCP tool)
+unblock park [path|-] [--origin lane]            file an ask and block until it is answered
+unblock check [--json]                           collect answers and show drafts/open links
+unblock collect <ticket> [--json]                collect one answered ask
 unblock update <ticket> [path|-]                 revise an open ask from a JSON patch
 unblock link <ticket> [--share]                  the stable queue link; --share mints a 15-minute link
 unblock peek <ticket>                            what they have typed so far
@@ -1342,7 +1345,7 @@ unblock rails connect --tailnet [--timeout-hours N]   approve from another devic
 unblock rails status                             hosted Unblock connection and open asks
 unblock mcp                                      run the MCP server
 
---json works on every command except reveal, ui and mcp.
+--json works on data commands except reveal, help, ui and mcp.
 Exit codes: 0 ok · 1 daemon unreachable or unexpected error · 2 usage error · 3 no such ask · 4 rejected by the queue · 5 ask is not open · 6 section changed (scope patch --if-section-hash).`)
 }
 try {
