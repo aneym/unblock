@@ -1,8 +1,8 @@
 // Follow-ups to daily-workflow slice 8 (review advisories, 2026-09-30):
 // 1. A weekly ask stops counting toward today everywhere, the web queue included,
 //    because one helper (todayAsks) decides what "today" is.
-// 2. A recheck that cannot be delivered is retried a few times, then given up,
-//    instead of spawning lane-post every minute for as long as the ask is open.
+// 2. A recheck that cannot be delivered is retried once, in the next recheck window, then given
+//    up, instead of spawning lane-post every sweep (2026-10-10: one nag per card per window).
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,7 +13,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'unblock-recheck2-'))
 process.env.UNBLOCK_STATE_DIR = stateDir
 process.env.UNBLOCK_CONFIG_DIR = join(stateDir, 'config')
 process.env.UNBLOCK_SECRET_BACKEND = 'env'
-process.env.UNBLOCK_RECHECK_AFTER_MS = '40'
+process.env.UNBLOCK_RECHECK_AFTER_MS = '400'
 process.env.UNBLOCK_WEEKLY_AFTER_MS = '100000'
 const callLog = join(stateDir, 'lane-post-calls')
 const lanePost = join(stateDir, 'lane-post-down')
@@ -48,7 +48,7 @@ test('today means open and not on the weekly list, in the model and in the web q
   assert.match(app, /todayAsks\(/, 'the web queue builds its open list with todayAsks')
 })
 
-test('an undeliverable recheck is tried three times, then given up', async () => {
+test('an undeliverable recheck is retried once, in the next window, then given up', async () => {
   const daemon = await startDaemon({ port: 0 })
   const base = `http://127.0.0.1:${daemon.port}`
   try {
@@ -64,9 +64,15 @@ test('an undeliverable recheck is tried three times, then given up', async () =>
       }),
     })
     assert.equal(res.response.status, 201, JSON.stringify(res.body))
-    await wait(60)
+    await wait(450)
     for (let i = 0; i < 5; i += 1) await daemon.sweep()
-    assert.equal(calls(), 3, 'three attempts, then no more')
+    assert.equal(calls(), 1, 'one attempt per window, however many sweeps run')
+    await wait(450)
+    for (let i = 0; i < 3; i += 1) await daemon.sweep()
+    assert.equal(calls(), 2, 'one retry in the next window')
+    await wait(450)
+    for (let i = 0; i < 3; i += 1) await daemon.sweep()
+    assert.equal(calls(), 2, 'then no more')
     const ask = (await json(base, `/api/asks/${res.body.ticket}`)).body
     assert.ok(ask.recheck_unavailable_at, 'the ask records that the recheck could not be delivered')
     assert.equal(ask.rechecked_at, undefined, 'it was never delivered')

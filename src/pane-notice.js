@@ -86,16 +86,26 @@ export async function originFinishedNotice(ask) {
   return postNotice(ask.origin.pane_id, 'unblock-origin-finished', text)
 }
 
+/** A post that outlived its deadline was detached, not killed: lane-post has usually posted already. */
+export const delivered = (outcome) => outcome === 'sent' || outcome === 'unconfirmed'
+
+/**
+ * Post one notice through lane-post. lane-post can run well past 5 s (it syncs bulletins
+ * to other boxes after posting), so a post still running at the deadline is detached and
+ * reported 'unconfirmed', never killed and never resent ('failed' means a spawn error or a
+ * non-zero exit). UNBLOCK_LANE_POST_TIMEOUT_MS sets the deadline (default 30 s).
+ */
 function postNotice(pane, topic, text) {
+  const timeoutMs = Number(process.env.UNBLOCK_LANE_POST_TIMEOUT_MS) > 0 ? Number(process.env.UNBLOCK_LANE_POST_TIMEOUT_MS) : 30000
   return new Promise((resolve) => {
     const child = spawn(process.env.UNBLOCK_LANE_POST_BIN || 'lane-post',
       ['post', '--to', pane, '--from', 'unblock', '--kind', 'task',
         '--topic', topic, '--wake', 'auto', text],
       { stdio: 'ignore' })
     const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve('failed')
-    }, 5000)
+      child.unref()
+      resolve('unconfirmed')
+    }, timeoutMs)
     child.on('error', () => {
       clearTimeout(timer)
       resolve('failed')

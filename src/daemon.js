@@ -2,7 +2,7 @@ import { createHttpHandler } from './mcp.js'
 import { processStarts, sameProcess, verifiedOrigin, hasVerifiedPid } from './origin-process.js'
 import http from 'node:http'
 import { execFile } from 'node:child_process'
-import { guardedAnswerNotice, recheckNotice, originFinishedNotice } from './pane-notice.js'
+import { guardedAnswerNotice, recheckNotice, originFinishedNotice, delivered } from './pane-notice.js'
 import { createScopeRoutes } from './scope.js'
 import { ASSET_ID } from './scope-assets.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -551,7 +551,7 @@ function scrubFieldBounce(raw) {
     if (starts === null || ask.status !== 'answered' || !hasVerifiedPid(ask.origin) || ask.routed_at || sameProcess(ask.origin.pid, ask.origin.pid_start, starts)) return ask
     const attempts = routeFailures.get(ask.ticket) || 0
     if (attempts >= 3) return ask
-    if (ask.origin.pane_id && await originFinishedNotice(ask) === 'sent') {
+    if (ask.origin.pane_id && delivered(await originFinishedNotice(ask))) {
       const routed = store.markRouted(ask.ticket, ask.origin.pane_id)
       emitAsk(routed, routed.status)
       emitQueue()
@@ -1331,7 +1331,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
           if (reason) {
             const closed = store.autoClose(ask.ticket, reason)
             if (closed) { changed = true; emitAsk(closed, closed.status) }
-          } else if (!ask.set_aside_at && ask.rechecked_at != null && Date.now() - ask.rechecked_at >= replyMs && (ask.kept_at == null || ask.kept_at < ask.rechecked_at)) {
+          } else if (!ask.set_aside_at && ask.rechecked_at != null && Date.now() - ask.rechecked_at >= replyMs && (ask.kept_at == null || (ask.kept_at < ask.rechecked_at && Date.now() - ask.kept_at >= recheckAfterMs))) {
             const aside = store.setAside(ask.ticket, 'no_reply')
             changed = true; emitAsk(aside, aside.status)
           }
@@ -1365,8 +1365,12 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         if (ask?.status !== 'open' || ask.rechecked_at != null) return
         const sentAt = Date.now()
         if (!ask.origin?.pane_id) store.markRecheckUnreachable(ticket)
-        else if (await recheckNotice(ask, recheckAfterMs) === 'sent') store.markRechecked(ticket, sentAt)
-        else store.markRecheckFailed(ticket)
+        else {
+          // Recorded before the post: a slow or overlapping sweep never sends this window's nag twice.
+          store.markRecheckAttempt(ticket, sentAt)
+          if (delivered(await recheckNotice(ask, recheckAfterMs))) store.markRechecked(ticket, sentAt)
+          else store.markRecheckFailed(ticket)
+        }
         const updated = store.get(ticket)
         if (updated.set_aside_at !== ask.set_aside_at || updated.rechecked_at !== ask.rechecked_at) { changed = true; emitAsk(updated, updated.status) }
       })

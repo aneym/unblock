@@ -249,6 +249,7 @@ export class Store {
     this.#addColumn('asks', 'rechecked_at', 'INTEGER')
     this.#addColumn('asks', 'recheck_failures', 'INTEGER NOT NULL DEFAULT 0')
     this.#addColumn('asks', 'recheck_unavailable_at', 'INTEGER')
+    this.#addColumn('asks', 'recheck_attempted_at', 'INTEGER')
     this.#addColumn('asks', 'weekly_at', 'INTEGER')
     for (const name of ['kept_at', 'set_aside_at', 'routed_at']) this.#addColumn('asks', name, 'INTEGER')
     for (const name of ['closes_on_json', 'close_reason', 'set_aside_reason']) this.#addColumn('asks', name, 'TEXT')
@@ -581,6 +582,7 @@ export class Store {
       repinged_at: row.repinged_at ?? undefined,
       rechecked_at: row.rechecked_at ?? undefined,
       recheck_unavailable_at: row.recheck_unavailable_at ?? undefined,
+      recheck_attempted_at: row.recheck_attempted_at ?? undefined,
       weekly_at: row.weekly_at ?? undefined,
       closes_on: row.closes_on_json ? JSON.parse(row.closes_on_json) : undefined,
       close_reason: row.close_reason ?? undefined,
@@ -894,17 +896,29 @@ export class Store {
     })
   }
 
+  /**
+   * Open asks due their one recheck nag. At most one attempt per window: an attempt, or a keep,
+   * inside the last afterMs holds the next nag until that window ends (2026-10-10: a slow
+   * lane-post made the same nag go out every sweep, and keep did not stop it).
+   */
   recheckCandidates(afterMs) {
+    const cutoff = nowMs() - afterMs
     return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
-      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL AND set_aside_at IS NULL`)
-      .all(nowMs() - afterMs).map(({ ticket }) => ticket)
+      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL AND set_aside_at IS NULL
+      AND (recheck_attempted_at IS NULL OR recheck_attempted_at <= ?) AND (kept_at IS NULL OR kept_at <= ?)`)
+      .all(cutoff, cutoff, cutoff).map(({ ticket }) => ticket)
   }
 
+  markRecheckAttempt(ticket, at = nowMs()) {
+    this.#db.prepare(`UPDATE asks SET recheck_attempted_at = ? WHERE ticket = ? AND status = 'open'`).run(at, ticket)
+  }
+
+  /** A failed post retries once, in the next window; the second failure sets the ask aside. */
   markRecheckFailed(ticket) {
     this.#db.prepare(`UPDATE asks SET recheck_failures = recheck_failures + 1,
-      recheck_unavailable_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE recheck_unavailable_at END,
-      set_aside_at = CASE WHEN recheck_failures + 1 >= 3 THEN ? ELSE set_aside_at END,
-      set_aside_reason = CASE WHEN recheck_failures + 1 >= 3 THEN 'origin_unreachable' ELSE set_aside_reason END
+      recheck_unavailable_at = CASE WHEN recheck_failures + 1 >= 2 THEN ? ELSE recheck_unavailable_at END,
+      set_aside_at = CASE WHEN recheck_failures + 1 >= 2 THEN ? ELSE set_aside_at END,
+      set_aside_reason = CASE WHEN recheck_failures + 1 >= 2 THEN 'origin_unreachable' ELSE set_aside_reason END
       WHERE ticket = ? AND status = 'open' AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL`)
       .run(nowMs(), nowMs(), ticket)
   }
