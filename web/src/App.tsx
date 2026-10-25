@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, ApiError, BASE, FinishedError, NetworkError, VIEWER } from './lib/api'
+import { api, ApiError, BASE, FinishedError, getSession, logout, NetworkError, VIEWER, type SessionInfo } from './lib/api'
+import { LoginWall } from './LoginWall'
 import { clearLocal } from './lib/drafts'
 import { ago, askKind, groupOf, hideProducts, projectCounts, sortAsks, todayAsks, type Ask, type QueueData } from './deck'
 import { Icon } from './icons'
@@ -98,6 +99,10 @@ export default function App() {
   const [error, setError] = useState('')
   const [finished, setFinished] = useState(false)
   const [selectedTicket, setSelectedTicket] = useState<string | null>(pinned)
+  // The wall: outside a shared link the page needs a signed-in human session.
+  // A shared /u/<token> link carries its own capability, so BASE skips the wall.
+  const [session, setSession] = useState<SessionInfo | null>(BASE ? { configured: true, authenticated: true, viewer: null } : null)
+  const viewer = session?.viewer ?? VIEWER
   const [showAnswered, setShowAnswered] = useState(false)
   const [doneTickets, setDoneTickets] = useState<ReadonlySet<string>>(new Set())
   const outbox = useRef(new Set<string>())
@@ -137,17 +142,30 @@ export default function App() {
     try { setData(await api<QueueData>('/api/queue')); setError('') }
     catch (cause) {
       if (cause instanceof FinishedError) setFinished(true)
-      else setError(cause instanceof Error ? cause.message : 'Unknown error')
+      // The session expired (or the daemon restarted): drop back to the wall
+      // instead of showing the previous human's queue.
+      else if (cause instanceof ApiError && cause.code === 'HUMAN_ONLY') {
+        setSession((current) => current ? { ...current, authenticated: false } : current)
+      } else setError(cause instanceof Error ? cause.message : 'Unknown error')
     }
   }, [])
   useEffect(() => {
+    if (BASE) return
+    let alive = true
+    getSession().then((info) => { if (alive) setSession(info) })
+      .catch(() => { if (alive) setSession({ configured: true, authenticated: false, viewer: null }) })
+    return () => { alive = false }
+  }, [])
+  useEffect(() => {
+    // Nothing is fetched until the human is through the wall.
+    if (!BASE && !session?.authenticated) return
     void load()
     const timer = window.setInterval(() => {
       if (document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) return
       void load()
     }, 6000)
     return () => window.clearInterval(timer)
-  }, [load])
+  }, [load, session?.authenticated])
   useEffect(() => {
     const onHash = () => setSelectedTicket(pinned())
     window.addEventListener('hashchange', onHash)
@@ -256,13 +274,18 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [asks, selected, selectedTicket, currentIndex, choose, goToList])
+  if (!BASE && session && !session.authenticated) {
+    return <LoginWall session={session} onLogin={setSession} />
+  }
   return (
     <>
       <header className="topbar">
         <div className="top-inner">
           <span className="wordmark">unblock</span>
           <span className="top-count">{asks.length} waiting{hiddenCount > 0 && ` · ${hiddenCount} hidden`}</span>
-          {VIEWER && <span className="viewer" title={VIEWER.login}>{VIEWER.name || VIEWER.login}</span>}
+          {viewer && <span className="viewer" title={viewer.login}>{viewer.name || viewer.login}</span>}
+          {viewer && !BASE && <button className="text-button sign-out" type="button"
+            onClick={() => { void logout().finally(() => setSession({ configured: true, authenticated: false, viewer: null })) }}>Sign out</button>}
         </div>
       </header>
       {!BASE && sendNotice && <div className={`outbox-notice${sendNotice.kind === 'partial' ? ' is-partial' : ''}`} role="status">

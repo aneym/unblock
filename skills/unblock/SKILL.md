@@ -133,9 +133,11 @@ A `message` ask carries `to`, `via`, an optional `subject` and the exact
 
 ## Only a person approves
 
-Approvals for consent, spend and message count only when they come from the
-human's own signed-in page. Answering one yourself, drafting a verdict or
-minting a link to approve it is refused. Do not try.
+Approvals for consent, spend and message count only from a signed-in human: the
+queue page behind its local passphrase (`unblock auth setup`), a tailnet
+identity, or a link a signed-in human minted. Answering one yourself, drafting
+a verdict or minting a link to approve it is refused. Do not try. Tell the
+human to sign in at the queue page — no Tailscale or special link required.
 
 ## Blocker or decision
 

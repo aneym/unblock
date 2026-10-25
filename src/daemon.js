@@ -18,6 +18,11 @@ import { createLivedocApprovals } from './scope-approvals.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
 import { CLOSED_TO_ANSWERS, finished, Store } from './store.js'
+import {
+  SESSION_COOKIE, clearedCookieValue, createSession, destroySession, isConfigured,
+  localViewer, loginRateLimited, loginRetryAfterMs, noteLoginFailure, parseCookies,
+  resetLoginFailures, sessionCookieValue, sessionFor, verifyPassphrase,
+} from './auth.js'
 
 const VERSION = '0.1.0'
 const HOST = '127.0.0.1'
@@ -188,8 +193,28 @@ function proxyIdentity(req) {
   return { login, name: req.headers['tailscale-user-name'] || login }
 }
 
+/** A signed-in local session: the human proved the passphrase at the wall. */
+function sessionIdentity(req) {
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+  const session = sessionFor(token)
+  return session ? session.viewer : null
+}
+
+/**
+ * How a request proves a person is present: a trusted-proxy identity or a
+ * signed-in session. Never the bearer — agents hold that, which is exactly
+ * why approval writes ask for one of these two instead.
+ */
+function humanVia(req) {
+  const proxy = proxyIdentity(req)
+  if (proxy) return `tailnet:${proxy.login}`
+  const session = sessionIdentity(req)
+  if (session) return `session:${session.login}`
+  return null
+}
+
 function isAuthorized(req, secret) {
-  if (proxyIdentity(req)) return true
+  if (proxyIdentity(req) || sessionIdentity(req)) return true
   const header = req.headers.authorization
   if (typeof header === 'string' && header.startsWith('Bearer ')) {
     return sameSecret(header.slice(7).trim(), secret)
@@ -198,9 +223,9 @@ function isAuthorized(req, secret) {
   return typeof alt === 'string' && sameSecret(alt.trim(), secret)
 }
 
-/** Trusted-proxy human identity, never the bearer secret an agent uses. */
+/** A human identity — proxy or signed-in session — never the bearer. */
 function requireHumanPath(req) {
-  if (!proxyIdentity(req)) { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
+  if (!humanVia(req)) { const error = new Error('answer this on the page'); error.code = 'HUMAN_ONLY'; error.status = 403; throw error }
 }
 
 /**
@@ -222,6 +247,12 @@ function validateHostHeader(req) {
   } catch {
     return false
   }
+}
+
+/** Loopback Host, without trusting any client-supplied identity header. */
+function isLoopbackHost(req) {
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+  return host === HOST || host === 'localhost' || host === '::1'
 }
 
 function validateOriginHeader(req, port) {
@@ -830,6 +861,42 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       })
     }
 
+    // Local sign-in: the wall the page renders before it shows a single ask.
+    // GET reports where the viewer stands, POST exchanges the passphrase for
+    // an in-memory session cookie, DELETE signs out. Setup itself never runs
+    // over HTTP — `unblock auth setup` is TTY-only, so no process can claim
+    // the credential by racing the first request.
+    if (pathname === '/api/session') {
+      const proxy = proxyIdentity(req)
+      const signedIn = sessionIdentity(req)
+      if (req.method === 'GET') {
+        const who = proxy || signedIn
+        return sendJson(res, 200, { configured: isConfigured(), authenticated: Boolean(who), viewer: who })
+      }
+      if (req.method === 'POST') {
+        if (proxy || signedIn) return sendJson(res, 200, { configured: isConfigured(), authenticated: true, viewer: proxy || signedIn })
+        if (!isConfigured()) return sendJson(res, 409, { error: 'no passphrase is set — run `unblock auth setup`', code: 'NO_PASSPHRASE' })
+        if (loginRateLimited()) return sendJson(res, 429, { error: 'too many attempts — wait a few minutes', code: 'RATE_LIMITED', retry_after_ms: loginRetryAfterMs() })
+        const body = await readJson(req)
+        if (!verifyPassphrase(typeof body?.passphrase === 'string' ? body.passphrase : '')) {
+          noteLoginFailure()
+          return sendJson(res, 401, { error: 'wrong passphrase', code: 'BAD_PASSPHRASE' })
+        }
+        resetLoginFailures()
+        const viewer = localViewer()
+        const { token } = createSession(viewer)
+        const secure = (process.env.UNBLOCK_PUBLIC_ORIGIN || '').startsWith('https:')
+        res.setHeader('set-cookie', sessionCookieValue(token, { secure }))
+        return sendJson(res, 200, { configured: true, authenticated: true, viewer })
+      }
+      if (req.method === 'DELETE') {
+        destroySession(parseCookies(req.headers.cookie)[SESSION_COOKIE])
+        res.setHeader('set-cookie', clearedCookieValue)
+        return sendJson(res, 200, { configured: isConfigured(), authenticated: false, viewer: null })
+      }
+      return sendJson(res, 405, { error: 'method not allowed' })
+    }
+
     // Everything under /api needs the daemon secret. /u/:token routes carry
     // their own capability and are checked in handleTokenRoute; the page's two
     // static assets are public because they contain nothing.
@@ -838,13 +905,16 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     // deliberately exempts it, rather than open unless someone remembers.
     const isPublic =
       pathname === '/api/health' ||
+      // The shell itself carries no queue data: loopback gets it, signs in,
+      // and every /api call behind it is decided below as usual.
+      pathname === '/' || pathname === '/index.html' ||
       (pathname === '/s' || pathname.startsWith('/s/')) ||
       // Built panel assets carry nothing secret; the page itself is gated by
       // its link token, which is checked in handleTokenRoute.
       staticAsset(pathname) !== null ||
       pathname.startsWith('/u/')
     if (!isPublic && !relay && !isAuthorized(req, authSecret)) {
-      return sendJson(res, 401, { error: 'unauthorized' })
+      return sendJson(res, 401, { error: 'unauthorized', code: 'UNAUTHORIZED' })
     }
 
     if (pathname === '/api/scope' || pathname.startsWith('/api/scope/') || pathname === '/s' || pathname.startsWith('/s/')) {
@@ -1039,7 +1109,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         return sendJson(res, 200, result)
       }
       if (rejectRailsWithoutProof(req, res, body)) return
-      const answeredVia = proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : body.via === 'rails' ? 'rails' : 'local'
+      const answeredVia = humanVia(req) || (body.via === 'rails' ? 'rails' : 'local')
       const result = body.bounce
         ? await withTicket(ticket, () => bounceAsk(ticket, body.reply, answeredVia, body.revision, body.field_bounce))
         : await answerAsk(ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, answeredVia)
@@ -1052,7 +1122,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     if (ticket && req.method === 'POST') {
       if (!store.get(ticket)) return notFound(res)
       const body = await readJson(req)
-      return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')) })
+      return sendJson(res, 200, { ask: await withTicket(ticket, () => applyDraft(ticket, body, humanVia(req) || 'local')) })
     }
 
     // Revise a live ask instead of cancelling and refiling it. The ticket, the
@@ -1146,7 +1216,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         askId: ask?.id || null,
         scope: ask ? 'ask' : 'queue',
         ttlSeconds: body.ttl_seconds || 900,
-        mintedBy: proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local',
+        mintedBy: humanVia(req) || 'local',
       })
       return sendJson(res, 201, {
         url: `http://${HOST}:${actualPort}/u/${link.token}`,
@@ -1158,9 +1228,15 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     // Canonical per-person entry point. Stable URL, nothing secret in it,
     // safe to bookmark or pin to a home screen — because the capability is
     // the viewer's tailnet identity, not the address.
-    const who = proxyIdentity(req)
-    if (who && (pathname === '/' || pathname === '/index.html')) {
-      return servePanel(res, null, who)
+    const who = proxyIdentity(req) || sessionIdentity(req)
+    if (pathname === '/' || pathname === '/index.html') {
+      // The login wall. A signed-in viewer gets the panel; loopback gets the
+      // shell so the sign-in screen can render — its API calls still face the
+      // gate above. A public-origin host stays strict: no shell for a viewer
+      // the trusted proxy did not identify (and no session, since the proxy
+      // is what makes that host reachable in the first place).
+      if (who || isLoopbackHost(req)) return servePanel(res, null, who)
+      return sendJson(res, 401, { error: 'unauthorized', code: 'UNAUTHORIZED' })
     }
     if (who && pathname.startsWith('/api/')) {
       // handled by the normal /api routes below, already authorized
@@ -1182,7 +1258,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (rejectRailsWithoutProof(req, res, body)) return
-      const answeredVia = proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : body.via === 'rails' ? 'rails' : 'local'
+      const answeredVia = humanVia(req) || (body.via === 'rails' ? 'rails' : 'local')
       const result = body.bounce
         ? await withTicket(body.ticket, () => bounceAsk(body.ticket, body.reply, answeredVia, body.revision, body.field_bounce))
         : await answerAsk(body.ticket, body.values || {}, body.reply, body.field_context, body.field_bounce, body.revision, answeredVia)
@@ -1196,7 +1272,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       const body = await readJson(req)
       if (!body.ticket) return sendJson(res, 400, { error: 'ticket is required' })
       if (!store.get(body.ticket)) return notFound(res)
-      return sendJson(res, 200, { ask: await withTicket(body.ticket, () => applyDraft(body.ticket, body, proxyIdentity(req) ? `tailnet:${proxyIdentity(req).login}` : 'local')) })
+      return sendJson(res, 200, { ask: await withTicket(body.ticket, () => applyDraft(body.ticket, body, humanVia(req) || 'local')) })
     }
 
     const tokenMatch = pathname.match(/^\/u\/([^/]+)(.*)$/)
