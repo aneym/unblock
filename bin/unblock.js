@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-/** The CLI is a local client. Only reveal resolves a secret, and only here. */
 import { randomUUID } from 'node:crypto'
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { basename, dirname, extname, join, resolve, resolve as resolvePath } from 'node:path'
@@ -388,7 +387,6 @@ async function readBody(path) {
 async function file(args) {
   const { rest, opts } = flags(args, { '--origin': true, '--emergency': true })
   if (rest.length > 1) fail('usage: unblock file [path|-] [--origin lane] [--emergency "<what is down>"]')
-  // Same JSON the MCP tool takes. A body already shaped {ask, origin} passes through.
   const body = await readBody(rest[0])
   const detectedPid = filerPid()
   const payload = body && typeof body === 'object' && 'ask' in body ? body : {
@@ -407,7 +405,6 @@ async function file(args) {
   payload.origin = { ...laneIdentity(), ...payload.origin }
   if (detectedPid === undefined) delete payload.origin.pid
   if (opts['--origin']) payload.origin = { ...payload.origin, lane_name: opts['--origin'] }
-  // Outside today's focus the daemon holds the ask; a stated emergency passes (src/focus-gate.js).
   if (opts['--emergency']) {
     payload.emergency = opts['--emergency']
     if (payload.ask && typeof payload.ask === 'object') payload.ask.level = 'P0'
@@ -1445,7 +1442,11 @@ try {
   else if (command === 'rails') await rails(input)
   else if (command === 'ui' || command === 'mcp') {
     if (input.includes('--json')) fail(`${command} does not support --json`)
-    const path = command === 'ui' ? join(ROOT, 'plugin', 'tui.js') : join(ROOT, 'src', 'mcp.js')
-    spawn(process.execPath, [path, ...input], { stdio: 'inherit' }).on('exit', (code) => process.exit(code ?? 0))
+    if (command === 'ui') await import('../plugin/tui.js')
+    else {
+      const mcp = await import('../src/mcp.js')
+      if (input.includes('--http')) await mcp.startHttp()
+      else mcp.startStdio()
+    }
   } else fail(`unknown command: ${command}\nTry: unblock help`)
 } catch (error) { fail(command === 'rails' ? railsErrorCode(error) : error.message, 1) }
