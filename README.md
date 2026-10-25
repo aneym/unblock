@@ -89,12 +89,15 @@ unblock answer <ticket> <value>        answer a one-question ask in one line
 unblock answer <ticket> name=value ... answer by question name
 unblock close <ticket> <reason...>     withdraw an open ask with a one-line reason
 unblock file [path|-]                  file an ask from JSON
+unblock park [path|-]                  file an ask and block until it is answered
+unblock check                           collect answers and show drafts/open links
+unblock collect <ticket>                collect one answered ask
 unblock update <ticket> [path|-]       revise an open ask
 unblock link <ticket> [--share]        the stable queue link, or a 15-minute share link
 unblock daemon start|stop|restart|status
 ```
 
-`--json` works on every command except `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
+`--json` works on data commands except `help`, `reveal`, `ui` and `mcp`. Exit codes: 0 ok, 1 daemon
 unreachable, 2 usage, 3 no such ask, 4 rejected by the queue, 5 ask is not open.
 
 ## Live asks
