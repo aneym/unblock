@@ -200,7 +200,9 @@ async function alexList() {
   if (json) return output({ ...view, asks })
   const { held = 0, aside = 0, not_focus: notFocus = 0, lane_closed: closed = 0 } = view.hidden ?? {}
   console.log(`${asks.length} for today; ${held} held, ${aside} set aside, ${notFocus} outside focus, ${closed} from closed lanes`)
-  if (view.error) console.log(view.error)
+  if (view.stale) console.log(`(stale view from ${age(view.computed_at)})`)
+  if (view.partial) console.log(`(partial: ${view.error})`)
+  else if (view.error) console.log(view.error)
   for (const ask of asks) {
     console.log(`  ${ask.ticket}  ${ask.title}`)
     if (ask.link) console.log(`             ${ask.link}`)

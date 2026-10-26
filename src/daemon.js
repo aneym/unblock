@@ -4,7 +4,8 @@ import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
 import { guardedAnswerNotice, recheckNotice, originFinishedNotice, delivered } from './pane-notice.js'
 import { laneForAsk, laneClosed } from './lane-state.js'
-import { alexView, emergencyReason, focusGate } from './focus-gate.js'
+import { alexView, emergencyReason, focusGate, storeView } from './focus-gate.js'
+import { createAlexViewCache } from './alex-view-cache.js'
 import { createScopeRoutes } from './scope.js'
 import { ASSET_ID } from './scope-assets.js'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -626,6 +627,12 @@ function scrubFieldBounce(raw) {
     }
   }
 
+  const alexViewCache = createAlexViewCache({
+    store,
+    compute: () => alexView(store, process.env, deadReference),
+    partial: () => storeView(store),
+  })
+
 async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revision, answeredVia) {
   return withTicket(ticket, async () => {
     const ask = store.get(ticket)
@@ -897,7 +904,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
     }
 
     if (req.method === 'GET' && pathname === '/api/asks') {
-      if (url.searchParams.get('view') === 'alex') return sendJson(res, 200, await alexView(store, process.env, deadReference))
+      if (url.searchParams.get('view') === 'alex') return sendJson(res, 200, await alexViewCache())
       const profile = url.searchParams.get('profile') || '*'
       const asks = store.list({
         profile,

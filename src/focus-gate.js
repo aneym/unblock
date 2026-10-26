@@ -21,6 +21,7 @@ async function emptyFocus() {
   }
 }
 import { laneClosed, laneForAsk } from './lane-state.js'
+import { mapLimit } from './alex-view-cache.js'
 
 const GENERIC = new Set(['claude', 'cli', 'codex', 'unknown', 'agent'])
 
@@ -77,15 +78,33 @@ export async function focusGate(body, ask, origin, env = process.env, log = cons
   }
 }
 
-export async function alexView(store, env = process.env, deadReference = async () => null) {
-  const hidden = { not_focus: 0, aside: 0, held: 0, lane_closed: 0 }
-  const dropped = () => store.list({ profile: '*', status: ['open'], includeAside: true })
+const DEAD_REFERENCE_CONCURRENCY = 8
+
+function droppedAsks(store) {
+  return store.list({ profile: '*', status: ['open'], includeAside: true })
     .filter(ask => ask.set_aside_at != null && /^(lane_closed:|settled:|duplicate_of:)/.test(ask.set_aside_reason ?? ''))
     .map(ask => ({ ticket: ask.ticket, title: ask.title, dropped_reason: ask.set_aside_reason }))
+}
+
+export function storeView(store) {
+  const hidden = { not_focus: 0, aside: 0, held: 0, lane_closed: 0 }
+  const asks = []
+  for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
+    if (ask.set_aside_at != null || (ask.weekly_at != null && !((ask.kept_at ?? 0) > ask.weekly_at))) {
+      hidden.aside += 1
+      if (ask.set_aside_reason?.startsWith('lane_closed:')) hidden.lane_closed += 1
+    } else asks.push(ask)
+  }
+  return { asks, hidden, focus: [], dropped: droppedAsks(store) }
+}
+
+export async function alexView(store, env = process.env, deadReference = async () => null) {
+  const hidden = { not_focus: 0, aside: 0, held: 0, lane_closed: 0 }
+  const dropped = () => droppedAsks(store)
   try {
     const remaining = []
-    for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
-      if (ask.set_aside_at != null) continue
+    const open = store.list({ profile: '*', status: ['open'], includeAside: true }).filter(ask => ask.set_aside_at == null)
+    const reasons = await mapLimit(open, DEAD_REFERENCE_CONCURRENCY, async (ask) => {
       const lane = laneForAsk(ask)
       let reason = lane && laneClosed(lane) ? `lane_closed:${lane}` : null
       if (reason && store.freshnessExempt(ask, reason)) reason = null
@@ -93,9 +112,12 @@ export async function alexView(store, env = process.env, deadReference = async (
         const settled = await deadReference(ask)
         if (settled) reason = `settled:${settled}`
       }
-      if (reason) store.dropFresh(ask.ticket, reason)
+      return reason
+    })
+    open.forEach((ask, index) => {
+      if (reasons[index]) store.dropFresh(ask.ticket, reasons[index])
       if (store.get(ask.ticket).set_aside_at == null) remaining.push(ask)
-    }
+    })
     const groups = new Map()
     for (const ask of remaining.sort((a, b) => b.created_at - a.created_at || b.id.localeCompare(a.id))) {
       const title = ask.title.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim()
@@ -107,8 +129,11 @@ export async function alexView(store, env = process.env, deadReference = async (
     const command = (env.UNBLOCK_HELD_ASKS || '').trim()
     if (!command) return { asks: [], hidden, focus: [], dropped: dropped(), error: 'no held-asks command configured' }
     const noFocus = await emptyFocus()
-    const focus = new Set((noFocus ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
-    const heldRows = await run(command, ['list']).catch(() => null)
+    const [focusRows, heldRows] = await Promise.all([
+      noFocus ? { focus: [] } : run(command, ['in-focus']),
+      run(command, ['list']).catch(() => null),
+    ])
+    const focus = new Set((focusRows.focus ?? []).map(key => String(key).toLowerCase()))
     hidden.held = Array.isArray(heldRows) ? heldRows.length : null
     const asks = []
     for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
