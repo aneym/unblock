@@ -77,19 +77,11 @@ export async function request(path, body) {
   return data
 }
 
-/** The allow/deny value a watcher may act on: a permission ask's verdict, or a pre-v2 decision ask's field. */
-export function permissionVerdict(ask) {
-  const value = ask.purpose === 'permission' ? ask.answers?.verdict : ask.purpose === 'decision' ? ask.answers?.decision : undefined
-  return ['allow_once', 'deny'].includes(value) ? value : undefined
-}
-
 // A daemon that predates v2 names the unknown purpose or v2-only key in its 400.
-export const NEWER_SHAPE = /(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i
-// Only adopt the known purpose; fall back only if the daemon does not recognize it.
-export const UNKNOWN_PURPOSE = /^purpose: must be one of/i
+const NEWER_SHAPE = /(?:purpose.*(?:unknown|unsupported|invalid|must be one of)|(?:unknown|unsupported|invalid).*purpose)|recommend|permission|choices\[\d+\]\.description|summary|after/i
 
 /** Fall back only when the daemon does not recognize a newer ask shape. */
-export async function fileFirst(candidates, source, fallback = NEWER_SHAPE) {
+export async function fileFirst(candidates, source) {
   for (let i = 0; i < candidates.length; i++) {
     const ask = candidates[i]
     if (ASK_PURPOSES.includes(ask.purpose)) validateAsk(ask)
@@ -105,7 +97,7 @@ export async function fileFirst(candidates, source, fallback = NEWER_SHAPE) {
       }
       const detail = String(error.data?.error ?? '')
       if (error.status === 400 && i < candidates.length - 1 &&
-        fallback.test(detail)) continue
+        NEWER_SHAPE.test(detail)) continue
       throw error
     }
   }

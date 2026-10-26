@@ -13,7 +13,7 @@ unmapped:
 
 ## Sub-features
 
-Claude permission and ask hooks, pane wake callbacks, shared hook helpers and agent skills.
+Claude permission hook (bypass auto-allow, nested-delete deny, and a deny in agent panes so no permission prompt becomes an ask), the question hook and its pane wake callback, shared hook helpers and agent skills.
 
 ## How to get to it
 

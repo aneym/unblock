@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { log, permissionVerdict, readEntry, remove, request } from './lib.js'
-import { promptPane as herdr, lockPane } from '../src/pane-notice.js'
+import { log, readEntry, remove, request } from './lib.js'
+import { promptPane as herdr } from '../src/pane-notice.js'
 
 const ticket = process.argv[2]
-if (!/^ub_[a-z0-9]+$/.test(ticket || '') || !readEntry(ticket)) process.exit(0)
+if (!/^ub_[a-z0-9]+$/.test(ticket || '') || readEntry(ticket)?.type !== 'question') process.exit(0)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function collect() {
@@ -43,72 +43,8 @@ async function deliverQuestion(ask, pane) {
   } while (true)
 }
 
-async function deliverPermission(ask, entry) {
-  if (ask.status === 'bounced') {
-    log('permission sent back; nothing sent')
-    await collect()
-    return true
-  }
-  const value = permissionVerdict(ask)
-  if (!value) {
-    log('permission answer is not a valid decision; no keys sent')
-    await collect()
-    return true
-  }
-  const unlock = lockPane(entry.pane_id)
-  if (!unlock) return false
-  try {
-    // Recheck the current prompt under the per-pane lock before any keystroke.
-    let blocked = false
-    let visible = ''
-    try {
-      const get = JSON.parse(await herdr(['pane', 'get', entry.pane_id]))
-      blocked = get.result?.pane?.agent_status === 'blocked'
-      if (blocked) visible = await herdr(['pane', 'read', entry.pane_id, '--source', 'visible'])
-    } catch { /* Missing pane or unreadable prompt must never receive keys. */ }
-    const collapsed = visible.replace(/\s+/g, ' ')
-    const marker = visible.includes('Do you want to')
-    const fingerprint = entry.fingerprint && collapsed.includes(entry.fingerprint)
-    const yes = /❯\s*1\.\s*Yes/.test(visible)
-    if (!blocked || !marker || (value === 'allow_once' && (!fingerprint || !yes))) {
-      log('prompt gone or changed; nothing sent')
-      await collect()
-      return true
-    }
-    if (value === 'deny' && !fingerprint) {
-      log('prompt gone or changed; nothing sent')
-      await collect()
-      return true
-    }
-    // One shot: drop the registry entry before the key, so neither this loop
-    // nor a second watcher can ever press it again, even if send-keys errors
-    // after the key already landed.
-    remove(ticket)
-    try {
-      await herdr(['pane', 'send-keys', entry.pane_id, value === 'allow_once' ? 'enter' : 'esc'])
-    } catch {
-      log('permission key send reported failure; not retried')
-      await request(`/api/asks/${ticket}/collect`, {}).catch(() => {})
-      return true
-    }
-    // Once a key was sent, never retry the key if the follow-up or collect fails.
-    try {
-      if (value === 'deny') {
-        await sleep(1500)
-        const note = typeof ask.answers?.note === 'string' && ask.answers.note.trim() ? ask.answers.note.trim() : ask.reply
-        await herdr(['agent', 'prompt', entry.pane_id, `[unblock ${ticket}] Alex denied that step${note ? `: ${note}` : ''}. Find another way or ask.`])
-      }
-      await collect()
-    } catch {
-      log('permission key sent but follow-up failed; no retry')
-      remove(ticket)
-    }
-    return true
-  } finally { unlock() }
-}
-
 const initial = readEntry(ticket)
-const deadline = Date.parse(initial.created_at) + (initial.type === 'question' ? 86400000 : 3600000)
+const deadline = Date.parse(initial.created_at) + 86400000
 let missing = 0
 while (Date.now() < deadline) {
   const entry = readEntry(ticket)
@@ -125,11 +61,8 @@ while (Date.now() < deadline) {
       continue
     }
     if (ask.status === 'answered' || ask.status === 'bounced') {
-      if (entry.type === 'question') {
-        await deliverQuestion(ask, entry.pane_id)
-        break
-      }
-      if (entry.type === 'permission' && await deliverPermission(ask, entry)) break
+      await deliverQuestion(ask, entry.pane_id)
+      break
     }
   } catch (error) {
     if (error.status === 404) { remove(ticket); break }

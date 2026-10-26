@@ -25,9 +25,7 @@ try {
   }
 
   if (status !== 'blocked') {
-    for (const entry of entries(String(paneId)).filter((e) => ['permission', 'detected'].includes(e.type)).slice(0, 4)) {
-      // Hook filing precedes herdr's blocked event; do not race that update.
-      if (Date.now() - Date.parse(entry.created_at) < 10000) continue
+    for (const entry of entries(String(paneId)).filter((e) => e.type === 'detected').slice(0, 4)) {
       try {
         const ask = await request(`/api/asks/${entry.ticket}`)
         if (ask.status === 'open') await request(`/api/asks/${entry.ticket}/cancel`, { note: 'the agent is no longer waiting' })

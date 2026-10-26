@@ -197,7 +197,7 @@ Add these hooks to `~/.claude/settings.json` (replace `/path/to/unblock` with yo
 }
 ```
 
-In herdr panes, questions go to unblock; permission prompts stay visible until you answer. Set `UNBLOCK_ALLOW_DIALOG=1` to use Claude's dialogs instead. Outside herdr panes the hooks do nothing.
+In herdr panes, questions go to unblock. Permission prompts never become asks: the permission hook allows what the bypass checks prove safe, denies the rest with a rework note, and the agent files an ask itself only for a kept-floor step. Set `UNBLOCK_ALLOW_DIALOG=1` to see Claude's own dialogs instead. Outside herdr panes the question hook does nothing and the permission hook only applies the bypass and nested-delete checks.
 
 ### Hermes
 
