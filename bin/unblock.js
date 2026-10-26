@@ -163,7 +163,7 @@ async function list(args) {
   const shown = asks.filter((ask) =>
     (ask.status === 'open' || (opts['--all'] && ['answered', 'cancelled'].includes(ask.status) &&
       (ask.closed_at ?? ask.answered_at ?? 0) >= cutoff)) &&
-    (opts['--aside'] ? ask.set_aside_at != null : ask.set_aside_at == null && ask.weekly_at == null) &&
+    (opts['--aside'] ? ask.set_aside_at != null : ask.set_aside_at == null) &&
     (!opts['--project'] || project(ask) === opts['--project']))
     // Open asks lead; closed ones under --all are context, not work.
     .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1))
@@ -199,7 +199,7 @@ async function alexList() {
   const asks = view.asks.map((ask) => ({ ...safe(ask), link: stable(health, ask.ticket) }))
   if (json) return output({ ...view, asks })
   const { held = 0, aside = 0, not_focus: notFocus = 0, lane_closed: closed = 0 } = view.hidden ?? {}
-  console.log(`${asks.length} for today; ${held} held, ${aside} set aside, ${notFocus} outside focus, ${closed} from closed lanes`)
+  console.log(`${asks.length} for today; ${held ?? 'unknown'} held, ${aside} set aside, ${notFocus} outside focus, ${closed} from closed lanes`)
   if (view.error) console.log(view.error)
   for (const ask of asks) {
     console.log(`  ${ask.ticket}  ${ask.title}`)

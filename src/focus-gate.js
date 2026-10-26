@@ -39,10 +39,10 @@ export function emergencyAccepted(body, ask) {
   return Boolean(emergencyReason(body?.emergency)) && ask?.level === 'P0'
 }
 
-function run(command, args, input) {
+function run(command, args, input, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const [file, ...rest] = command.split(/\s+/)
-    const child = execFile(file, [...rest, ...args], { timeout: 10000 }, (error, stdout, stderr) => {
+    const child = execFile(file, [...rest, ...args], { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) return reject(new Error((stderr.trim().split('\n').pop() || error.message)))
       try { resolve(JSON.parse(stdout)) } catch { reject(new Error('held asks gave no JSON')) }
     })
@@ -77,6 +77,30 @@ export async function focusGate(body, ask, origin, env = process.env, log = cons
   }
 }
 
+const HELD_COUNT_TTL_MS = 60_000
+const HELD_COUNT_RETRY_MS = 5_000
+const HELD_COUNT_WAIT_MS = 1_500
+const heldCounts = new Map()
+
+async function heldCount(command) {
+  let entry = heldCounts.get(command)
+  if (!entry) heldCounts.set(command, entry = { value: null, due: 0, pending: null })
+  if (!entry.pending && Date.now() >= entry.due) {
+    entry.pending = run(command, ['list'], '', 120_000).then(
+      rows => {
+        if (Array.isArray(rows)) { entry.value = rows.length; entry.due = Date.now() + HELD_COUNT_TTL_MS } else entry.due = Date.now() + HELD_COUNT_RETRY_MS
+      },
+      () => { entry.due = Date.now() + HELD_COUNT_RETRY_MS },
+    ).finally(() => { entry.pending = null })
+  }
+  if (entry.pending) {
+    let timer
+    await Promise.race([entry.pending, new Promise(resolve => { timer = setTimeout(resolve, HELD_COUNT_WAIT_MS) })])
+    clearTimeout(timer)
+  }
+  return entry.value
+}
+
 export async function alexView(store, env = process.env, deadReference = async () => null) {
   const hidden = { not_focus: 0, aside: 0, held: 0, lane_closed: 0 }
   const dropped = () => store.list({ profile: '*', status: ['open'], includeAside: true })
@@ -108,8 +132,7 @@ export async function alexView(store, env = process.env, deadReference = async (
     if (!command) return { asks: [], hidden, focus: [], dropped: dropped(), error: 'no held-asks command configured' }
     const noFocus = await emptyFocus()
     const focus = new Set((noFocus ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
-    const heldRows = await run(command, ['list']).catch(() => null)
-    hidden.held = Array.isArray(heldRows) ? heldRows.length : null
+    hidden.held = await heldCount(command)
     const asks = []
     for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
       if (ask.set_aside_at != null || (ask.weekly_at != null && !((ask.kept_at ?? 0) > ask.weekly_at))) {

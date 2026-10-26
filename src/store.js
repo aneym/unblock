@@ -962,8 +962,8 @@ export class Store {
   restore(ticket) {
     const ask = this.get(ticket)
     if (!ask) return null
-    this.keep(ticket)
-    const at = Math.max(nowMs(), ...Object.values(ask.drop_history ?? {}).map(value => value + 1))
+    const kept = this.keep(ticket)
+    const at = Math.max(nowMs(), ...Object.values(kept.drop_history ?? {}).map(value => value + 1))
     this.#db.prepare("UPDATE asks SET restored_at = ? WHERE ticket = ?").run(at, ticket)
     return this.get(ticket)
   }
@@ -975,7 +975,13 @@ export class Store {
       const error = new Error(`ask ${ticket} is ${ask.status}, not open`)
       error.code = 'ASK_NOT_OPEN'; error.askStatus = ask.status; throw error
     }
-    this.#db.prepare("UPDATE asks SET kept_at = ?, set_aside_at = NULL, set_aside_reason = NULL, origin_json = ? WHERE ticket = ? AND status = 'open'").run(nowMs(), JSON.stringify(origin ?? ask.origin), ticket)
+    const at = nowMs()
+    const history = ask.set_aside_at != null && ask.set_aside_reason
+      ? { ...ask.drop_history, [ask.set_aside_reason]: ask.drop_history?.[ask.set_aside_reason] ?? ask.set_aside_at }
+      : ask.drop_history
+    const restoredAt = ask.set_aside_at != null ? Math.max(at, ...Object.values(history ?? {}).map(value => value + 1)) : ask.restored_at ?? null
+    this.#db.prepare("UPDATE asks SET kept_at = ?, set_aside_at = NULL, set_aside_reason = NULL, origin_json = ?, drop_history_json = ?, restored_at = ? WHERE ticket = ? AND status = 'open'")
+      .run(at, JSON.stringify(origin ?? ask.origin), JSON.stringify(history ?? {}), restoredAt, ticket)
     return this.get(ticket)
   }
 

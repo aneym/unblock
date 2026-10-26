@@ -448,7 +448,7 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   let isClosed = false
 
   const queueState = () => {
-    const asks = store.list({ profile: '*', status: ['open', 'answered'] }).filter((ask) => ask.status === 'answered' || (ask.set_aside_at == null && ask.weekly_at == null))
+    const asks = store.list({ profile: '*', status: ['open', 'answered'] })
     return {
       open: asks.length,
       gating: asks.filter((ask) => ask.gating).length,
