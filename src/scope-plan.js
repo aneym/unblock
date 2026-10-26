@@ -5,7 +5,7 @@ import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-export const PLAN_URL = /^https:\/\/[a-z0-9.-]+:8950\/plans\/[A-Za-z0-9_-]+$/
+export const PLAN_URL = /^(?:https:\/\/[a-z0-9.-]+:8950\/plans\/|https:\/\/app\.rails\.so\/d\/)plan-[A-Za-z0-9_-]+$/
 
 const DIAGRAM_CSS = `.ad svg{width:100%;height:auto;font-family:inherit}
 .ad .box{fill:transparent;stroke:var(--wf-line);stroke-width:1}

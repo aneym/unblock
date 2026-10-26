@@ -120,6 +120,31 @@ test('scope plan publishes to :8950/plans/, scope url prints that link, and late
   }
 })
 
+test('a Rails Plan URL is persisted so a later publish updates the same document', async () => {
+  const h = await startScopeHarness(scope)
+  const temp = mkdtempSync(join(tmpdir(), 'unblock-plan-rails-url-'))
+  const calls = join(temp, 'calls.log')
+  const fake = join(temp, 'plan-publish')
+  writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nprintf '{"ok": true, "plan": "plan-rails", "url": "https://app.rails.so/d/plan-rails"}\\n'\n`)
+  chmodSync(fake, 0o700)
+  const cli = (args) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(import.meta.dirname, '..', 'bin', 'unblock.js'), ...args], { env: { ...process.env, UNBLOCK_PORT: String(h.port), UNBLOCK_PLAN_PUBLISH: fake, UNBLOCK_PLAN_LINK: 'off' } })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', (c) => { stdout += c }); child.stderr.on('data', (c) => { stderr += c })
+    child.on('error', reject); child.on('close', (status) => resolve({ status, stdout, stderr }))
+  })
+  try {
+    let got = await cli(['scope', 'plan', 'demo'])
+    assert.equal(got.status, 0, got.stderr)
+    assert.equal(got.stdout.trim(), 'https://app.rails.so/d/plan-rails')
+    got = await cli(['scope', 'plan', 'demo'])
+    assert.equal(got.status, 0, got.stderr)
+    assert.match(readFileSync(calls, 'utf8').trim().split('\\n').at(-1), /--into plan-rails/, 'the second publish updates the stored Plan doc')
+  } finally {
+    await h.close()
+  }
+})
+
 test('publishing a Plan doc sets its plan_url in Rails, and a Rails failure never blocks the publish', async () => {
   const h = await startScopeHarness(scope)
   const temp = mkdtempSync(join(tmpdir(), 'unblock-plan-link-'))
