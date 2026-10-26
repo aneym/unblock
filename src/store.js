@@ -910,7 +910,7 @@ export class Store {
   recheckCandidates(afterMs) {
     const cutoff = nowMs() - afterMs
     return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open'
-      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL AND set_aside_at IS NULL
+      AND created_at <= ? AND rechecked_at IS NULL AND recheck_unavailable_at IS NULL AND set_aside_at IS NULL AND restored_at IS NULL
       AND (recheck_attempted_at IS NULL OR recheck_attempted_at <= ?) AND (kept_at IS NULL OR kept_at <= ?)`)
       .all(cutoff, cutoff, cutoff).map(({ ticket }) => ticket)
   }
@@ -936,7 +936,7 @@ export class Store {
 
   unconfirmedCandidates(afterMs) {
     const cutoff = nowMs() - afterMs
-    return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open' AND set_aside_at IS NULL
+    return this.#db.prepare(`SELECT ticket FROM asks WHERE status = 'open' AND set_aside_at IS NULL AND restored_at IS NULL
       AND created_at <= ? AND closes_on_json IS NULL AND (kept_at IS NULL OR kept_at <= ?)`)
       .all(cutoff, cutoff).map(({ ticket }) => ticket)
   }

@@ -35,4 +35,23 @@ await main(async () => {
   } finally {
     await daemon.stop()
   }
+
+  const second = sandbox('kept-recheck')
+  setFocus(second, ['recruiter'])
+  const quick = await startDaemon(second, { UNBLOCK_SWEEP_MS: '300', UNBLOCK_RECHECK_AFTER_MS: '1000' })
+  try {
+    const filed = await quick.api('/api/asks', { ask: ask('Unreachable-origin call'), origin: origin(second, 'recruiter'), focus: 'surface' })
+    const state = async () => (await quick.api('/api/asks?includeAside=1')).body.asks.find(a => a.ticket === filed.body.ticket)
+    const until = async (done, ms) => {
+      for (const end = Date.now() + ms; Date.now() < end;) { if (done(await state())) return true; await new Promise(r => setTimeout(r, 250)) }
+      return false
+    }
+    check((await quick.api(`/api/asks/${filed.body.ticket}/aside`, { reason: 'not_focus' })).status === 200, 'ask is set aside before its recheck is due')
+    check((await quick.cli(['keep', filed.body.ticket])).status === 0, 'keep brings it back')
+    check(!(await until(a => a.set_aside_at, 4000)), 'a kept ask with no live filer pane is not set aside by the later recheck')
+    const view = JSON.parse((await quick.cli(['list', '--alex', '--json'])).stdout)
+    check(view.asks.some(a => a.ticket === filed.body.ticket), 'kept ask is in Alex view')
+  } finally {
+    await quick.stop()
+  }
 })
