@@ -3,8 +3,6 @@
 A queue for requests that need a human decision.
 Used by agents and the Rails workspace.
 
-rules: agent-plugin-kit@8cf0344
-
 ## Read first
 1. This file.
 2. `README.md`.

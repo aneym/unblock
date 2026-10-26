@@ -7,7 +7,7 @@ description: Verify Unblock's queue, scope documents, web panels and agent integ
 
 ## Launch
 
-Run from the repository root with Node.js 22+ and Python 3. Use the landed tools in `/Volumes/StudioExt/repos/agent-plugin-kit/bin/`.
+Run from the repository root with Node.js 22+ and Python 3. Use the installed factory tools in `~/.agent-rails/factory-runtime/bin/`.
 
 Do not start the default daemon: it can discover personal configuration and notify real agent panes. Launch behavioral journeys only through `feature-map run` on the dedicated proof host, with a fresh service identity, isolated HOME/config/data, loopback daemon, notification capture sink and runner-owned cleanup. Studio is the merge host, not the journey host.
 
@@ -20,7 +20,7 @@ Run these read-only prerequisite checks from the root:
 ```sh
 node --input-type=module -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
 python3 --version
-/Volumes/StudioExt/repos/agent-plugin-kit/bin/feature-map check --repo .
+~/.agent-rails/factory-runtime/bin/feature-map check --repo .
 ```
 
 Doctor validates runtime and map prerequisites only. To inspect identity readiness, run `test-identity SERVICE --repo . --json` using the same toolkit directory for `unblock`, `plan`, `hermes` and `herdr`. Exit 3 means unavailable, not failed behavioral assertions and not a pass. Stop at this gate; do not substitute personal sessions, Railway/wrangler credentials or a live daemon.
@@ -47,7 +47,7 @@ The top three journeys per product are registered in the feature front matter:
 For each feature in the table, run:
 
 ```sh
-/Volumes/StudioExt/repos/agent-plugin-kit/bin/feature-map run --repo . --feature human-asks/file --env sandbox --json
+~/.agent-rails/factory-runtime/bin/feature-map run --repo . --feature human-asks/file --env sandbox --json
 ```
 
 Replace the feature selector with the relevant product/feature; `web-panel/index` runs both its proofs. Optional `--proof ID` selects one. Run only against the checked-out commit; the runner keys records by that SHA. Repeat after landing to associate records with a SHA on main.
@@ -57,7 +57,7 @@ All current commands are explicit availability gates returning exit 3, not imple
 ## Evidence
 
 ```sh
-/Volumes/StudioExt/repos/agent-plugin-kit/bin/feature-map runs --repo . --latest --json
+~/.agent-rails/factory-runtime/bin/feature-map runs --repo . --latest --json
 ```
 
 Inspect each record's SHA, result and evidence references. The central store is `~/.agent-rails/runs/unblock/`; workers spool until acknowledged. Evidence includes `detail.json`, stdout/stderr and cleanup results. Report blockers verbatim, never call a record-count check behavioral verification. A blocked result does not satisfy ready/verified status.

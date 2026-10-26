@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-css_guard="${KIT_ROOT:-$HOME/.agent-rails/kit-runtime/current}/bin/css-changed"
+css_guard="${FACTORY_BIN:-$HOME/.agent-rails/factory-runtime/bin}/css-changed"
 if [ "${1-}" = "--staged" ]; then
     "$css_guard" --staged
 else
@@ -46,7 +46,7 @@ if [ -f .filecap.json ] || [ -f .filecap-baseline.json ]; then
   fi
 fi
 
-feature_map="${KIT_ROOT:-$HOME/.agent-rails/kit-runtime/current}/bin/feature-map"
+feature_map="${FACTORY_BIN:-$HOME/.agent-rails/factory-runtime/bin}/feature-map"
 if [ "$mode" = staged ]; then
   run_step 'feature-map check --staged' "$feature_map" check --repo . --staged
 else
