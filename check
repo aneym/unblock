@@ -46,7 +46,7 @@ if [ -f .filecap.json ] || [ -f .filecap-baseline.json ]; then
   fi
 fi
 
-feature_map=/Volumes/StudioExt/repos/agent-plugin-kit/bin/feature-map
+feature_map="${KIT_ROOT:-$HOME/.agent-rails/kit-runtime/current}/bin/feature-map"
 if [ "$mode" = staged ]; then
   run_step 'feature-map check --staged' "$feature_map" check --repo . --staged
 else
