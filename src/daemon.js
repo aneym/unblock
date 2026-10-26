@@ -387,7 +387,6 @@ export async function startDaemon({ port, secretStore: injectedSecretStore, issu
   }
   const store = new Store()
   const scopeRoutes = createScopeRoutes({ store, webRoot, sendJson, sendText, readJson, requireHumanPath, proxyIdentity, relayIdentity })
-  // A delayed store can be injected by tests to exercise the real async put boundary.
   const secretStore = injectedSecretStore ?? new SecretStore({ backend: process.env.UNBLOCK_SECRET_BACKEND || 'auto' })
   // Resolve the secret backend now rather than on the first /api/health. In
   // `auto` mode that probe runs `op whoami`, which can take seconds when
@@ -550,7 +549,8 @@ function scrubFieldBounce(raw) {
   return out
 }
 
-  async function routeFinished(ask, starts = processStarts(hasVerifiedPid(ask.origin) ? [ask.origin.pid] : [])) {
+  async function routeFinished(ask, starts) {
+    starts ??= await processStarts(hasVerifiedPid(ask.origin) ? [ask.origin.pid] : [])
     if (starts === null || ask.status !== 'answered' || !hasVerifiedPid(ask.origin) || ask.routed_at || sameProcess(ask.origin.pid, ask.origin.pid_start, starts)) return ask
     const attempts = routeFailures.get(ask.ticket) || 0
     if (attempts >= 3) return ask
@@ -1264,7 +1264,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
   async function sweep() {
     let changed = false
     const lifecycle = store.list({ profile: '*', status: ['open', 'answered'], includeAside: true })
-    const starts = processStarts(lifecycle.filter((ask) => hasVerifiedPid(ask.origin)).map((ask) => ask.origin.pid))
+    const starts = await processStarts(lifecycle.filter((ask) => hasVerifiedPid(ask.origin)).map((ask) => ask.origin.pid))
     for (const candidate of lifecycle) {
       try {
         await withTicket(candidate.ticket, async () => {

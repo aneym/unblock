@@ -28,10 +28,17 @@ await main(async () => {
     check((await held(box, ['list'])).stdout.includes('Factory quota call'), 'held list still has the inventory row for agents')
 
     rmSync(focus)
+    const filed = await daemon.api('/api/asks', { ask: ask('Choose tomorrow’s work', { kind: 'file' }), origin: origin(box, 'factory') })
+    check(filed.status === 201 && !filed.body.set_aside_at, 'empty focus files a normal ask without setting it aside')
     const empty = await daemon.api('/api/asks?view=alex')
-    check(empty.body.asks.length === 0, 'no focus file: view=alex returns []')
+    check(empty.body.asks.length === 3 && empty.body.asks.some(a => a.ticket === filed.body.ticket), 'empty focus shows all three active file asks')
+    check(!empty.body.asks.some(a => a.ticket === aside.body.ticket), 'empty focus still hides an explicitly set-aside ask')
     const json = JSON.parse((await daemon.cli(['list', '--alex', '--json'])).stdout)
-    check(json.asks.length === 0, 'unblock list --alex --json has 0 asks with no focus file')
+    check(json.asks.length === 3 && json.asks.some(a => a.ticket === filed.body.ticket), 'CLI shows the new file ask with empty focus')
+    const cancelled = await daemon.api(`/api/asks/${filed.body.ticket}/cancel`, { reason: 'verification finished' })
+    check(cancelled.status === 200, 'verification ask cancels successfully')
+    const after = await daemon.api('/api/asks?view=alex')
+    check(!after.body.asks.some(a => a.ticket === filed.body.ticket), 'cancelled verification ask leaves the visible queue')
   } finally {
     await daemon.stop()
   }

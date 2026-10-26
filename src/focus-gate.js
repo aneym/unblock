@@ -7,6 +7,19 @@
  * ask is filed; if the command fails the ask is filed set aside (focus_gate_unavailable), so it never reaches Alex unchecked.
  */
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+async function emptyFocus() {
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date())
+  try {
+    const data = JSON.parse(await readFile(join(homedir(), '.agent-rails', 'focus', `${day}.json`), 'utf8'))
+    return Array.isArray(data.items) && !data.items.some(item => String(item.owner ?? '').trim())
+  } catch (error) {
+    return error.code === 'ENOENT'
+  }
+}
 import { laneClosed, laneForAsk } from './lane-state.js'
 
 const GENERIC = new Set(['claude', 'cli', 'codex', 'unknown', 'agent'])
@@ -48,9 +61,10 @@ export async function focusGate(body, ask, origin, env = process.env, log = cons
   if (ask.purpose === 'permission' || body?.origin?.detected === true) return { file: true }
   const keys = askKeys(ask, origin)
   const exempt = (env.UNBLOCK_FOCUS_EXEMPT ?? '').split(',').map((key) => key.trim().toLowerCase()).filter(Boolean)
-  if (keys.some((key) => exempt.includes(key))) return { file: true }
+  if (keys.some((key) => exempt.includes(key)) || (ask.kind === 'file' && await emptyFocus())) return { file: true }
   try {
-    if (keys.length && (await run(command, ['in-focus', ...keys])).in_focus) return { file: true }
+    const focus = await run(command, ['in-focus', ...keys])
+    if (focus.in_focus || (ask.kind === 'file' && Array.isArray(focus.focus) && !focus.focus.length)) return { file: true }
     const owner = keys[0] ?? 'unknown'
     const held = await run(command, ['hold'], JSON.stringify({
       owner, keys, kind: ask.purpose, title: ask.title, tried: ask.tried ?? [],
@@ -92,9 +106,10 @@ export async function alexView(store, env = process.env, deadReference = async (
     }
     const command = (env.UNBLOCK_HELD_ASKS || '').trim()
     if (!command) return { asks: [], hidden, focus: [], dropped: dropped(), error: 'no held-asks command configured' }
-    const focus = new Set(((await run(command, ['in-focus'])).focus ?? []).map((key) => String(key).toLowerCase()))
-    const heldRows = await run(command, ['list'])
-    hidden.held = Array.isArray(heldRows) ? heldRows.length : 0
+    const noFocus = await emptyFocus()
+    const focus = new Set((noFocus ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
+    const heldRows = await run(command, ['list']).catch(() => null)
+    hidden.held = Array.isArray(heldRows) ? heldRows.length : null
     const asks = []
     for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
       if (ask.set_aside_at != null || (ask.weekly_at != null && !((ask.kept_at ?? 0) > ask.weekly_at))) {
@@ -104,7 +119,7 @@ export async function alexView(store, env = process.env, deadReference = async (
       }
       const lane = laneForAsk(ask)
       const keys = [...askKeys(ask, ask.origin), ...(lane ? [lane.toLowerCase()] : [])]
-      if (ask.level === 'P0' || keys.some((key) => focus.has(key))) asks.push(ask)
+      if (ask.level === 'P0' || (ask.kind === 'file' && !focus.size) || keys.some((key) => focus.has(key))) asks.push(ask)
       else hidden.not_focus += 1
     }
     return { asks, hidden, focus: [...focus], dropped: dropped() }

@@ -1,4 +1,7 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execute = promisify(execFile)
 import { basename } from 'node:path'
 import { promptPane } from './pane-notice.js'
 
@@ -38,7 +41,7 @@ export function filerPid() {
 export async function verifiedOrigin(origin) {
   const { pid, pid_start, pid_verified, ...identity } = origin
   if (!identity.pane_id || !Number.isSafeInteger(pid) || pid <= 1) return identity
-  const start = processStarts([pid])?.get(pid)
+  const start = (await processStarts([pid]))?.get(pid)
   const parents = ancestry(pid)
   if (!start || !parents || SHELLS.has(parents[0]?.name)) return identity
   // A process name or a caller-supplied pane label alone does not prove ownership.
@@ -51,7 +54,7 @@ export async function verifiedOrigin(origin) {
     const name = parents[0]?.name
     if (!AGENTS.has(name) && !(['node', 'nodejs', 'python', 'python3'].includes(name) && AGENTS.has(identity.agent))) return identity
   } catch { return identity }
-  if (processStarts([pid])?.get(pid) !== start) return identity
+  if ((await processStarts([pid]))?.get(pid) !== start) return identity
   return { ...identity, pid, pid_start: start, pid_verified: true }
 }
 
@@ -66,19 +69,19 @@ export function laneIdentity(identity = process.env) {
   }
 }
 
-export function processStarts(pids) {
+export async function processStarts(pids) {
   const starts = new Map()
   const valid = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 0)
   if (!valid.length) return starts
   try {
-    const output = execFileSync('ps', ['-o', 'pid=,lstart=', '-p', valid.join(',')], { encoding: 'utf8', timeout: 5000 })
+    const { stdout: output } = await execute('ps', ['-o', 'pid=,lstart=', '-p', valid.join(',')], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' })
     for (const line of output.split('\n')) {
       const match = line.trim().match(/^(\d+)\s+(.+)$/)
       if (match) starts.set(Number(match[1]), match[2].trim())
     }
   } catch (error) {
     // ps exits 1 when none of the requested processes exist.
-    if (error.status !== 1 || error.signal || String(error.stdout ?? '').trim() || String(error.stderr ?? '').trim()) return null
+    if (error.code !== 1 || error.signal || String(error.stdout ?? '').trim() || String(error.stderr ?? '').trim()) return null
   }
   return starts
 }

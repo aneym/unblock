@@ -619,11 +619,11 @@ export class Store {
     const statuses = includeClosed ? null : status
     const rows = this.#db.prepare('SELECT * FROM asks ORDER BY created_at ASC').all()
     const asks = rows
-      .map((r) => this.#hydrate(r))
-      .filter((a) => (statuses ? statuses.includes(a.status) : true))
-      .filter((a) => (key ? a.origin && agentKey(a.origin) === key : true))
-      .filter((a) => (project ? a.project === project : true))
+      .filter(a => !statuses || statuses.includes(a.status))
+      .filter(a => !project || a.project === project)
       .filter((a) => includeAside || a.status !== 'open' || (a.set_aside_at == null && (a.weekly_at == null || (a.kept_at ?? 0) > a.weekly_at)))
+      .map(r => this.#hydrate(r))
+      .filter(a => !key || (a.origin && agentKey(a.origin) === key))
       .filter((a) => matchesProfile(a.origin, profile))
 
     return asks.sort((a, b) => {
