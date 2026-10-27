@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import readline from 'node:readline'
 
-import { daemonRoot } from './config.js'
+import { daemonRoot, readConfig } from './config.js'
 import { ONLY_YOU_REASONS } from './schema.js'
 
 const PROTOCOL_VERSION = '2025-06-18'
@@ -103,7 +103,7 @@ async function daemonFetch(pathname, options = {}) {
     } catch (error) {
       if (error.status) throw error
       lastError = error
-      if (attempt === 0) {
+      if (attempt === 0 && !readConfig().remote) {
         spawn(process.execPath, [daemonPath()], {
           detached: true,
           stdio: 'ignore',

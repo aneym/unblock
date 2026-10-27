@@ -13,7 +13,7 @@ import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep, isAbsolute } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { applyConfig, configDir, daemonRoot, scopeLinkTemplate } from './config.js'
+import { applyConfig, configDir, daemonRoot, scopeLinkTemplate, readConfig } from './config.js'
 import { createLivedocApprovals } from './scope-approvals.js'
 import { APPROVAL_PURPOSES, normalizeOrigin, optionalScrub, validateAsk, validateUpdate, ValidationError } from './schema.js'
 import { SecretStore } from './secrets.js'
@@ -1461,6 +1461,7 @@ async function startResilient() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (readConfig().remote) throw new Error("remote unblock configured; local daemon start is disabled")
   const daemon = await startResilient()
   const shutdown = async () => {
     await daemon.close()

@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 
-import { daemonRoot } from '../src/config.js'
+import { daemonRoot, readConfig } from '../src/config.js'
 
 export const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -70,6 +70,10 @@ async function alive(port, timeoutMs = Number(process.env.UNBLOCK_HEALTH_TIMEOUT
 
 /** Find the daemon, starting it detached if it is not up. Returns a base URL. */
 export async function daemon({ start = true, timeoutMs } = {}) {
+  if (readConfig().remote) {
+    if (await alive(readPort())) return `http://127.0.0.1:${readPort()}`
+    throw new Error('remote unblock forward is unavailable; local autostart is disabled')
+  }
   let port = readPort()
   if (await alive(port)) return `http://127.0.0.1:${port}`
   if (port && await alive(port, 8000)) return `http://127.0.0.1:${port}`
