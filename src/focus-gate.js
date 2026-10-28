@@ -151,7 +151,7 @@ export async function alexView(store, env = process.env, deadReference = async (
       }
       const lane = laneForAsk(ask)
       const keys = [...askKeys(ask, ask.origin), ...(lane ? [lane.toLowerCase()] : [])]
-      if (ask.level === 'P0' || (ask.kind === 'file' && !focus.size) || keys.some((key) => focus.has(key))) asks.push(ask)
+      if (ask.level === 'P0' || !focus.size || keys.some((key) => focus.has(key))) asks.push(ask)
       else hidden.not_focus += 1
     }
     return { asks, hidden, focus: [...focus], dropped: dropped() }
