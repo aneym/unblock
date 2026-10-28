@@ -4,7 +4,7 @@
  * command in UNBLOCK_HELD_ASKS (agent-rails scripts/held_asks.py) and surfaces when Alex makes
  * that work focus. A stated emergency (production down or broken, a security incident) and the
  * held-ask surfacer itself pass, as do permission prompts and herdr-detected waits. With no command configured the
- * ask is filed; if the command fails the ask is filed set aside (focus_gate_unavailable), so it never reaches Alex unchecked.
+ * ask is filed; if the command fails the ask is filed to Alex's queue, so a broken gate never hides a live ask.
  */
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
@@ -43,9 +43,10 @@ function run(command, args, input, timeout = 10000) {
   return new Promise((resolve, reject) => {
     const [file, ...rest] = command.split(/\s+/)
     const child = execFile(file, [...rest, ...args], { timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) return reject(new Error((stderr.trim().split('\n').pop() || error.message)))
+      if (error) return reject(new Error((stderr.trim().split('\n').pop() || error.message.trim())))
       try { resolve(JSON.parse(stdout)) } catch { reject(new Error('held asks gave no JSON')) }
     })
+    child.stdin.on('error', () => {})
     child.stdin.end(input ?? '')
   })
 }
@@ -72,8 +73,8 @@ export async function focusGate(body, ask, origin, env = process.env, log = cons
     }))
     return { held: held.id, owner, keys }
   } catch (error) {
-    log(`unblock: focus gate unavailable, filing set aside: ${error.message}`)
-    return { file: true, aside: 'focus_gate_unavailable' }
+    log(`unblock: focus gate unavailable, filing to Alex: ${error.message}`)
+    return { file: true }
   }
 }
 
@@ -129,12 +130,17 @@ export async function alexView(store, env = process.env, deadReference = async (
       else groups.set(key, ask)
     }
     const command = (env.UNBLOCK_HELD_ASKS || '').trim()
-    if (!command) {
-      const asks = remaining.filter((ask) => ask.weekly_at == null || (ask.kept_at ?? 0) > ask.weekly_at)
-      return { asks, hidden, focus: [], dropped: dropped() }
+    let focus = null
+    let failure = null
+    if (command) {
+      try {
+        focus = new Set(((await emptyFocus()) ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
+      } catch (error) { failure = `focus gate unavailable, showing every open ask: ${error.message}` }
     }
-    const noFocus = await emptyFocus()
-    const focus = new Set((noFocus ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
+    if (!focus) {
+      const asks = remaining.filter((ask) => store.get(ask.ticket).set_aside_at == null && (ask.weekly_at == null || (ask.kept_at ?? 0) > ask.weekly_at))
+      return { asks, hidden, focus: [], dropped: dropped(), ...(failure ? { error: failure } : {}) }
+    }
     hidden.held = await heldCount(command)
     const asks = []
     for (const ask of store.list({ profile: '*', status: ['open'], includeAside: true })) {
