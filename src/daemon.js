@@ -1314,7 +1314,8 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
         const ask = store.get(ticket)
         if (ask?.status !== 'open' || ask.rechecked_at != null) return
         const sentAt = Date.now()
-        if (!ask.origin?.pane_id) store.markRecheckUnreachable(ticket)
+        if (!diesWithOrigin(ask)) store.markRechecked(ticket, sentAt)
+        else if (!ask.origin?.pane_id) store.markRecheckUnreachable(ticket)
         else {
           // Recorded before the post: a slow or overlapping sweep never sends this window's nag twice.
           store.markRecheckAttempt(ticket, sentAt)

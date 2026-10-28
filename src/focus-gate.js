@@ -129,7 +129,10 @@ export async function alexView(store, env = process.env, deadReference = async (
       else groups.set(key, ask)
     }
     const command = (env.UNBLOCK_HELD_ASKS || '').trim()
-    if (!command) return { asks: [], hidden, focus: [], dropped: dropped(), error: 'no held-asks command configured' }
+    if (!command) {
+      const asks = remaining.filter((ask) => ask.weekly_at == null || (ask.kept_at ?? 0) > ask.weekly_at)
+      return { asks, hidden, focus: [], dropped: dropped() }
+    }
     const noFocus = await emptyFocus()
     const focus = new Set((noFocus ? [] : ((await run(command, ['in-focus'])).focus ?? [])).map(key => String(key).toLowerCase()))
     hidden.held = await heldCount(command)
