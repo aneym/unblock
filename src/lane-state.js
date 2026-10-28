@@ -60,3 +60,12 @@ export function laneClosed(lane, root = lanesRoot()) {
     } catch { return false }
   })
 }
+
+export function liveLane(ask, root = lanesRoot()) {
+  const lane = laneForAsk(ask, root)
+  if (!lane || !existsSync(join(root, lane, 'lane.json')) || laneClosed(lane, root)) return null
+  const info = metadata(lane, root)
+  if (typeof info.lifecycle === 'string' && /^(closed|done|settled|archived)$/i.test(info.lifecycle.trim())) return null
+  const t3 = info.t3 && typeof info.t3.thread_id === 'string' && info.t3.thread_id.trim() ? info.t3 : null
+  return { lane, t3 }
+}

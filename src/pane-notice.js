@@ -73,10 +73,10 @@ export async function guardedAnswerNotice(pane, ticket) {
 }
 
 /** Return a stale open ask to its filing lane through hook delivery. */
-export async function recheckNotice(ask, afterMs = 30 * 60 * 1000) {
+export async function recheckNotice(ask, afterMs = 30 * 60 * 1000, to = ask.origin.pane_id) {
   const age = afterMs < 3600000 ? `${Math.max(1, Math.round(afterMs / 60000))} min` : `${Math.round(afterMs / 3600000)} h`
   const text = `[unblock ${ask.ticket}] "${ask.title}" has waited ${age} for Alex. If it is still needed, run: unblock keep ${ask.ticket}. If it is handled or moot, close it with unblock_cancel (or: unblock close ${ask.ticket} <reason>). If his past answers settle it, quote his answer and its date in the note.`
-  return postNotice(ask.origin.pane_id, 'unblock-recheck', text)
+  return postNotice(to, 'unblock-recheck', text)
 }
 
 export async function originFinishedNotice(ask) {

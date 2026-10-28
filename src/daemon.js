@@ -2,7 +2,8 @@ import { createHttpHandler } from './mcp.js'
 import { processStarts, sameProcess, verifiedOrigin, hasVerifiedPid } from './origin-process.js'
 import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
-import { guardedAnswerNotice, recheckNotice, originFinishedNotice, delivered } from './pane-notice.js'
+import { guardedAnswerNotice, originFinishedNotice, delivered } from './pane-notice.js'
+import { recheckAsk } from './recheck.js'
 import { laneForAsk, laneClosed } from './lane-state.js'
 import { alexView, emergencyReason, focusGate } from './focus-gate.js'
 import { createScopeRoutes } from './scope.js'
@@ -887,11 +888,6 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
           note: "Held: this work is not in today's focus. It reaches Alex when he makes it focus; keep working." })
       }
       const created = store.create(valid, await verifiedOrigin(origin))
-      if (gate.aside) {
-        const ask = store.setAside(created.ticket, gate.aside)
-        emitQueue()
-        return sendJson(res, 202, { ...ask, filed: true, note: 'Filed set aside: the focus gate could not run, so this ask stays out of Alex\'s view until it is kept or its work is focus.' })
-      }
       emitQueue()
       return sendJson(res, 201, created)
     }
@@ -1313,15 +1309,7 @@ async function answerAsk(ticket, values, reply, fieldContext, fieldBounce, revis
       await withTicket(ticket, async () => {
         const ask = store.get(ticket)
         if (ask?.status !== 'open' || ask.rechecked_at != null) return
-        const sentAt = Date.now()
-        if (!diesWithOrigin(ask)) store.markRechecked(ticket, sentAt)
-        else if (!ask.origin?.pane_id) store.markRecheckUnreachable(ticket)
-        else {
-          // Recorded before the post: a slow or overlapping sweep never sends this window's nag twice.
-          store.markRecheckAttempt(ticket, sentAt)
-          if (delivered(await recheckNotice(ask, recheckAfterMs))) store.markRechecked(ticket, sentAt)
-          else store.markRecheckFailed(ticket)
-        }
+        await recheckAsk(store, ask, recheckAfterMs, diesWithOrigin)
         const updated = store.get(ticket)
         if (updated.set_aside_at !== ask.set_aside_at || updated.rechecked_at !== ask.rechecked_at) { changed = true; emitAsk(updated, updated.status) }
       })
